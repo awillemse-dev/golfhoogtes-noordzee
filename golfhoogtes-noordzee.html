@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Actuele golfhoogtes Noordzee — Rijkswaterstaat</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #0a1628;
+      color: #e0e8f0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 10px 16px;
+      background: #0d1f3c;
+      border-bottom: 1px solid #1e3a5f;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    header h1 { font-size: 1.05rem; font-weight: 600; color: #7dd3fc; }
+
+    #status { font-size: 0.8rem; color: #94a3b8; margin-left: auto; }
+    #status span         { color: #4ade80; font-weight: 500; }
+    #status.loading span { color: #fbbf24; }
+    #status.error span   { color: #f87171; }
+    #countdown { font-size: 0.75rem; color: #64748b; }
+
+    /* Kaart + grafiekpaneel naast elkaar */
+    #main {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+    #map { flex: 1; }
+
+    /* ── Grafiekpaneel ─────────────────────────────────────────────── */
+    #chart-panel {
+      width: 0;
+      overflow: hidden;
+      background: #0d1f3c;
+      border-left: 1px solid #1e3a5f;
+      display: flex;
+      flex-direction: column;
+      transition: width 0.3s ease;
+      flex-shrink: 0;
+    }
+    #chart-panel.open { width: 380px; }
+
+    #chart-header {
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid #1e3a5f;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    #chart-station {
+      flex: 1;
+    }
+    #chart-naam {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #7dd3fc;
+      line-height: 1.3;
+    }
+    #chart-subtitle {
+      font-size: 0.72rem;
+      color: #64748b;
+      margin-top: 2px;
+    }
+    #chart-close {
+      background: none;
+      border: none;
+      color: #64748b;
+      font-size: 1.2rem;
+      cursor: pointer;
+      padding: 0 2px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    #chart-close:hover { color: #e0e8f0; }
+
+    #chart-current {
+      padding: 10px 16px;
+      border-bottom: 1px solid #1e3a5f;
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+    #chart-hm0 {
+      font-size: 2rem;
+      font-weight: 700;
+    }
+    #chart-hm0-label {
+      font-size: 0.78rem;
+      color: #94a3b8;
+    }
+    #chart-time {
+      margin-left: auto;
+      font-size: 0.72rem;
+      color: #64748b;
+    }
+
+    #chart-body {
+      flex: 1;
+      padding: 12px 16px 16px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    #chart-period-label {
+      font-size: 0.72rem;
+      color: #64748b;
+      margin-bottom: 8px;
+    }
+    #chart-wrap {
+      flex: 1;
+      position: relative;
+      min-height: 0;
+    }
+    #chart-loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #64748b;
+      font-size: 0.85rem;
+    }
+
+    /* Legend */
+    .legend {
+      background: rgba(13,31,60,0.93);
+      border: 1px solid #1e3a5f;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 0.78rem;
+      line-height: 1.85;
+      color: #cbd5e1;
+    }
+    .legend h4  { font-size: 0.8rem; color: #7dd3fc; margin-bottom: 6px; font-weight: 600; }
+    .legend-sub { font-size: 0.68rem; color: #475569; margin-top: 4px; }
+    .legend-row { display: flex; align-items: center; gap: 8px; }
+    .legend-dot {
+      width: 14px; height: 14px; border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.25); flex-shrink: 0;
+    }
+
+    /* Leaflet popup */
+    .leaflet-popup-content-wrapper {
+      background: #0d1f3c; color: #e0e8f0;
+      border: 1px solid #1e3a5f; border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    .leaflet-popup-tip          { background: #0d1f3c; }
+    .leaflet-popup-close-button { color: #94a3b8 !important; }
+    .popup-naam   { font-weight: 700; font-size: 0.9rem; color: #7dd3fc; margin-bottom: 4px; }
+    .popup-waarde { font-size: 1.4rem; font-weight: 700; margin: 2px 0; }
+    .popup-meta   { font-size: 0.74rem; color: #94a3b8; margin-top: 2px; }
+    .popup-tijd   { font-size: 0.7rem; color: #64748b; margin-top: 2px; }
+    .popup-hint   { font-size: 0.68rem; color: #334155; margin-top: 6px; font-style: italic; }
+    .leaflet-div-icon { background: none !important; border: none !important; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Actuele golfhoogtes Noordzee &mdash; Rijkswaterstaat</h1>
+  <div id="status" class="loading">Status: <span>laden…</span></div>
+  <div id="countdown"></div>
+</header>
+
+<div id="main">
+  <div id="map"></div>
+
+  <!-- Grafiekpaneel -->
+  <div id="chart-panel">
+    <div id="chart-header">
+      <div id="chart-station">
+        <div id="chart-naam">—</div>
+        <div id="chart-subtitle">Golfhoogte afgelopen 24 uur</div>
+      </div>
+      <button id="chart-close" title="Sluiten">✕</button>
+    </div>
+    <div id="chart-current">
+      <div id="chart-hm0" style="color:#475569">–</div>
+      <div id="chart-hm0-label">m Hm0</div>
+      <div id="chart-time">–</div>
+    </div>
+    <div id="chart-body">
+      <div id="chart-period-label">Afgelopen 24 uur</div>
+      <div id="chart-wrap">
+        <div id="chart-loading">Klik op een station…</div>
+        <canvas id="wave-chart" style="display:none"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script>
+// ── Kaart ────────────────────────────────────────────────────────────────────
+const map = L.map('map', { center: [54.5, 4.5], zoom: 7 });
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution:
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ' +
+    '&copy; <a href="https://carto.com/">CARTO</a> | ' +
+    'Data: <a href="https://waterinfo.rws.nl">Rijkswaterstaat</a>',
+  maxZoom: 19,
+}).addTo(map);
+
+// ── Legenda ──────────────────────────────────────────────────────────────────
+const legend = L.control({ position: 'bottomright' });
+legend.onAdd = () => {
+  const d = L.DomUtil.create('div', 'legend');
+  d.innerHTML = `
+    <h4>Golfhoogte Hm0</h4>
+    <div class="legend-row"><div class="legend-dot" style="background:#22c55e"></div>&lt; 0,5 m</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#84cc16"></div>0,5 – 1,0 m</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#eab308"></div>1,0 – 1,5 m</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#f97316"></div>1,5 – 2,5 m</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ef4444"></div>2,5 – 4,0 m</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#7f1d1d"></div>&gt; 4,0 m</div>
+    <div class="legend-sub">Bron: Rijkswaterstaat meetstations</div>`;
+  return d;
+};
+legend.addTo(map);
+
+// ── Kleur & icoon ─────────────────────────────────────────────────────────────
+function waveColor(h) {
+  if (h === null || isNaN(h)) return '#475569';
+  if (h < 0.5)  return '#22c55e';
+  if (h < 1.0)  return '#84cc16';
+  if (h < 1.5)  return '#eab308';
+  if (h < 2.5)  return '#f97316';
+  if (h < 4.0)  return '#ef4444';
+  return '#7f1d1d';
+}
+
+function makeIcon(h) {
+  const color = waveColor(h);
+  const w     = h !== null ? Math.max(18, Math.min(54, 18 + h * 8)) : 18;
+  const ht    = Math.round(w * 0.62);
+  const label = h !== null ? h.toFixed(1) : '–';
+  return L.divIcon({
+    className:   '',
+    iconSize:    [w, ht],
+    iconAnchor:  [w / 2, ht / 2],
+    popupAnchor: [0, -(ht / 2 + 4)],
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${ht}">
+      <ellipse cx="${w/2}" cy="${ht/2}" rx="${w/2-1}" ry="${ht/2-1}"
+        fill="${color}" fill-opacity="0.9"/>
+      <text x="${w/2}" y="${ht/2+3.5}" text-anchor="middle"
+        font-family="Segoe UI,Arial,sans-serif" font-size="9"
+        font-weight="700" fill="white">${label}</text>
+    </svg>`,
+  });
+}
+
+// ── Kaartdata ─────────────────────────────────────────────────────────────────
+// Lokaal: live proxy op localhost:3001
+// Online (GitHub Pages): statische JSON-bestanden bijgewerkt door GitHub Actions
+const LOCAL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const PROXY  = 'http://localhost:3001';
+const DATA_BASE = './data';
+
+function wavesUrl()              { return LOCAL ? `${PROXY}/api/waves`                                   : `${DATA_BASE}/waves.json`; }
+function historyUrl(code)        { return LOCAL ? `${PROXY}/api/history?code=${encodeURIComponent(code)}` : `${DATA_BASE}/history/${code.replace(/\./g, '-')}.json`; }
+let markers = [];
+
+function clearMarkers() {
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+}
+
+function formatTijdstip(iso) {
+  if (!iso) return '–';
+  return new Date(iso).toLocaleString('nl-NL', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+    timeZone: 'Europe/Amsterdam',
+  });
+}
+
+function renderMarkers(geojson) {
+  clearMarkers();
+  (geojson.features || []).forEach(f => {
+    const [lon, lat] = f.geometry.coordinates;
+    const p = f.properties;
+    const h = p.hm0_m;
+
+    const marker = L.marker([lat, lon], { icon: makeIcon(h) });
+
+    const waardeHtml = h !== null
+      ? `<div class="popup-waarde" style="color:${waveColor(h)}">${h.toFixed(2)} m</div>`
+      : `<div class="popup-waarde" style="color:#475569">Geen data</div>`;
+
+    const bronLabel = p.bron === 'BSH' ? 'BSH' : p.bron === 'CEFAS' ? 'CEFAS' : 'RWS';
+    const bronBadge = `<span style="color:#94a3b8;font-size:0.68rem">${bronLabel}</span>`;
+    const hasHistory = true;
+
+    marker.bindPopup(`
+      <div class="popup-naam">${p.naam || p.code} ${bronBadge}</div>
+      ${waardeHtml}
+      <div class="popup-meta">Significante golfhoogte (Hm0)</div>
+      <div class="popup-tijd">Meting: ${formatTijdstip(p.tijdstip)}</div>
+      ${hasHistory ? '<div class="popup-hint">Klik voor grafiek afgelopen 24 uur →</div>' : ''}
+    `, { maxWidth: 220 });
+
+    if (hasHistory) {
+      marker.on('click', () => openChart(p.code, p.naam, h, p.tijdstip));
+    }
+    marker.addTo(map);
+    markers.push(marker);
+  });
+
+  if (markers.length > 0 && map.getZoom() < 5) {
+    map.fitBounds(L.featureGroup(markers).getBounds().pad(0.1));
+  }
+}
+
+async function fetchWaveData() {
+  setStatus('loading', 'laden…');
+  try {
+    const resp = await fetch(wavesUrl(), { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const geojson = await resp.json();
+    renderMarkers(geojson);
+    const opgehaald = geojson.opgehaald
+      ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+      : new Date().toLocaleTimeString('nl-NL');
+    setStatus('ok', `${geojson.aantalStations} stations — bijgewerkt ${opgehaald}`);
+  } catch (err) {
+    console.error(err);
+    setStatus('error', LOCAL ? 'Proxy niet bereikbaar — draait rws-proxy.py?' : 'Data niet beschikbaar — GitHub Action nog niet gedraaid?');
+  }
+}
+
+// ── Grafiekpaneel ─────────────────────────────────────────────────────────────
+let chartInstance = null;
+
+const panel      = document.getElementById('chart-panel');
+const canvasEl   = document.getElementById('wave-chart');
+const loadingEl  = document.getElementById('chart-loading');
+
+document.getElementById('chart-close').addEventListener('click', () => {
+  panel.classList.remove('open');
+  map.invalidateSize();
+});
+
+async function openChart(code, naam, huidigHm0, tijdstip) {
+  // Paneel openen
+  panel.classList.add('open');
+  map.invalidateSize();
+
+  // Header bijwerken
+  document.getElementById('chart-naam').textContent = naam || code;
+  const color = waveColor(huidigHm0);
+  document.getElementById('chart-hm0').textContent  = huidigHm0 !== null ? huidigHm0.toFixed(2) : '–';
+  document.getElementById('chart-hm0').style.color  = color;
+  document.getElementById('chart-time').textContent = formatTijdstip(tijdstip);
+
+  // Laadstatus
+  loadingEl.textContent = 'Geschiedenis laden…';
+  loadingEl.style.display = 'flex';
+  canvasEl.style.display  = 'none';
+
+  // Oude grafiek verwijderen
+  if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+
+  try {
+    const resp = await fetch(historyUrl(code), { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = await resp.json();
+    if (!json.data || json.data.length === 0) {
+      loadingEl.textContent = 'Geen historische data beschikbaar.';
+      return;
+    }
+
+    loadingEl.style.display = 'none';
+    canvasEl.style.display  = 'block';
+
+    const labels = json.data.map(d => new Date(d.t));
+    const values = json.data.map(d => d.v);
+    const maxVal = Math.max(...values);
+
+    chartInstance = new Chart(canvasEl, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data:            values,
+          borderColor:     color,
+          backgroundColor: color + '22',
+          borderWidth:     2,
+          pointRadius:     0,
+          pointHoverRadius:4,
+          fill:            true,
+          tension:         0.3,
+        }],
+      },
+      options: {
+        responsive:          true,
+        maintainAspectRatio: false,
+        animation:           false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#0d1f3c',
+            borderColor:     '#1e3a5f',
+            borderWidth:     1,
+            titleColor:      '#94a3b8',
+            bodyColor:       '#e0e8f0',
+            callbacks: {
+              title: items => new Date(items[0].parsed.x).toLocaleString('nl-NL', {
+                day: '2-digit', month: '2-digit',
+                hour: '2-digit', minute: '2-digit',
+                timeZone: 'Europe/Amsterdam',
+              }),
+              label: item => ` ${item.parsed.y.toFixed(2)} m`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: 'time',
+            time: {
+              unit:         'hour',
+              displayFormats: { hour: 'HH:mm' },
+            },
+            ticks: {
+              color:     '#64748b',
+              maxTicksLimit: 8,
+              font: { size: 10 },
+            },
+            grid: { color: '#1e3a5f' },
+          },
+          y: {
+            min:         0,
+            suggestedMax: Math.max(maxVal * 1.2, 0.5),
+            ticks: {
+              color: '#64748b',
+              font:  { size: 10 },
+              callback: v => v.toFixed(1) + ' m',
+            },
+            grid: { color: '#1e3a5f' },
+          },
+        },
+      },
+    });
+
+  } catch (err) {
+    console.error(err);
+    loadingEl.textContent = 'Fout bij laden: ' + err.message;
+  }
+}
+
+// ── Status & countdown ────────────────────────────────────────────────────────
+function setStatus(state, text) {
+  const el = document.getElementById('status');
+  el.className = state;
+  el.innerHTML = `Status: <span>${text}</span>`;
+}
+
+const UPDATE_SEC = 10 * 60;
+let secondsLeft  = 0;
+
+function startCountdown() {
+  secondsLeft = UPDATE_SEC;
+  const el  = document.getElementById('countdown');
+  const tid = setInterval(() => {
+    secondsLeft--;
+    if (secondsLeft <= 0) {
+      clearInterval(tid);
+      el.textContent = '';
+      fetchWaveData().then(startCountdown);
+    } else {
+      const m = Math.floor(secondsLeft / 60);
+      const s = secondsLeft % 60;
+      el.textContent = `Update over ${m}:${String(s).padStart(2, '0')}`;
+    }
+  }, 1000);
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+fetchWaveData().then(startCountdown);
+</script>
+</body>
+</html>

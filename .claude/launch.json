@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "RWS Golfhoogte Proxy",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["rws-proxy.py"],
+      "port": 3001
+    }
+  ]
+}

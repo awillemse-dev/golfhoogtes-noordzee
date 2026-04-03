@@ -1,0 +1,1 @@
+# Geen externe packages nodig — alleen Python standaardbibliotheek

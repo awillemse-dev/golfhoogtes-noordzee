@@ -1,0 +1,33 @@
+name: Golfhoogte data ophalen
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # Elke 10 minuten
+  workflow_dispatch:           # Ook handmatig te starten
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repository ophalen
+        uses: actions/checkout@v4
+
+      - name: Python instellen
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Golfhoogte data ophalen
+        run: python3 scripts/fetch_waves.py
+
+      - name: Data committen en pushen
+        run: |
+          git config user.name  "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add data/
+          git diff --staged --quiet || git commit -m "Update golfhoogte data $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push
