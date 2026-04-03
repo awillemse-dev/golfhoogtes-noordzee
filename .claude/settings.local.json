@@ -66,7 +66,18 @@
       "Bash(curl -s -L \"https://wavenet.cefas.co.uk\")",
       "Bash(curl -s \"https://wavenet.cefas.co.uk/main.fe9588654f1b7b3b.js\")",
       "Bash(python3 -c \":*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(curl -s https://api.github.com/repos/cli/cli/releases/latest)",
+      "Read(//private/tmp/**)",
+      "Bash(curl -L -o gh.zip https://github.com/cli/cli/releases/download/v2.89.0/gh_2.89.0_macOS_arm64.zip)",
+      "Bash(unzip -q gh.zip)",
+      "Bash(sudo cp:*)",
+      "Bash(gh --version)",
+      "Bash(cp /tmp/gh_2.89.0_macOS_arm64/bin/gh /Users/arjanwillemse/gh)",
+      "Bash(/Users/arjanwillemse/gh --version)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
