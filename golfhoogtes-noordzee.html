@@ -493,13 +493,13 @@ const loadingEl  = document.getElementById('chart-loading');
 
 document.getElementById('chart-close').addEventListener('click', () => {
   panel.classList.remove('open');
-  map.invalidateSize();
+  setTimeout(() => map.invalidateSize({ pan: false }), 320);
 });
 
 async function openChart(code, naam, huidigHm0, tijdstip) {
   // Paneel openen
   panel.classList.add('open');
-  map.invalidateSize();
+  setTimeout(() => map.invalidateSize({ pan: false }), 320);
 
   // Header bijwerken
   document.getElementById('chart-naam').textContent     = naam || code;
@@ -608,7 +608,7 @@ async function openChart(code, naam, huidigHm0, tijdstip) {
 async function openTempChart(code, naam, huidigTemp, tijdstip) {
   // Paneel openen
   panel.classList.add('open');
-  map.invalidateSize();
+  setTimeout(() => map.invalidateSize({ pan: false }), 320);
 
   // Header bijwerken
   document.getElementById('chart-naam').textContent      = naam || code;
