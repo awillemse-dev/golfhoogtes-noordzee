@@ -472,6 +472,89 @@ def fetch_cefas_history(station_id, source="INT"):
     return {"code": f"cefas.{station_id.lower()}", "naam": naam, "data": data}
 
 
+# ── Temperatuurgeschiedenis ───────────────────────────────────────────────────
+
+def fetch_rws_temp_history(loc_code):
+    """Haal 24-uursgeschiedenis op voor een RWS temperatuurstation (parameter T)."""
+    now   = datetime.now(timezone.utc)
+    start = now - timedelta(hours=24)
+    fmt   = "%Y-%m-%dT%H:%M:%S.000+00:00"
+
+    resp = rws_post(
+        "/ONLINEWAARNEMINGENSERVICES/OphalenWaarnemingen",
+        {
+            "AquoPlusWaarnemingMetadata": {
+                "AquoMetadata": {
+                    "Compartiment": {"Code": "OW"},
+                    "Eenheid":      {"Code": "oC"},
+                    "Grootheid":    {"Code": "T"},
+                }
+            },
+            "Locatie": {"Code": loc_code},
+            "Periode": {
+                "Begindatumtijd": start.strftime(fmt),
+                "Einddatumtijd":  now.strftime(fmt),
+            },
+        }
+    )
+
+    waarnemingen = resp.get("WaarnemingenLijst") or []
+    if not waarnemingen:
+        return {"code": f"rws.temp.{loc_code.lower()}", "naam": loc_code, "data": []}
+
+    best = max(waarnemingen, key=lambda w: len(w.get("MetingenLijst") or []))
+    naam = (best.get("Locatie") or {}).get("Naam") or loc_code
+
+    data = []
+    for m in (best.get("MetingenLijst") or []):
+        waarde   = (m.get("Meetwaarde") or {}).get("Waarde_Numeriek")
+        tijdstip = m.get("Tijdstip")
+        if waarde is not None and tijdstip:
+            data.append({"t": tijdstip, "v": round(waarde, 1)})
+
+    data.sort(key=lambda x: x["t"])
+    return {"code": f"rws.temp.{loc_code.lower()}", "naam": naam, "data": data}
+
+
+def fetch_cefas_temp_history(station_id, source="INT"):
+    """Haal 24-uursgeschiedenis op voor een CEFAS temperatuurstation (parameter TEMP)."""
+    now   = datetime.now(timezone.utc)
+    start = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+    end   = now.strftime("%Y-%m-%dT%H:%M:%S")
+
+    url = (f"{CEFAS_API_BASE}/Detail/Results/{station_id}/{source}"
+           f"?showForecast=false&dateFrom={start}&dateTo={end}")
+    req = urllib.request.Request(url, headers=CEFAS_HEADERS)
+    with urllib.request.urlopen(req, timeout=20) as r:
+        rows = json.loads(r.read().decode("utf-8"))
+
+    data = []
+    for row in rows:
+        if row.get("isForecast"):
+            continue
+        ts   = row.get("timestamp", "")
+        temp = next((x.get("value") for x in row.get("results", [])
+                     if x.get("identifier") == "TEMP"), None)
+        if ts and temp is not None:
+            try:
+                data.append({"t": ts, "v": round(float(temp), 1)})
+            except ValueError:
+                pass
+
+    data.sort(key=lambda x: x["t"])
+
+    try:
+        detail_req = urllib.request.Request(
+            f"{CEFAS_API_BASE}/Detail/{station_id}/{source}", headers=CEFAS_HEADERS)
+        with urllib.request.urlopen(detail_req, timeout=10) as r:
+            detail = json.loads(r.read().decode("utf-8"))
+        naam = detail.get("description", station_id)
+    except Exception:
+        naam = station_id
+
+    return {"code": f"cefas.temp.{station_id.lower()}", "naam": naam, "data": data}
+
+
 # ── Geschiedenis: laatste 24 uur voor één station ────────────────────────────
 
 def fetch_history(code):
@@ -679,6 +762,7 @@ def get_temp_data():
                 continue
             station_id = props.get("id", "")
             naam       = props.get("title", station_id)
+            source     = props.get("source", "INT")
             tijdstip_s = props.get("timestamp", "")
             if not tijdstip_s:
                 continue
@@ -700,7 +784,8 @@ def get_temp_data():
             features.append({"type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [lon, lat]},
                 "properties": {"code": f"cefas.temp.{station_id.lower()}",
-                    "naam": naam, "temp_c": temp_c, "tijdstip": tijdstip_s, "bron": "CEFAS"},
+                    "naam": naam, "temp_c": temp_c, "tijdstip": tijdstip_s, "bron": "CEFAS",
+                    "cefas_id": station_id, "cefas_source": source},
             })
         print(f"[CEFAS temp] {sum(1 for f in features if f['properties']['bron']=='CEFAS')} stations")
     except Exception as e:
@@ -814,6 +899,53 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
             except Exception as exc:
                 print(f"[FOUT history] {exc}")
+                body = json.dumps({"error": str(exc)}).encode()
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+
+        # ── /api/temp-history?code=... ──────────────────────────────────
+        elif path == "/api/temp-history":
+            params = parse_qs(urlparse(self.path).query)
+            code   = (params.get("code") or [None])[0]
+            if not code:
+                body = json.dumps({"error": "code parameter verplicht"}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            try:
+                if code.startswith("rws.temp."):
+                    loc_code = code[9:].upper()   # strip "rws.temp."
+                    data = fetch_rws_temp_history(loc_code)
+                elif code.startswith("cefas.temp."):
+                    # Zoek cefas_id en cefas_source op in de temp-cache
+                    station_id = code[11:].upper()  # fallback
+                    source     = "INT"
+                    cached = get_temp_data()
+                    for feat in cached.get("features", []):
+                        if feat["properties"].get("code") == code:
+                            station_id = feat["properties"].get("cefas_id", station_id)
+                            source     = feat["properties"].get("cefas_source", "INT")
+                            break
+                    data = fetch_cefas_temp_history(station_id, source)
+                else:
+                    data = {"code": code, "naam": code, "data": []}
+                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type",   "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                print(f"[FOUT temp-history] {exc}")
                 body = json.dumps({"error": str(exc)}).encode()
                 self.send_response(500)
                 self.send_header("Content-Type", "application/json")

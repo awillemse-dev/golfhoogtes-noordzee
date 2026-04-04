@@ -555,7 +555,7 @@ def fetch_cefas_temp(cefas_data, now):
 
 
 def fetch_cefas_history(station_id, source, code, naam):
-    """Haal 24-uursgeschiedenis op van CEFAS Detail/Results API."""
+    """Haal 24-uursgeschiedenis (Hm0 + TEMP) op van CEFAS Detail/Results API."""
     now   = datetime.now(timezone.utc)
     start = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
     end   = now.strftime("%Y-%m-%dT%H:%M:%S")
@@ -566,24 +566,35 @@ def fetch_cefas_history(station_id, source, code, naam):
         with urllib.request.urlopen(req, timeout=15) as r:
             rows = json.loads(r.read().decode("utf-8"))
 
-        data = []
+        wave_data = []
+        temp_data = []
         for row in rows:
             if row.get("isForecast"):
                 continue
-            ts  = row.get("timestamp", "")
-            hm0 = next(
-                (x.get("value") for x in row.get("results", [])
-                 if x.get("identifier") == "Hm0"),
-                None,
-            )
-            if ts and hm0:
+            ts      = row.get("timestamp", "")
+            results = row.get("results", [])
+            hm0  = next((x.get("value") for x in results if x.get("identifier") == "Hm0"),  None)
+            temp = next((x.get("value") for x in results if x.get("identifier") == "TEMP"), None)
+            if ts and hm0 is not None:
                 try:
-                    data.append({"t": ts, "v": round(float(hm0), 2)})
+                    wave_data.append({"t": ts, "v": round(float(hm0), 2)})
+                except ValueError:
+                    pass
+            if ts and temp is not None:
+                try:
+                    temp_data.append({"t": ts, "v": round(float(temp), 1)})
                 except ValueError:
                     pass
 
-        data.sort(key=lambda x: x["t"])
-        save_history(code, naam, data)
+        wave_data.sort(key=lambda x: x["t"])
+        save_history(code, naam, wave_data)
+
+        # Sla ook temperatuurgeschiedenis op als die beschikbaar is
+        if temp_data:
+            temp_data.sort(key=lambda x: x["t"])
+            temp_code = f"cefas.temp.{station_id.lower()}"
+            save_temp_history(temp_code, naam, temp_data)
+
     except Exception as e:
         print(f"[CEFAS history] {station_id}: {e}")
 

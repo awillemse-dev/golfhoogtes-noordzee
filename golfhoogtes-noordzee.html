@@ -429,7 +429,10 @@ function renderTempMarkers(geojson) {
       ${waardeHtml}
       <div class="popup-meta">Zeewatertemperatuur</div>
       <div class="popup-tijd">Meting: ${formatTijdstip(p.tijdstip)}</div>
+      <div class="popup-hint">Klik voor grafiek afgelopen 24 uur →</div>
     `, { maxWidth: 220 });
+
+    marker.on('click', () => openTempChart(p.code, p.naam || p.code, t, p.tijdstip));
 
     marker.addTo(map);
     tempMarkers.push(marker);
@@ -444,6 +447,12 @@ function tempUrl() {
   return LOCAL
     ? `${PROXY}/api/temp`
     : `${DATA_BASE}/temp.json?t=${Date.now()}`;
+}
+
+function tempHistoryUrl(code) {
+  return LOCAL
+    ? `${PROXY}/api/temp-history?code=${encodeURIComponent(code)}`
+    : `${DATA_BASE}/temp-history/${code.replace(/\./g, '-')}.json?t=${Date.now()}`;
 }
 
 async function fetchTempData() {
@@ -613,7 +622,9 @@ async function openChart(code, naam, huidigHm0, tijdstip) {
   map.invalidateSize();
 
   // Header bijwerken
-  document.getElementById('chart-naam').textContent = naam || code;
+  document.getElementById('chart-naam').textContent     = naam || code;
+  document.getElementById('chart-subtitle').textContent = 'Golfhoogte afgelopen 24 uur';
+  document.getElementById('chart-hm0-label').textContent = 'm Hm0';
   const color = waveColor(huidigHm0);
   document.getElementById('chart-hm0').textContent  = huidigHm0 !== null ? huidigHm0.toFixed(2) : '–';
   document.getElementById('chart-hm0').style.color  = color;
@@ -714,6 +725,116 @@ async function openChart(code, naam, huidigHm0, tijdstip) {
   }
 }
 
+async function openTempChart(code, naam, huidigTemp, tijdstip) {
+  // Paneel openen
+  panel.classList.add('open');
+  map.invalidateSize();
+
+  // Header bijwerken
+  document.getElementById('chart-naam').textContent      = naam || code;
+  document.getElementById('chart-subtitle').textContent  = 'Temperatuur afgelopen 24 uur';
+  document.getElementById('chart-hm0-label').textContent = '°C';
+  const color = tempColor(huidigTemp);
+  document.getElementById('chart-hm0').textContent  = huidigTemp !== null ? huidigTemp.toFixed(1) : '–';
+  document.getElementById('chart-hm0').style.color  = color;
+  document.getElementById('chart-time').textContent = formatTijdstip(tijdstip);
+
+  // Laadstatus
+  loadingEl.textContent    = 'Geschiedenis laden…';
+  loadingEl.style.display  = 'flex';
+  canvasEl.style.display   = 'none';
+
+  // Oude grafiek verwijderen
+  if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+
+  try {
+    const resp = await fetch(tempHistoryUrl(code), { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = await resp.json();
+    if (!json.data || json.data.length === 0) {
+      loadingEl.textContent = 'Geen historische data beschikbaar.';
+      return;
+    }
+
+    loadingEl.style.display = 'none';
+    canvasEl.style.display  = 'block';
+
+    const labels = json.data.map(d => new Date(d.t));
+    const values = json.data.map(d => d.v);
+    const minVal = Math.min(...values);
+    const maxVal = Math.max(...values);
+
+    chartInstance = new Chart(canvasEl, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data:            values,
+          borderColor:     color,
+          backgroundColor: color + '22',
+          borderWidth:     2,
+          pointRadius:     0,
+          pointHoverRadius:4,
+          fill:            true,
+          tension:         0.3,
+        }],
+      },
+      options: {
+        responsive:          true,
+        maintainAspectRatio: false,
+        animation:           false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#0d1f3c',
+            borderColor:     '#1e3a5f',
+            borderWidth:     1,
+            titleColor:      '#94a3b8',
+            bodyColor:       '#e0e8f0',
+            callbacks: {
+              title: items => new Date(items[0].parsed.x).toLocaleString('nl-NL', {
+                day: '2-digit', month: '2-digit',
+                hour: '2-digit', minute: '2-digit',
+                timeZone: 'Europe/Amsterdam',
+              }),
+              label: item => ` ${item.parsed.y.toFixed(1)} °C`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: 'time',
+            time: {
+              unit:           'hour',
+              displayFormats: { hour: 'HH:mm' },
+            },
+            ticks: {
+              color:         '#64748b',
+              maxTicksLimit: 8,
+              font: { size: 10 },
+            },
+            grid: { color: '#1e3a5f' },
+          },
+          y: {
+            suggestedMin: Math.max(0, minVal - 1),
+            suggestedMax: maxVal + 1,
+            ticks: {
+              color: '#64748b',
+              font:  { size: 10 },
+              callback: v => v.toFixed(1) + ' °C',
+            },
+            grid: { color: '#1e3a5f' },
+          },
+        },
+      },
+    });
+
+  } catch (err) {
+    console.error(err);
+    loadingEl.textContent = 'Fout bij laden: ' + err.message;
+  }
+}
+
 // ── Status & countdown ────────────────────────────────────────────────────────
 function setStatus(state, text) {
   const el = document.getElementById('status');
@@ -732,7 +853,8 @@ function startCountdown() {
     if (secondsLeft <= 0) {
       clearInterval(tid);
       el.textContent = '';
-      fetchWaveData().then(startCountdown);
+      const fetchFn = activeLayer === 'temp' ? fetchTempData : fetchWaveData;
+      fetchFn().then(startCountdown);
     } else {
       const m = Math.floor(secondsLeft / 60);
       const s = secondsLeft % 60;
