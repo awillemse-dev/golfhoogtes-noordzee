@@ -450,7 +450,7 @@ def fetch_cefas_history(station_id, source="INT"):
         if row.get("isForecast"):
             continue
         ts  = row.get("timestamp", "")
-        hm0 = next((x["value"] for x in row.get("results", []) if x["identifier"] == "Hm0"), None)
+        hm0 = next((x.get("value") for x in row.get("results", []) if x.get("identifier") == "Hm0"), None)
         if ts and hm0:
             try:
                 data.append({"t": ts, "v": round(float(hm0), 2)})
