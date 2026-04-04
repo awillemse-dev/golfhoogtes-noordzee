@@ -237,6 +237,7 @@ def build_geojson(stations, waarnemingen):
 
 BSH_STATIONS = {
     # code: (naam, lat, lon)
+    # ── Noordzee ────────────────────────────────────────────────────────
     "HEL": ("Helgoland-Süd",   54.1750,  7.8840),
     "HEO": ("Helgoland-Nord",  54.1870,  7.9070),
     "LTH": ("Helgoland LT",    54.1500,  7.9970),
@@ -246,7 +247,11 @@ BSH_STATIONS = {
     "NOR": ("Nordergründe",    53.7390,  8.3160),
     "ELB": ("Elbe",            54.0028,  8.1017),
     "NOO": ("NordseOst",       54.4340,  6.6580),
-    # Baltische stations (uitgesloten): FN2, DAR, ARK, SEE
+    # ── Oostzee ─────────────────────────────────────────────────────────
+    "FN2": ("FINO 2 (Oostzee)",      55.0070, 13.1542),
+    "DAR": ("Darßer Schwelle",       54.7000, 12.7000),
+    "ARK": ("Arkona Becken",         54.8853, 13.8607),
+    "SEE": ("Fehmarnbelt",           54.5967, 11.1167),
 }
 
 BSH_URL = "https://www2.bsh.de/aktdat/seegang/Seegang_MARNET_FINO_RAVE.txt"
