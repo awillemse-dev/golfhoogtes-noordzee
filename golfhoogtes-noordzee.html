@@ -458,10 +458,11 @@ function selectSection(section) {
   const countdownEl= document.getElementById('countdown');
 
   if (section === 'waarnemingen') {
-    nav.style.display  = '';
-    mainEl.style.display = '';
-    // Herstel actieve laag
-    selectLayer(activeLayer === 'golf' ? 'golf' : activeLayer);
+    nav.style.display = '';
+    // Reset activeLayer zodat selectLayer niet vroeg afbreekt
+    const layer = activeLayer;
+    activeLayer = '';
+    selectLayer(layer);
   } else {
     // Verwachtingen: toon coming-soon, verberg kaart en nav
     nav.style.display  = 'none';
