@@ -53,6 +53,44 @@
     #status.error span   { color: #f87171; }
     #countdown { font-size: 0.75rem; color: #64748b; }
 
+    /* ── Zijbalk ────────────────────────────────────────────────────── */
+    #content {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    #sidebar {
+      width: 140px;
+      flex-shrink: 0;
+      background: #0d1f3c;
+      border-right: 1px solid #1e3a5f;
+      display: flex;
+      flex-direction: column;
+      padding: 8px 0;
+    }
+
+    .sidebar-tab {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 14px 10px;
+      cursor: pointer;
+      color: #475569;
+      font-size: 0.78rem;
+      text-align: center;
+      line-height: 1.3;
+      border-left: 3px solid transparent;
+      transition: background 0.15s, color 0.15s;
+      user-select: none;
+    }
+    .sidebar-tab:hover  { background: #1e3a5f; color: #94a3b8; }
+    .sidebar-tab.active { color: #7dd3fc; border-left-color: #7dd3fc; background: #132743; }
+
+    .sidebar-tab .tab-icon  { font-size: 1.4rem; }
+    .sidebar-tab .tab-label { font-weight: 600; }
+
     /* Kaart + grafiekpaneel naast elkaar */
     #main {
       flex: 1;
@@ -204,7 +242,22 @@
   <div id="countdown"></div>
 </header>
 
-<div id="main">
+<div id="content">
+
+  <!-- ── Zijbalk ───────────────────────────────────────────────────── -->
+  <div id="sidebar">
+    <div class="sidebar-tab active" id="tab-waarnemingen" onclick="selectSection('waarnemingen')">
+      <span class="tab-icon">📡</span>
+      <span class="tab-label">Waarnemingen</span>
+    </div>
+    <div class="sidebar-tab" id="tab-verwachtingen" onclick="selectSection('verwachtingen')">
+      <span class="tab-icon">🔮</span>
+      <span class="tab-label">Verwachtingen</span>
+    </div>
+  </div>
+
+  <!-- ── Kaartgebied ────────────────────────────────────────────────── -->
+  <div id="main">
   <div id="map"></div>
   <div id="coming-soon" style="display:none; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:#475569;">
     <div style="font-size:2.5rem;">🚧</div>
@@ -234,7 +287,8 @@
       </div>
     </div>
   </div>
-</div>
+  </div><!-- #main -->
+</div><!-- #content -->
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
@@ -387,7 +441,44 @@ async function fetchTempData() {
 
 // ── Navigatie / dropdown ──────────────────────────────────────────────────────
 
-let activeLayer = 'golf';
+let activeSection = 'waarnemingen';
+let activeLayer   = 'golf';
+
+function selectSection(section) {
+  if (section === activeSection) return;
+  activeSection = section;
+
+  // Zijbalk-tabs markeren
+  document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(`tab-${section}`).classList.add('active');
+
+  const nav        = document.querySelector('nav');
+  const mainEl     = document.getElementById('main');
+  const statusEl   = document.getElementById('status');
+  const countdownEl= document.getElementById('countdown');
+
+  if (section === 'waarnemingen') {
+    nav.style.display  = '';
+    mainEl.style.display = '';
+    // Herstel actieve laag
+    selectLayer(activeLayer === 'golf' ? 'golf' : activeLayer);
+  } else {
+    // Verwachtingen: toon coming-soon, verberg kaart en nav
+    nav.style.display  = 'none';
+    clearMarkers();
+    clearTempMarkers();
+    const mapEl      = document.getElementById('map');
+    const comingSoon = document.getElementById('coming-soon');
+    mapEl.style.display      = 'none';
+    comingSoon.style.display = 'flex';
+    document.getElementById('coming-soon-label').textContent = 'Verwachtingen';
+    statusEl.className   = '';
+    statusEl.innerHTML   = 'Status: <span>–</span>';
+    countdownEl.textContent = '';
+    // Sluit grafiekpaneel
+    document.getElementById('chart-panel').classList.remove('open');
+  }
+}
 
 function selectLayer(layer) {
   if (layer === activeLayer) return;
