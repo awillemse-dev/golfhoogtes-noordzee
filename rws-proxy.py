@@ -428,6 +428,28 @@ def get_bsh_history(ort):
     return {"code": f"bsh.{ort.lower()}", "naam": naam, "data": data}
 
 
+GITHUB_RAW = "https://raw.githubusercontent.com/awillemse-dev/golfhoogtes-noordzee/main"
+
+def _seed_bsh_history():
+    """Laad BSH-geschiedenis uit GitHub-bestanden bij opstarten (ring buffer pre-seeden)."""
+    for ort in BSH_STATIONS:
+        url = f"{GITHUB_RAW}/data/history/bsh-{ort.lower()}.json"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                payload = json.loads(r.read().decode("utf-8"))
+            count = 0
+            for pt in payload.get("data", []):
+                ts = pt.get("t")
+                v  = pt.get("v")
+                if ts and v is not None:
+                    _record_bsh_history(ort, ts, v)
+                    count += 1
+            print(f"[BSH] {ort}: {count} historische punten geladen uit GitHub")
+        except Exception as e:
+            print(f"[BSH] {ort}: geen GitHub-history beschikbaar ({e})")
+
+
 # ── CEFAS geschiedenis: Detail/Results API ───────────────────────────────────
 
 CEFAS_API_BASE = "https://wavenet-api.cefas.co.uk/api"
@@ -1020,6 +1042,9 @@ if __name__ == "__main__":
     print()
     print("Eerste request kan ~15 sec duren (catalogus laden).")
     print("Druk Ctrl+C om te stoppen.")
+    print()
+    print("[BSH] Geschiedenis pre-seeden vanuit GitHub…")
+    _seed_bsh_history()
     print()
 
     server = HTTPServer(("", PORT), Handler)
