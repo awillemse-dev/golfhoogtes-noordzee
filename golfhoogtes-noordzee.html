@@ -425,8 +425,8 @@ const LOCAL = window.location.hostname === 'localhost' || window.location.hostna
 const PROXY  = 'http://localhost:3001';
 const DATA_BASE = './data';
 
-function wavesUrl()              { return LOCAL ? `${PROXY}/api/waves`                                   : `${DATA_BASE}/waves.json`; }
-function historyUrl(code)        { return LOCAL ? `${PROXY}/api/history?code=${encodeURIComponent(code)}` : `${DATA_BASE}/history/${code.replace(/\./g, '-')}.json`; }
+function wavesUrl()              { return LOCAL ? `${PROXY}/api/waves`                                   : `${DATA_BASE}/waves.json?t=${Date.now()}`; }
+function historyUrl(code)        { return LOCAL ? `${PROXY}/api/history?code=${encodeURIComponent(code)}` : `${DATA_BASE}/history/${code.replace(/\./g, '-')}.json?t=${Date.now()}`; }
 let markers = [];
 
 function clearMarkers() {

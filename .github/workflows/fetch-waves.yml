@@ -2,8 +2,8 @@ name: Golfhoogte data ophalen
 
 on:
   schedule:
-    - cron: '*/5 * * * *'    # Elke 5 minuten
-  workflow_dispatch:           # Ook handmatig te starten
+    - cron: '0,10,20,30,40,50 * * * *'   # Elke 10 minuten (expliciete minuten, betrouwbaarder dan */10)
+  workflow_dispatch:                        # Ook handmatig te starten
 
 permissions:
   contents: write
