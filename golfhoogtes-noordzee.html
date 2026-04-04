@@ -6,290 +6,489 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <title>Actuele golfhoogtes</title>
+  <title>Zeedata · Noordzee & Oostzee</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
+    :root {
+      --bg:          #080d18;
+      --surface:     #0d1625;
+      --surface-2:   #131f33;
+      --surface-3:   #192840;
+      --border:      #1c2e45;
+      --border-2:    #243a56;
+      --accent:      #38bdf8;
+      --accent-glow: rgba(56,189,248,0.12);
+      --text:        #e2e8f0;
+      --text-dim:    #7a91a8;
+      --text-muted:  #3d5167;
+      --green:       #4ade80;
+      --yellow:      #fbbf24;
+      --red:         #f87171;
+    }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      font-family: 'Segoe UI', Arial, sans-serif;
-      background: #0a1628;
-      color: #e0e8f0;
+      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
       height: 100vh;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
     }
 
+    /* ── Header ─────────────────────────────────────────────────────────── */
     header {
-      padding: 10px 16px;
-      background: #0d1f3c;
-      border-bottom: 1px solid #1e3a5f;
+      height: 52px;
+      padding: 0 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
       gap: 14px;
       flex-shrink: 0;
-      flex-wrap: wrap;
     }
-    header h1 { font-size: 1.05rem; font-weight: 600; color: #7dd3fc; }
 
-    /* ── Navigatie ───────────────────────────────────────────────────── */
-    nav { display: flex; gap: 4px; }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .brand-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      background: linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 12px rgba(14,165,233,0.3);
+    }
+    .brand-icon svg { width: 16px; height: 16px; color: white; }
+    .brand-name {
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: #f1f5f9;
+      letter-spacing: -0.01em;
+    }
+
+    .h-divider {
+      width: 1px;
+      height: 20px;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+
+    /* ── Navigatie ──────────────────────────────────────────────────────── */
+    nav {
+      display: flex;
+      gap: 2px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px;
+    }
 
     .nav-btn {
-      padding: 6px 14px;
-      border-radius: 6px;
-      border: 1px solid transparent;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 13px;
+      border-radius: 5px;
+      border: none;
       background: none;
-      color: #94a3b8;
-      font-size: 0.85rem;
+      color: var(--text-dim);
+      font-size: 0.78rem;
+      font-weight: 500;
       font-family: inherit;
       cursor: pointer;
       white-space: nowrap;
-      transition: background 0.15s, color 0.15s;
+      transition: color 0.15s, background 0.15s;
     }
-    .nav-btn:hover  { background: #1e3a5f; color: #e0e8f0; }
-    .nav-btn.active { background: #1e3a5f; color: #7dd3fc; border-color: #2d5a8e; }
+    .nav-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+    .nav-btn:hover  { color: var(--text); background: var(--surface-2); }
+    .nav-btn.active { color: var(--accent); background: var(--surface-2); }
 
-    #status { font-size: 0.8rem; color: #94a3b8; margin-left: auto; }
-    #status span         { color: #4ade80; font-weight: 500; }
-    #status.loading span { color: #fbbf24; }
-    #status.error span   { color: #f87171; }
-    #countdown { font-size: 0.75rem; color: #64748b; }
-
-    /* ── Zijbalk ────────────────────────────────────────────────────── */
-    #content {
-      flex: 1;
+    /* ── Status ──────────────────────────────────────────────────────────── */
+    #status {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      margin-left: auto;
       display: flex;
-      overflow: hidden;
+      align-items: center;
+      gap: 7px;
+      flex-shrink: 0;
+    }
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      flex-shrink: 0;
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+    #status.ok      .status-dot { background: var(--green);  box-shadow: 0 0 6px rgba(74,222,128,0.5); }
+    #status.loading .status-dot { background: var(--yellow); box-shadow: 0 0 6px rgba(251,191,36,0.4); }
+    #status.error   .status-dot { background: var(--red);    box-shadow: 0 0 6px rgba(248,113,113,0.4); }
+    #status span { color: var(--text); }
+
+    #countdown {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 3px 9px;
+      font-variant-numeric: tabular-nums;
+      flex-shrink: 0;
     }
 
+    /* ── Layout ──────────────────────────────────────────────────────────── */
+    #content { flex: 1; display: flex; overflow: hidden; }
+
+    /* ── Zijbalk ─────────────────────────────────────────────────────────── */
     #sidebar {
-      width: 140px;
+      width: 68px;
       flex-shrink: 0;
-      background: #0d1f3c;
-      border-right: 1px solid #1e3a5f;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
-      padding: 8px 0;
+      padding: 10px 6px;
+      gap: 4px;
     }
 
     .sidebar-tab {
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 6px;
-      padding: 14px 10px;
+      gap: 5px;
+      padding: 10px 6px;
       cursor: pointer;
-      color: #475569;
-      font-size: 0.78rem;
+      color: var(--text-muted);
+      font-size: 0.6rem;
+      font-weight: 600;
       text-align: center;
-      line-height: 1.3;
-      border-left: 3px solid transparent;
-      transition: background 0.15s, color 0.15s;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      transition: all 0.15s;
       user-select: none;
     }
-    .sidebar-tab:hover  { background: #1e3a5f; color: #94a3b8; }
-    .sidebar-tab.active { color: #7dd3fc; border-left-color: #7dd3fc; background: #132743; }
+    .sidebar-tab svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .sidebar-tab:hover  { background: var(--surface-2); color: var(--text-dim); border-color: var(--border); }
+    .sidebar-tab.active { background: var(--accent-glow); color: var(--accent); border-color: rgba(56,189,248,0.22); }
+    .sidebar-tab .tab-label { line-height: 1.2; }
 
-    .sidebar-tab .tab-icon  { font-size: 1.4rem; }
-    .sidebar-tab .tab-label { font-weight: 600; }
+    /* ── Kaartgebied ──────────────────────────────────────────────────────── */
+    #main { flex: 1; display: flex; overflow: hidden; }
+    #map  { flex: 1; }
 
-    /* Kaart + grafiekpaneel naast elkaar */
-    #main {
+    #coming-soon {
       flex: 1;
-      display: flex;
-      overflow: hidden;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      color: var(--text-muted);
+      background: var(--bg);
     }
-    #map { flex: 1; }
+    .coming-soon-icon {
+      width: 56px; height: 56px;
+      border-radius: 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .coming-soon-icon svg { width: 28px; height: 28px; color: var(--text-muted); }
+    #coming-soon-label { font-size: 0.9rem; font-weight: 600; color: var(--text-dim); }
+    .coming-soon-sub   { font-size: 0.8rem; }
 
-    /* ── Grafiekpaneel ─────────────────────────────────────────────── */
+    /* ── Grafiekpaneel ────────────────────────────────────────────────────── */
     #chart-panel {
       width: 0;
       overflow: hidden;
-      background: #0d1f3c;
-      border-left: 1px solid #1e3a5f;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
       display: flex;
       flex-direction: column;
-      transition: width 0.3s ease;
+      transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
       flex-shrink: 0;
     }
-    #chart-panel.open { width: 380px; }
+    #chart-panel.open { width: 360px; }
 
     #chart-header {
-      padding: 12px 16px 10px;
-      border-bottom: 1px solid #1e3a5f;
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid var(--border);
       display: flex;
       align-items: flex-start;
-      gap: 8px;
-    }
-    #chart-station {
-      flex: 1;
-    }
-    #chart-naam {
-      font-size: 0.95rem;
-      font-weight: 700;
-      color: #7dd3fc;
-      line-height: 1.3;
-    }
-    #chart-subtitle {
-      font-size: 0.72rem;
-      color: #64748b;
-      margin-top: 2px;
-    }
-    #chart-close {
-      background: none;
-      border: none;
-      color: #64748b;
-      font-size: 1.2rem;
-      cursor: pointer;
-      padding: 0 2px;
-      line-height: 1;
+      gap: 10px;
       flex-shrink: 0;
     }
-    #chart-close:hover { color: #e0e8f0; }
+    #chart-station { flex: 1; min-width: 0; }
+    #chart-naam {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #f1f5f9;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #chart-subtitle {
+      font-size: 0.68rem;
+      color: var(--text-dim);
+      margin-top: 3px;
+      font-weight: 400;
+    }
+    #chart-close {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      font-size: 0.78rem;
+      cursor: pointer;
+      padding: 5px 9px;
+      border-radius: 6px;
+      line-height: 1;
+      flex-shrink: 0;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+    #chart-close:hover { color: var(--text); border-color: var(--border-2); background: var(--surface-3); }
 
     #chart-current {
-      padding: 10px 16px;
-      border-bottom: 1px solid #1e3a5f;
-      display: flex;
-      align-items: baseline;
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: end;
       gap: 6px;
+      flex-shrink: 0;
+      background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
     }
     #chart-hm0 {
-      font-size: 2rem;
+      font-size: 2.8rem;
       font-weight: 700;
+      line-height: 1;
+      letter-spacing: -0.03em;
     }
-    #chart-hm0-label {
-      font-size: 0.78rem;
-      color: #94a3b8;
-    }
-    #chart-time {
-      margin-left: auto;
-      font-size: 0.72rem;
-      color: #64748b;
-    }
+    #chart-hm0-label { font-size: 0.72rem; color: var(--text-dim); padding-bottom: 5px; font-weight: 500; }
+    #chart-time { font-size: 0.68rem; color: var(--text-muted); text-align: right; padding-bottom: 5px; }
 
     #chart-body {
       flex: 1;
-      padding: 12px 16px 16px;
+      padding: 14px 16px 16px;
       display: flex;
       flex-direction: column;
       min-height: 0;
     }
     #chart-period-label {
-      font-size: 0.72rem;
-      color: #64748b;
-      margin-bottom: 8px;
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      font-weight: 600;
     }
-    #chart-wrap {
-      flex: 1;
-      position: relative;
-      min-height: 0;
-    }
+    #chart-wrap { flex: 1; position: relative; min-height: 0; }
     #chart-loading {
-      position: absolute;
-      inset: 0;
+      position: absolute; inset: 0;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #64748b;
-      font-size: 0.85rem;
+      color: var(--text-muted);
+      font-size: 0.82rem;
     }
 
-    /* Legend */
+    /* ── Legenda ────────────────────────────────────────────────────────── */
     .legend {
-      background: rgba(13,31,60,0.93);
-      border: 1px solid #1e3a5f;
-      border-radius: 6px;
-      padding: 10px 14px;
-      font-size: 0.78rem;
-      line-height: 1.85;
-      color: #cbd5e1;
+      background: rgba(13,22,37,0.96);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 0.75rem;
+      color: #94a3b8;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
     }
-    .legend h4  { font-size: 0.8rem; color: #7dd3fc; margin-bottom: 6px; font-weight: 600; }
-    .legend-sub { font-size: 0.68rem; color: #475569; margin-top: 4px; }
-    .legend-row { display: flex; align-items: center; gap: 8px; }
+    .legend h4 {
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      margin-bottom: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+    .legend-sub {
+      font-size: 0.63rem;
+      color: var(--text-muted);
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      line-height: 1.8;
+    }
     .legend-dot {
-      width: 14px; height: 14px; border-radius: 50%;
-      border: 1px solid rgba(255,255,255,0.25); flex-shrink: 0;
+      width: 10px; height: 10px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      opacity: 0.9;
     }
 
-    /* Leaflet popup */
-    .leaflet-popup-content-wrapper {
-      background: #0d1f3c; color: #e0e8f0;
-      border: 1px solid #1e3a5f; border-radius: 8px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-    }
-    .leaflet-popup-tip          { background: #0d1f3c; }
-    .leaflet-popup-close-button { color: #94a3b8 !important; }
-    .popup-naam   { font-weight: 700; font-size: 0.9rem; color: #7dd3fc; margin-bottom: 4px; }
-    .popup-waarde { font-size: 1.4rem; font-weight: 700; margin: 2px 0; }
-    .popup-meta   { font-size: 0.74rem; color: #94a3b8; margin-top: 2px; }
-    .popup-tijd   { font-size: 0.7rem; color: #64748b; margin-top: 2px; }
-    .popup-hint   { font-size: 0.68rem; color: #334155; margin-top: 6px; font-style: italic; }
+    /* ── Leaflet overrides ──────────────────────────────────────────────── */
     .leaflet-div-icon { background: none !important; border: none !important; }
+    .leaflet-control-attribution {
+      background: rgba(8,13,24,0.85) !important;
+      color: var(--text-muted) !important;
+      font-size: 0.62rem !important;
+      backdrop-filter: blur(4px);
+      border-radius: 4px 0 0 0 !important;
+    }
+    .leaflet-control-attribution a { color: #475569 !important; }
+    .leaflet-control-zoom a {
+      background: var(--surface) !important;
+      color: var(--text-dim) !important;
+      border-color: var(--border) !important;
+    }
+    .leaflet-control-zoom a:hover { background: var(--surface-2) !important; color: var(--text) !important; }
+
+    .leaflet-popup-content-wrapper {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border-2);
+      border-radius: 10px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    .leaflet-popup-tip { background: var(--surface-2); }
+    .leaflet-popup-close-button { color: var(--text-dim) !important; }
+    .popup-naam   { font-weight: 600; font-size: 0.85rem; color: var(--accent); margin-bottom: 4px; }
+    .popup-waarde { font-size: 1.5rem; font-weight: 700; margin: 4px 0; }
+    .popup-meta   { font-size: 0.7rem; color: var(--text-dim); }
+    .popup-tijd   { font-size: 0.67rem; color: var(--text-muted); margin-top: 2px; }
   </style>
 </head>
 <body>
 
 <header>
-  <h1>Actuele zeedata</h1>
+  <!-- Branding -->
+  <div class="brand">
+    <div class="brand-icon">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
+        <path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
+        <path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
+      </svg>
+    </div>
+    <span class="brand-name">Zeedata</span>
+  </div>
+
+  <div class="h-divider"></div>
 
   <nav>
-    <button class="nav-btn active" id="nav-golf" onclick="selectLayer('golf')">🌊 Golfhoogte</button>
-    <button class="nav-btn"        id="nav-temp" onclick="selectLayer('temp')">🌡️ Zeewatertemperatuur</button>
-    <button class="nav-btn"        id="nav-wind" onclick="selectLayer('wind')">💨 Windsnelheid</button>
+    <button class="nav-btn active" id="nav-golf" onclick="selectLayer('golf')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
+        <path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
+        <path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
+      </svg>
+      Golfhoogte
+    </button>
+    <button class="nav-btn" id="nav-temp" onclick="selectLayer('temp')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>
+      </svg>
+      Temperatuur
+    </button>
+    <button class="nav-btn" id="nav-wind" onclick="selectLayer('wind')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/>
+        <path d="M9.6 4.6A2 2 0 1 1 11 8H2"/>
+        <path d="M12.6 19.4A2 2 0 1 0 14 16H2"/>
+      </svg>
+      Windsnelheid
+    </button>
   </nav>
 
-  <div id="status" class="loading">Status: <span>laden…</span></div>
+  <div id="status" class="loading">
+    <div class="status-dot"></div>
+    <span>laden…</span>
+  </div>
   <div id="countdown"></div>
 </header>
 
 <div id="content">
 
-  <!-- ── Zijbalk ───────────────────────────────────────────────────── -->
+  <!-- ── Zijbalk ────────────────────────────────────────────────────────── -->
   <div id="sidebar">
     <div class="sidebar-tab active" id="tab-waarnemingen" onclick="selectSection('waarnemingen')">
-      <span class="tab-icon">📡</span>
-      <span class="tab-label">Waarnemingen</span>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="2"/>
+        <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/>
+      </svg>
+      <span class="tab-label">Waar&shy;nemingen</span>
     </div>
     <div class="sidebar-tab" id="tab-verwachtingen" onclick="selectSection('verwachtingen')">
-      <span class="tab-icon">🔮</span>
-      <span class="tab-label">Verwachtingen</span>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 3v18h18"/>
+        <path d="m19 9-5 5-4-4-3 3"/>
+      </svg>
+      <span class="tab-label">Ver&shy;wachtingen</span>
     </div>
   </div>
 
-  <!-- ── Kaartgebied ────────────────────────────────────────────────── -->
+  <!-- ── Kaartgebied ────────────────────────────────────────────────────── -->
   <div id="main">
-  <div id="map"></div>
-  <div id="coming-soon" style="display:none; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:#475569;">
-    <div style="font-size:2.5rem;">🚧</div>
-    <div style="font-size:1rem; font-weight:600; color:#64748b;" id="coming-soon-label"></div>
-    <div style="font-size:0.85rem;">Data volgt binnenkort</div>
-  </div>
+    <div id="map"></div>
+    <div id="coming-soon">
+      <div class="coming-soon-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/>
+        </svg>
+      </div>
+      <div id="coming-soon-label">Verwachtingen</div>
+      <div class="coming-soon-sub">Data volgt binnenkort</div>
+    </div>
 
-  <!-- Grafiekpaneel -->
-  <div id="chart-panel">
-    <div id="chart-header">
-      <div id="chart-station">
-        <div id="chart-naam">—</div>
-        <div id="chart-subtitle">Golfhoogte afgelopen 24 uur</div>
+    <!-- Grafiekpaneel -->
+    <div id="chart-panel">
+      <div id="chart-header">
+        <div id="chart-station">
+          <div id="chart-naam">—</div>
+          <div id="chart-subtitle">Golfhoogte afgelopen 24 uur</div>
+        </div>
+        <button id="chart-close" title="Sluiten">✕</button>
       </div>
-      <button id="chart-close" title="Sluiten">✕</button>
-    </div>
-    <div id="chart-current">
-      <div id="chart-hm0" style="color:#475569">–</div>
-      <div id="chart-hm0-label">m Hm0</div>
-      <div id="chart-time">–</div>
-    </div>
-    <div id="chart-body">
-      <div id="chart-period-label">Afgelopen 24 uur</div>
-      <div id="chart-wrap">
-        <div id="chart-loading">Klik op een station…</div>
-        <canvas id="wave-chart" style="display:none"></canvas>
+      <div id="chart-current">
+        <div id="chart-hm0" style="color:var(--text-muted)">–</div>
+        <div id="chart-hm0-label">m Hm0</div>
+        <div id="chart-time">–</div>
+      </div>
+      <div id="chart-body">
+        <div id="chart-period-label">Afgelopen 24 uur</div>
+        <div id="chart-wrap">
+          <div id="chart-loading">Klik op een station…</div>
+          <canvas id="wave-chart" style="display:none"></canvas>
+        </div>
       </div>
     </div>
-  </div>
   </div><!-- #main -->
 </div><!-- #content -->
 
@@ -298,7 +497,9 @@
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script>
 // ── Kaart ────────────────────────────────────────────────────────────────────
-const map = L.map('map', { center: [54.5, 8.5], zoom: 6 });
+const map = L.map('map', { center: [54.5, 8.5], zoom: 6, zoomControl: true });
+
+map.zoomControl.setPosition('topright');
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution:
@@ -320,69 +521,72 @@ legend.onAdd = () => {
     <div class="legend-row"><div class="legend-dot" style="background:#f97316"></div>1,5 – 2,5 m</div>
     <div class="legend-row"><div class="legend-dot" style="background:#ef4444"></div>2,5 – 4,0 m</div>
     <div class="legend-row"><div class="legend-dot" style="background:#7f1d1d"></div>&gt; 4,0 m</div>
-    <div class="legend-sub">Bron: Rijkswaterstaat meetstations</div>`;
+    <div class="legend-sub">Bron: RWS · BSH · CEFAS</div>`;
   return d;
 };
 legend.addTo(map);
 
 // ── Kleur & icoon ─────────────────────────────────────────────────────────────
 function waveColor(h) {
-  if (h === null || isNaN(h)) return '#475569';
+  if (h === null || isNaN(h)) return '#3d5167';
   if (h < 0.5)  return '#22c55e';
   if (h < 1.0)  return '#84cc16';
   if (h < 1.5)  return '#eab308';
   if (h < 2.5)  return '#f97316';
   if (h < 4.0)  return '#ef4444';
-  return '#7f1d1d';
+  return '#b91c1c';
 }
 
 function makeIcon(h) {
   const color = waveColor(h);
-  const w     = h !== null ? Math.max(18, Math.min(54, 18 + h * 8)) : 18;
-  const ht    = Math.round(w * 0.62);
+  const size  = h !== null ? Math.max(34, Math.min(58, 34 + h * 7)) : 34;
+  const ht    = Math.round(size * 0.58);
   const label = h !== null ? h.toFixed(1) : '–';
+  const r     = 5;
   return L.divIcon({
     className:   '',
-    iconSize:    [w, ht],
-    iconAnchor:  [w / 2, ht / 2],
-    popupAnchor: [0, -(ht / 2 + 4)],
-    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${ht}">
-      <ellipse cx="${w/2}" cy="${ht/2}" rx="${w/2-1}" ry="${ht/2-1}"
-        fill="${color}" fill-opacity="0.9"/>
-      <text x="${w/2}" y="${ht/2+3.5}" text-anchor="middle"
-        font-family="Segoe UI,Arial,sans-serif" font-size="9"
+    iconSize:    [size, ht],
+    iconAnchor:  [size / 2, ht / 2],
+    popupAnchor: [0, -(ht / 2 + 6)],
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${ht}">
+      <rect x="1" y="1" width="${size-2}" height="${ht-2}" rx="${r}"
+        fill="${color}" fill-opacity="0.88"/>
+      <rect x="1" y="1" width="${size-2}" height="${ht-2}" rx="${r}"
+        fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>
+      <text x="${size/2}" y="${ht/2+3.8}" text-anchor="middle"
+        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="10"
         font-weight="700" fill="white">${label}</text>
     </svg>`,
   });
 }
 
 // ── Temperatuurkaart ──────────────────────────────────────────────────────────
-
 function tempColor(t) {
-  if (t === null || isNaN(t)) return '#475569';
-  if (t < 5)  return '#bfdbfe';  // ijskoud – lichtblauw
-  if (t < 8)  return '#60a5fa';  // koud    – blauw
-  if (t < 11) return '#34d399';  // fris    – groen
-  if (t < 14) return '#fbbf24';  // warm    – geel
-  if (t < 18) return '#f97316';  // warm    – oranje
-  return '#ef4444';               // heet    – rood
+  if (t === null || isNaN(t)) return '#3d5167';
+  if (t < 5)  return '#93c5fd';
+  if (t < 8)  return '#60a5fa';
+  if (t < 11) return '#34d399';
+  if (t < 14) return '#fbbf24';
+  if (t < 18) return '#f97316';
+  return '#ef4444';
 }
 
 function makeTempIcon(t) {
   const color = tempColor(t);
-  const w  = 30;
-  const ht = 19;
+  const w = 38, ht = 22;
   const label = t !== null ? t.toFixed(1) : '–';
   return L.divIcon({
     className:   '',
     iconSize:    [w, ht],
     iconAnchor:  [w / 2, ht / 2],
-    popupAnchor: [0, -(ht / 2 + 4)],
+    popupAnchor: [0, -(ht / 2 + 6)],
     html: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${ht}">
-      <ellipse cx="${w/2}" cy="${ht/2}" rx="${w/2-1}" ry="${ht/2-1}"
-        fill="${color}" fill-opacity="0.9"/>
-      <text x="${w/2}" y="${ht/2+3.5}" text-anchor="middle"
-        font-family="Segoe UI,Arial,sans-serif" font-size="9"
+      <rect x="1" y="1" width="${w-2}" height="${ht-2}" rx="5"
+        fill="${color}" fill-opacity="0.88"/>
+      <rect x="1" y="1" width="${w-2}" height="${ht-2}" rx="5"
+        fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>
+      <text x="${w/2}" y="${ht/2+3.8}" text-anchor="middle"
+        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="10"
         font-weight="700" fill="white">${label}</text>
     </svg>`,
   });
@@ -404,15 +608,7 @@ function renderTempMarkers(geojson) {
     const t = p.temp_c;
 
     const marker = L.marker([lat, lon], { icon: makeTempIcon(t) });
-
-    const bronLabel = p.bron === 'CEFAS' ? 'CEFAS' : 'RWS';
-    const bronBadge = `<span style="color:#94a3b8;font-size:0.68rem">${bronLabel}</span>`;
-    const waardeHtml = t !== null
-      ? `<div class="popup-waarde" style="color:${tempColor(t)}">${t.toFixed(1)} °C</div>`
-      : `<div class="popup-waarde" style="color:#475569">Geen data</div>`;
-
     marker.on('click', () => openTempChart(p.code, p.naam || p.code, t, p.tijdstip));
-
     marker.addTo(map);
     tempMarkers.push(marker);
   });
@@ -435,15 +631,14 @@ async function fetchTempData() {
     const opgehaald = geojson.opgehaald
       ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
       : new Date().toLocaleTimeString('nl-NL');
-    setStatus('ok', `${geojson.aantalStations} stations — bijgewerkt ${opgehaald}`);
+    setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
   } catch (err) {
     console.error(err);
     setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Data niet beschikbaar');
   }
 }
 
-// ── Navigatie / dropdown ──────────────────────────────────────────────────────
-
+// ── Navigatie ─────────────────────────────────────────────────────────────────
 let activeSection = 'waarnemingen';
 let activeLayer   = 'golf';
 
@@ -451,35 +646,25 @@ function selectSection(section) {
   if (section === activeSection) return;
   activeSection = section;
 
-  // Zijbalk-tabs markeren
   document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
   document.getElementById(`tab-${section}`).classList.add('active');
 
-  const nav        = document.querySelector('nav');
-  const mainEl     = document.getElementById('main');
-  const statusEl   = document.getElementById('status');
-  const countdownEl= document.getElementById('countdown');
+  const nav = document.querySelector('nav');
 
   if (section === 'waarnemingen') {
     nav.style.display = '';
-    // Reset activeLayer zodat selectLayer niet vroeg afbreekt
     const layer = activeLayer;
     activeLayer = '';
     selectLayer(layer);
   } else {
-    // Verwachtingen: toon coming-soon, verberg kaart en nav
-    nav.style.display  = 'none';
-    clearMarkers();
-    clearTempMarkers();
-    const mapEl      = document.getElementById('map');
-    const comingSoon = document.getElementById('coming-soon');
-    mapEl.style.display      = 'none';
-    comingSoon.style.display = 'flex';
+    nav.style.display = 'none';
+    clearMarkers(); clearTempMarkers();
+    document.getElementById('map').style.display        = 'none';
+    document.getElementById('coming-soon').style.display = 'flex';
     document.getElementById('coming-soon-label').textContent = 'Verwachtingen';
-    statusEl.className   = '';
-    statusEl.innerHTML   = 'Status: <span>–</span>';
-    countdownEl.textContent = '';
-    // Sluit grafiekpaneel
+    setStatus('', '–');
+    document.getElementById('status').className = '';
+    document.getElementById('countdown').textContent = '';
     document.getElementById('chart-panel').classList.remove('open');
   }
 }
@@ -488,11 +673,9 @@ function selectLayer(layer) {
   if (layer === activeLayer) return;
   activeLayer = layer;
 
-  // Actieve knop markeren
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById(`nav-${layer}`).classList.add('active');
 
-  // Kaartinhoud wisselen
   const mapEl      = document.getElementById('map');
   const comingSoon = document.getElementById('coming-soon');
 
@@ -507,22 +690,20 @@ function selectLayer(layer) {
   } else {
     mapEl.style.display      = 'none';
     comingSoon.style.display = 'flex';
-    const labels = { wind: 'Windsnelheid' };
-    document.getElementById('coming-soon-label').textContent = labels[layer] || layer;
+    document.getElementById('coming-soon-label').textContent = { wind: 'Windsnelheid' }[layer] || layer;
+    setStatus('', '–');
     document.getElementById('status').className = '';
-    document.getElementById('status').innerHTML = 'Status: <span>–</span>';
     document.getElementById('countdown').textContent = '';
   }
 }
 
 // ── Kaartdata ─────────────────────────────────────────────────────────────────
-// Lokaal: proxy op localhost:3001
-// Online: live proxy op Render (altijd actuele data)
-const LOCAL      = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-const PROXY_URL  = LOCAL ? 'http://localhost:3001' : 'https://noordzee-proxy.onrender.com';
+const LOCAL     = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const PROXY_URL = LOCAL ? 'http://localhost:3001' : 'https://noordzee-proxy.onrender.com';
 
-function wavesUrl()              { return `${PROXY_URL}/api/waves`; }
-function historyUrl(code)        { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
+function wavesUrl()       { return `${PROXY_URL}/api/waves`; }
+function historyUrl(code) { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
+
 let markers = [];
 
 function clearMarkers() {
@@ -545,13 +726,7 @@ function renderMarkers(geojson) {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
     const h = p.hm0_m;
-
     const marker = L.marker([lat, lon], { icon: makeIcon(h) });
-
-    const waardeHtml = h !== null
-      ? `<div class="popup-waarde" style="color:${waveColor(h)}">${h.toFixed(2)} m</div>`
-      : `<div class="popup-waarde" style="color:#475569">Geen data</div>`;
-
     marker.on('click', () => openChart(p.code, p.naam, h, p.tijdstip));
     marker.addTo(map);
     markers.push(marker);
@@ -572,45 +747,72 @@ async function fetchWaveData() {
     const opgehaald = geojson.opgehaald
       ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
       : new Date().toLocaleTimeString('nl-NL');
-    setStatus('ok', `${geojson.aantalStations} stations — bijgewerkt ${opgehaald}`);
+    setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
   } catch (err) {
     console.error(err);
-    setStatus('error', LOCAL ? 'Proxy niet bereikbaar — draait rws-proxy.py?' : 'Data niet beschikbaar — GitHub Action nog niet gedraaid?');
+    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Data niet beschikbaar');
   }
 }
 
 // ── Grafiekpaneel ─────────────────────────────────────────────────────────────
 let chartInstance = null;
 
-const panel      = document.getElementById('chart-panel');
-const canvasEl   = document.getElementById('wave-chart');
-const loadingEl  = document.getElementById('chart-loading');
+const panel     = document.getElementById('chart-panel');
+const canvasEl  = document.getElementById('wave-chart');
+const loadingEl = document.getElementById('chart-loading');
 
 document.getElementById('chart-close').addEventListener('click', () => {
   panel.classList.remove('open');
   setTimeout(() => map.invalidateSize({ pan: false }), 320);
 });
 
+const CHART_OPTS = (color) => ({
+  responsive:          true,
+  maintainAspectRatio: false,
+  animation:           false,
+  plugins: {
+    legend: { display: false },
+    tooltip: {
+      backgroundColor: '#0d1625',
+      borderColor:     '#1c2e45',
+      borderWidth:     1,
+      titleColor:      '#7a91a8',
+      bodyColor:       '#e2e8f0',
+      padding:         10,
+      cornerRadius:    7,
+    },
+  },
+  scales: {
+    x: {
+      type: 'time',
+      time: { unit: 'hour', displayFormats: { hour: 'HH:mm' } },
+      ticks: { color: '#3d5167', maxTicksLimit: 7, font: { size: 10, family: 'Inter' } },
+      grid:  { color: '#1c2e45' },
+      border:{ color: '#1c2e45' },
+    },
+    y: {
+      ticks: { color: '#3d5167', font: { size: 10, family: 'Inter' } },
+      grid:  { color: '#1c2e45' },
+      border:{ color: '#1c2e45' },
+    },
+  },
+});
+
 async function openChart(code, naam, huidigHm0, tijdstip) {
-  // Paneel openen
   panel.classList.add('open');
   setTimeout(() => map.invalidateSize({ pan: false }), 320);
 
-  // Header bijwerken
-  document.getElementById('chart-naam').textContent     = naam || code;
-  document.getElementById('chart-subtitle').textContent = 'Golfhoogte afgelopen 24 uur';
+  document.getElementById('chart-naam').textContent      = naam || code;
+  document.getElementById('chart-subtitle').textContent  = 'Golfhoogte afgelopen 24 uur';
   document.getElementById('chart-hm0-label').textContent = 'm Hm0';
   const color = waveColor(huidigHm0);
   document.getElementById('chart-hm0').textContent  = huidigHm0 !== null ? huidigHm0.toFixed(2) : '–';
   document.getElementById('chart-hm0').style.color  = color;
   document.getElementById('chart-time').textContent = formatTijdstip(tijdstip);
 
-  // Laadstatus
-  loadingEl.textContent = 'Geschiedenis laden…';
+  loadingEl.textContent   = 'Geschiedenis laden…';
   loadingEl.style.display = 'flex';
   canvasEl.style.display  = 'none';
-
-  // Oude grafiek verwijderen
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
 
   try {
@@ -629,69 +831,30 @@ async function openChart(code, naam, huidigHm0, tijdstip) {
     const values = json.data.map(d => d.v);
     const maxVal = Math.max(...values);
 
+    const opts = CHART_OPTS(color);
+    opts.plugins.tooltip.callbacks = {
+      title: items => new Date(items[0].parsed.x).toLocaleString('nl-NL', {
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+        timeZone: 'Europe/Amsterdam',
+      }),
+      label: item => ` ${item.parsed.y.toFixed(2)} m`,
+    };
+    opts.scales.y.min          = 0;
+    opts.scales.y.suggestedMax = Math.max(maxVal * 1.2, 0.5);
+    opts.scales.y.ticks.callback = v => v.toFixed(1) + ' m';
+
     chartInstance = new Chart(canvasEl, {
       type: 'line',
       data: {
         labels,
         datasets: [{
-          data:            values,
-          borderColor:     color,
-          backgroundColor: color + '22',
-          borderWidth:     2,
-          pointRadius:     0,
-          pointHoverRadius:4,
-          fill:            true,
-          tension:         0.3,
+          data: values, borderColor: color,
+          backgroundColor: color + '18',
+          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4,
+          fill: true, tension: 0.35,
         }],
       },
-      options: {
-        responsive:          true,
-        maintainAspectRatio: false,
-        animation:           false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: '#0d1f3c',
-            borderColor:     '#1e3a5f',
-            borderWidth:     1,
-            titleColor:      '#94a3b8',
-            bodyColor:       '#e0e8f0',
-            callbacks: {
-              title: items => new Date(items[0].parsed.x).toLocaleString('nl-NL', {
-                day: '2-digit', month: '2-digit',
-                hour: '2-digit', minute: '2-digit',
-                timeZone: 'Europe/Amsterdam',
-              }),
-              label: item => ` ${item.parsed.y.toFixed(2)} m`,
-            },
-          },
-        },
-        scales: {
-          x: {
-            type: 'time',
-            time: {
-              unit:         'hour',
-              displayFormats: { hour: 'HH:mm' },
-            },
-            ticks: {
-              color:     '#64748b',
-              maxTicksLimit: 8,
-              font: { size: 10 },
-            },
-            grid: { color: '#1e3a5f' },
-          },
-          y: {
-            min:         0,
-            suggestedMax: Math.max(maxVal * 1.2, 0.5),
-            ticks: {
-              color: '#64748b',
-              font:  { size: 10 },
-              callback: v => v.toFixed(1) + ' m',
-            },
-            grid: { color: '#1e3a5f' },
-          },
-        },
-      },
+      options: opts,
     });
 
   } catch (err) {
@@ -701,11 +864,9 @@ async function openChart(code, naam, huidigHm0, tijdstip) {
 }
 
 async function openTempChart(code, naam, huidigTemp, tijdstip) {
-  // Paneel openen
   panel.classList.add('open');
   setTimeout(() => map.invalidateSize({ pan: false }), 320);
 
-  // Header bijwerken
   document.getElementById('chart-naam').textContent      = naam || code;
   document.getElementById('chart-subtitle').textContent  = 'Temperatuur afgelopen 24 uur';
   document.getElementById('chart-hm0-label').textContent = '°C';
@@ -714,12 +875,9 @@ async function openTempChart(code, naam, huidigTemp, tijdstip) {
   document.getElementById('chart-hm0').style.color  = color;
   document.getElementById('chart-time').textContent = formatTijdstip(tijdstip);
 
-  // Laadstatus
-  loadingEl.textContent    = 'Geschiedenis laden…';
-  loadingEl.style.display  = 'flex';
-  canvasEl.style.display   = 'none';
-
-  // Oude grafiek verwijderen
+  loadingEl.textContent   = 'Geschiedenis laden…';
+  loadingEl.style.display = 'flex';
+  canvasEl.style.display  = 'none';
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
 
   try {
@@ -739,69 +897,30 @@ async function openTempChart(code, naam, huidigTemp, tijdstip) {
     const minVal = Math.min(...values);
     const maxVal = Math.max(...values);
 
+    const opts = CHART_OPTS(color);
+    opts.plugins.tooltip.callbacks = {
+      title: items => new Date(items[0].parsed.x).toLocaleString('nl-NL', {
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+        timeZone: 'Europe/Amsterdam',
+      }),
+      label: item => ` ${item.parsed.y.toFixed(1)} °C`,
+    };
+    opts.scales.y.suggestedMin  = Math.max(0, minVal - 1);
+    opts.scales.y.suggestedMax  = maxVal + 1;
+    opts.scales.y.ticks.callback = v => v.toFixed(1) + ' °C';
+
     chartInstance = new Chart(canvasEl, {
       type: 'line',
       data: {
         labels,
         datasets: [{
-          data:            values,
-          borderColor:     color,
-          backgroundColor: color + '22',
-          borderWidth:     2,
-          pointRadius:     0,
-          pointHoverRadius:4,
-          fill:            true,
-          tension:         0.3,
+          data: values, borderColor: color,
+          backgroundColor: color + '18',
+          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4,
+          fill: true, tension: 0.35,
         }],
       },
-      options: {
-        responsive:          true,
-        maintainAspectRatio: false,
-        animation:           false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: '#0d1f3c',
-            borderColor:     '#1e3a5f',
-            borderWidth:     1,
-            titleColor:      '#94a3b8',
-            bodyColor:       '#e0e8f0',
-            callbacks: {
-              title: items => new Date(items[0].parsed.x).toLocaleString('nl-NL', {
-                day: '2-digit', month: '2-digit',
-                hour: '2-digit', minute: '2-digit',
-                timeZone: 'Europe/Amsterdam',
-              }),
-              label: item => ` ${item.parsed.y.toFixed(1)} °C`,
-            },
-          },
-        },
-        scales: {
-          x: {
-            type: 'time',
-            time: {
-              unit:           'hour',
-              displayFormats: { hour: 'HH:mm' },
-            },
-            ticks: {
-              color:         '#64748b',
-              maxTicksLimit: 8,
-              font: { size: 10 },
-            },
-            grid: { color: '#1e3a5f' },
-          },
-          y: {
-            suggestedMin: Math.max(0, minVal - 1),
-            suggestedMax: maxVal + 1,
-            ticks: {
-              color: '#64748b',
-              font:  { size: 10 },
-              callback: v => v.toFixed(1) + ' °C',
-            },
-            grid: { color: '#1e3a5f' },
-          },
-        },
-      },
+      options: opts,
     });
 
   } catch (err) {
@@ -814,7 +933,7 @@ async function openTempChart(code, naam, huidigTemp, tijdstip) {
 function setStatus(state, text) {
   const el = document.getElementById('status');
   el.className = state;
-  el.innerHTML = `Status: <span>${text}</span>`;
+  el.innerHTML = `<div class="status-dot"></div><span>${text}</span>`;
 }
 
 const UPDATE_SEC = 10 * 60;
@@ -833,7 +952,7 @@ function startCountdown() {
     } else {
       const m = Math.floor(secondsLeft / 60);
       const s = secondsLeft % 60;
-      el.textContent = `Update over ${m}:${String(s).padStart(2, '0')}`;
+      el.textContent = `${m}:${String(s).padStart(2, '0')}`;
     }
   }, 1000);
 }
