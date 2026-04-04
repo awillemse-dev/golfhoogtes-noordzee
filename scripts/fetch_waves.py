@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Haalt actuele golfhoogte-data op van RWS, BSH en CEFAS en slaat deze op
-als statische JSON-bestanden die door GitHub Pages geserveerd worden.
+Haalt actuele golfhoogte- en temperatuurdata op van RWS, BSH en CEFAS en slaat
+deze op als statische JSON-bestanden die door GitHub Pages geserveerd worden.
 Wordt elke 10 minuten aangeroepen door GitHub Actions.
 """
 
@@ -14,10 +14,12 @@ from pathlib import Path
 
 # ── Directories ───────────────────────────────────────────────────────────────
 
-DATA_DIR    = Path("data")
-HISTORY_DIR = DATA_DIR / "history"
+DATA_DIR      = Path("data")
+HISTORY_DIR   = DATA_DIR / "history"
+TEMP_HIST_DIR = DATA_DIR / "temp-history"
 DATA_DIR.mkdir(exist_ok=True)
 HISTORY_DIR.mkdir(exist_ok=True)
+TEMP_HIST_DIR.mkdir(exist_ok=True)
 
 # ── API-basisadressen ─────────────────────────────────────────────────────────
 
@@ -94,6 +96,38 @@ def append_to_history(code, naam, tijdstip, hm0_m):
     save_history(code, naam, existing)
 
 
+def load_temp_history(code):
+    path = TEMP_HIST_DIR / f"{code_to_filename(code)}.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text()).get("data", [])
+        except Exception:
+            pass
+    return []
+
+
+def save_temp_history(code, naam, data_points):
+    now    = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(hours=25)).isoformat()
+    pruned = sorted(
+        [pt for pt in data_points if pt["t"] >= cutoff],
+        key=lambda x: x["t"],
+    )
+    path = TEMP_HIST_DIR / f"{code_to_filename(code)}.json"
+    path.write_text(json.dumps({"code": code, "naam": naam, "data": pruned}, ensure_ascii=False))
+    return pruned
+
+
+def append_to_temp_history(code, naam, tijdstip, temp_c):
+    if tijdstip is None or temp_c is None:
+        return
+    existing   = load_temp_history(code)
+    timestamps = {pt["t"] for pt in existing}
+    if tijdstip not in timestamps:
+        existing.append({"t": tijdstip, "v": temp_c})
+    save_temp_history(code, naam, existing)
+
+
 # ── RWS: catalogus en laatste waarnemingen ────────────────────────────────────
 
 INLAND_KEYWORDS = [
@@ -115,16 +149,7 @@ def is_excluded(code, naam):
     return any(kw in code_l or kw in naam_l for kw in INLAND_KEYWORDS)
 
 
-def fetch_rws():
-    print("[RWS] Catalogus ophalen…")
-    catalog = rws_post(
-        "/METADATASERVICES/OphalenCatalogus",
-        {"CatalogusFilter": {
-            "Grootheden": True, "Eenheden": True,
-            "Compartimenten": True, "ProcesTypes": True, "Groeperingen": True,
-        }},
-    )
-
+def fetch_rws(catalog):
     hm0_meta_ids = {
         m["AquoMetadata_MessageID"]
         for m in catalog.get("AquoMetadataLijst", [])
@@ -283,15 +308,140 @@ def fetch_bsh():
     return features
 
 
+# ── RWS: zeewatertemperatuur ──────────────────────────────────────────────────
+
+# Binnenlandse en kust-stations uitsluiten (zelfde logica als Hm0)
+TEMP_INLAND = [
+    "ijsselmeer", "markermeer", "markerwaard", "markerwadden", "slotermeer",
+    "woudsend", "waddenzee", "grevelingen", "veerse", "volkerak", "haringvliet",
+    "hollands diep", "lek", "waal", "rijn", "maas", "ijssel", "zwarte meer",
+    "randmeer", "veluwemeer", "eemmeer", "gooimeer", "almere", "strand",
+    "zwembad", "badstrand", "recreatie", "triathlon", "bosbaan",
+]
+
+def is_temp_excluded(code, naam):
+    code_l = (code or "").lower()
+    naam_l = (naam or "").lower()
+    return any(kw in code_l or kw in naam_l for kw in TEMP_INLAND)
+
+
+def fetch_rws_temp(catalog):
+    """Haal zeewatertemperatuur op van RWS-stations op de Noordzee."""
+    meta      = catalog.get("AquoMetadataLijst", [])
+    locs      = catalog.get("LocatieLijst", [])
+    meta_locs = catalog.get("AquoMetadataLocatieLijst", [])
+
+    # Vind T + OW metadata IDs
+    temp_meta_ids = {
+        m["AquoMetadata_MessageID"] for m in meta
+        if m.get("Grootheid", {}).get("Code") == "T"
+        and m.get("Compartiment", {}).get("Code") == "OW"
+    }
+
+    temp_loc_ids = {
+        r["Locatie_MessageID"] for r in meta_locs
+        if r.get("AquoMetaData_MessageID") in temp_meta_ids
+    }
+
+    # Alleen offshore stations: Noordzee-bounding box, geen binnenwateren
+    stations = [
+        l for l in locs
+        if l.get("Locatie_MessageID") in temp_loc_ids
+        and l.get("Lat") is not None and l.get("Lon") is not None
+        and 2.0 < l["Lon"] < 9.5
+        and 51.0 < l["Lat"] < 56.5
+        and not is_temp_excluded(l.get("Code", ""), l.get("Naam", ""))
+    ]
+
+    print(f"[RWS temp] {len(stations)} offshore stations gevonden")
+
+    # Waarnemingen ophalen in batches
+    BATCH = 20
+    now   = datetime.now(timezone.utc)
+    features = []
+    station_map = {s["Code"]: s for s in stations}
+
+    for i in range(0, len(stations), BATCH):
+        batch = stations[i:i + BATCH]
+        try:
+            resp = rws_post(
+                "/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen",
+                {
+                    "AquoPlusWaarnemingMetadataLijst": [{
+                        "AquoMetadata": {
+                            "Compartiment": {"Code": "OW"},
+                            "Eenheid":      {"Code": "oC"},
+                            "Grootheid":    {"Code": "T"},
+                        }
+                    }],
+                    "LocatieLijst": [{"Code": s["Code"]} for s in batch],
+                },
+            )
+        except Exception as e:
+            print(f"[RWS temp] batch {i} fout: {e}")
+            continue
+
+        # Dedupliceer per station (recentste wint)
+        best = {}
+        for w in resp.get("WaarnemingenLijst", []):
+            loc_code = (w.get("Locatie") or {}).get("Code")
+            if not loc_code:
+                continue
+            metingen = w.get("MetingenLijst") or []
+            tijdstip = metingen[0].get("Tijdstip") if metingen else None
+            if loc_code not in best or (tijdstip or "") > (
+                ((best[loc_code].get("MetingenLijst") or [{}])[0]).get("Tijdstip") or ""
+            ):
+                best[loc_code] = w
+
+        for loc_code, w in best.items():
+            station  = station_map.get(loc_code) or w.get("Locatie") or {}
+            lat = station.get("Lat") or (w.get("Locatie") or {}).get("Lat")
+            lon = station.get("Lon") or (w.get("Locatie") or {}).get("Lon")
+            if lat is None or lon is None:
+                continue
+
+            naam     = (w.get("Locatie") or {}).get("Naam") or station.get("Naam") or loc_code
+            metingen = w.get("MetingenLijst") or []
+            meting   = metingen[0] if metingen else {}
+            waarde   = (meting.get("Meetwaarde") or {}).get("Waarde_Numeriek")
+            temp_c   = round(waarde, 1) if waarde is not None else None
+            tijdstip = meting.get("Tijdstip")
+
+            # 48-uurs filter
+            if tijdstip:
+                try:
+                    dt = datetime.fromisoformat(tijdstip)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if (now - dt).total_seconds() > 48 * 3600:
+                        continue
+                except Exception:
+                    pass
+
+            # Sla negatieve of onrealistische waarden over
+            if temp_c is not None and not (-2 < temp_c < 35):
+                continue
+
+            code = f"rws.temp.{loc_code.lower()}"
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {
+                    "code": code, "naam": naam,
+                    "temp_c": temp_c, "tijdstip": tijdstip,
+                    "bron": "RWS",
+                },
+            })
+            append_to_temp_history(code, naam, tijdstip, temp_c)
+
+    print(f"[RWS temp] {len(features)} stations na filters")
+    return features
+
+
 # ── CEFAS WaveNet ─────────────────────────────────────────────────────────────
 
-def fetch_cefas():
-    req = urllib.request.Request(
-        f"{CEFAS_API}/Map/Current", headers=CEFAS_HEADERS)
-    with urllib.request.urlopen(req, timeout=20) as r:
-        data = json.loads(r.read().decode("utf-8"))
-
-    now      = datetime.now(timezone.utc)
+def fetch_cefas(data, now):
     features = []
 
     for f in data.get("features", []):
@@ -348,6 +498,62 @@ def fetch_cefas():
     return features
 
 
+def fetch_cefas_temp(cefas_data, now):
+    """Haal zeewatertemperatuur op uit de al-opgehaalde CEFAS Map/Current data."""
+    features = []
+    for f in cefas_data.get("features", []):
+        props  = f.get("properties", {})
+        coords = f.get("geometry", {}).get("coordinates", [])
+        if len(coords) < 2:
+            continue
+        lon, lat = coords[0], coords[1]
+        if lon < -10 or lat < 49:
+            continue
+
+        station_id = props.get("id", "")
+        source     = props.get("source", "INT")
+        naam       = props.get("title", station_id)
+        tijdstip_s = props.get("timestamp", "")
+        code       = f"cefas.temp.{station_id.lower()}"
+
+        if tijdstip_s:
+            try:
+                ts_dt = datetime.fromisoformat(tijdstip_s)
+                if ts_dt.tzinfo is None:
+                    ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+                if (now - ts_dt).total_seconds() > 48 * 3600:
+                    continue
+            except Exception:
+                continue
+        else:
+            continue
+
+        temp_info = props.get("results", {}).get("TEMP", {})
+        temp_vals = temp_info.get("values", [])
+        try:
+            temp_c = round(float(temp_vals[0]), 1) if temp_vals and temp_vals[0] else None
+        except (ValueError, IndexError):
+            temp_c = None
+
+        if temp_c is None:
+            continue
+
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {
+                "code": code, "naam": naam,
+                "temp_c": temp_c, "tijdstip": tijdstip_s,
+                "bron": "CEFAS",
+                "cefas_id": station_id, "cefas_source": source,
+            },
+        })
+        append_to_temp_history(code, naam, tijdstip_s, temp_c)
+
+    print(f"[CEFAS temp] {len(features)} stations")
+    return features
+
+
 def fetch_cefas_history(station_id, source, code, naam):
     """Haal 24-uursgeschiedenis op van CEFAS Detail/Results API."""
     now   = datetime.now(timezone.utc)
@@ -385,36 +591,67 @@ def fetch_cefas_history(station_id, source, code, naam):
 # ── Hoofdprogramma ────────────────────────────────────────────────────────────
 
 def main():
-    now      = datetime.now(timezone.utc)
-    features = []
+    now = datetime.now(timezone.utc)
 
+    # ── Catalogus één keer ophalen (gedeeld door Hm0 én temperatuur) ──
+    print("[RWS] Catalogus ophalen…")
     try:
-        features.extend(fetch_rws())
+        catalog = rws_post("/METADATASERVICES/OphalenCatalogus", {"CatalogusFilter": {
+            "Grootheden": True, "Eenheden": True,
+            "Compartimenten": True, "ProcesTypes": True, "Groeperingen": True,
+        }})
     except Exception as e:
-        print(f"[RWS] Fout: {e}")
+        print(f"[RWS] Catalogus fout: {e}")
+        catalog = {}
 
+    # ── CEFAS Map/Current één keer ophalen (gedeeld door golven én temperatuur) ──
+    cefas_raw = {}
     try:
-        features.extend(fetch_bsh())
+        req = urllib.request.Request(f"{CEFAS_API}/Map/Current", headers=CEFAS_HEADERS)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            cefas_raw = json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        print(f"[CEFAS] Map/Current fout: {e}")
+
+    # ── Golfhoogtes ──────────────────────────────────────────────────
+    wave_features = []
+    try:
+        wave_features.extend(fetch_rws(catalog))
+    except Exception as e:
+        print(f"[RWS golf] Fout: {e}")
+    try:
+        wave_features.extend(fetch_bsh())
     except Exception as e:
         print(f"[BSH] Fout: {e}")
-
     try:
-        features.extend(fetch_cefas())
+        wave_features.extend(fetch_cefas(cefas_raw, now))
     except Exception as e:
-        print(f"[CEFAS] Fout: {e}")
+        print(f"[CEFAS golf] Fout: {e}")
 
-    geojson = {
-        "type":           "FeatureCollection",
-        "features":       features,
-        "opgehaald":      now.isoformat(),
-        "aantalStations": len(features),
+    waves_geojson = {
+        "type": "FeatureCollection", "features": wave_features,
+        "opgehaald": now.isoformat(), "aantalStations": len(wave_features),
     }
+    (DATA_DIR / "waves.json").write_text(json.dumps(waves_geojson, ensure_ascii=False))
+    print(f"[KLAAR golf] {len(wave_features)} stations → data/waves.json")
 
-    (DATA_DIR / "waves.json").write_text(
-        json.dumps(geojson, ensure_ascii=False, indent=None),
-    )
+    # ── Temperatuur ───────────────────────────────────────────────────
+    temp_features = []
+    try:
+        temp_features.extend(fetch_rws_temp(catalog))
+    except Exception as e:
+        print(f"[RWS temp] Fout: {e}")
+    try:
+        temp_features.extend(fetch_cefas_temp(cefas_raw, now))
+    except Exception as e:
+        print(f"[CEFAS temp] Fout: {e}")
 
-    print(f"[KLAAR] {len(features)} stations opgeslagen in data/waves.json")
+    temp_geojson = {
+        "type": "FeatureCollection", "features": temp_features,
+        "opgehaald": now.isoformat(), "aantalStations": len(temp_features),
+    }
+    (DATA_DIR / "temp.json").write_text(json.dumps(temp_geojson, ensure_ascii=False))
+    print(f"[KLAAR temp] {len(temp_features)} stations → data/temp.json")
 
 
 if __name__ == "__main__":

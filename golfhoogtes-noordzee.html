@@ -252,7 +252,7 @@
         <div class="dropdown-item" onclick="selectLayer('temp', this)">
           <span class="item-icon">🌡️</span>
           <span class="item-label">Zeewatertemperatuur</span>
-          <span class="item-badge">binnenkort</span>
+          <span class="item-badge">live</span>
         </div>
       </div>
     </button>
@@ -369,6 +369,100 @@ function makeIcon(h) {
   });
 }
 
+// ── Temperatuurkaart ──────────────────────────────────────────────────────────
+
+function tempColor(t) {
+  if (t === null || isNaN(t)) return '#475569';
+  if (t < 5)  return '#bfdbfe';  // ijskoud – lichtblauw
+  if (t < 8)  return '#60a5fa';  // koud    – blauw
+  if (t < 11) return '#34d399';  // fris    – groen
+  if (t < 14) return '#fbbf24';  // warm    – geel
+  if (t < 18) return '#f97316';  // warm    – oranje
+  return '#ef4444';               // heet    – rood
+}
+
+function makeTempIcon(t) {
+  const color = tempColor(t);
+  const w  = 30;
+  const ht = 19;
+  const label = t !== null ? t.toFixed(1) : '–';
+  return L.divIcon({
+    className:   '',
+    iconSize:    [w, ht],
+    iconAnchor:  [w / 2, ht / 2],
+    popupAnchor: [0, -(ht / 2 + 4)],
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${ht}">
+      <ellipse cx="${w/2}" cy="${ht/2}" rx="${w/2-1}" ry="${ht/2-1}"
+        fill="${color}" fill-opacity="0.9"/>
+      <text x="${w/2}" y="${ht/2+3.5}" text-anchor="middle"
+        font-family="Segoe UI,Arial,sans-serif" font-size="9"
+        font-weight="700" fill="white">${label}</text>
+    </svg>`,
+  });
+}
+
+let tempMarkers = [];
+
+function clearTempMarkers() {
+  tempMarkers.forEach(m => map.removeLayer(m));
+  tempMarkers = [];
+}
+
+function renderTempMarkers(geojson) {
+  clearMarkers();
+  clearTempMarkers();
+  (geojson.features || []).forEach(f => {
+    const [lon, lat] = f.geometry.coordinates;
+    const p = f.properties;
+    const t = p.temp_c;
+
+    const marker = L.marker([lat, lon], { icon: makeTempIcon(t) });
+
+    const bronLabel = p.bron === 'CEFAS' ? 'CEFAS' : 'RWS';
+    const bronBadge = `<span style="color:#94a3b8;font-size:0.68rem">${bronLabel}</span>`;
+    const waardeHtml = t !== null
+      ? `<div class="popup-waarde" style="color:${tempColor(t)}">${t.toFixed(1)} °C</div>`
+      : `<div class="popup-waarde" style="color:#475569">Geen data</div>`;
+
+    marker.bindPopup(`
+      <div class="popup-naam">${p.naam || p.code} ${bronBadge}</div>
+      ${waardeHtml}
+      <div class="popup-meta">Zeewatertemperatuur</div>
+      <div class="popup-tijd">Meting: ${formatTijdstip(p.tijdstip)}</div>
+    `, { maxWidth: 220 });
+
+    marker.addTo(map);
+    tempMarkers.push(marker);
+  });
+
+  if (tempMarkers.length > 0 && map.getZoom() < 5) {
+    map.fitBounds(L.featureGroup(tempMarkers).getBounds().pad(0.1));
+  }
+}
+
+function tempUrl() {
+  return LOCAL
+    ? `${PROXY}/api/temp`
+    : `${DATA_BASE}/temp.json?t=${Date.now()}`;
+}
+
+async function fetchTempData() {
+  setStatus('loading', 'laden…');
+  try {
+    const resp = await fetch(tempUrl(), { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const geojson = await resp.json();
+    renderTempMarkers(geojson);
+    const opgehaald = geojson.opgehaald
+      ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+      : new Date().toLocaleTimeString('nl-NL');
+    setStatus('ok', `${geojson.aantalStations} stations — bijgewerkt ${opgehaald}`);
+  } catch (err) {
+    console.error(err);
+    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Data niet beschikbaar');
+  }
+}
+
 // ── Navigatie / dropdown ──────────────────────────────────────────────────────
 
 let activeLayer = 'golf';
@@ -400,10 +494,14 @@ function selectLayer(layer, item) {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
     fetchWaveData().then(startCountdown);
+  } else if (layer === 'temp') {
+    mapEl.style.display      = '';
+    comingSoon.style.display = 'none';
+    fetchTempData().then(startCountdown);
   } else {
     mapEl.style.display      = 'none';
     comingSoon.style.display = 'flex';
-    const labels = { temp: 'Zeewatertemperatuur', wind: 'Windsnelheid' };
+    const labels = { wind: 'Windsnelheid' };
     document.getElementById('coming-soon-label').textContent = labels[layer] || layer;
     document.getElementById('status').className = '';
     document.getElementById('status').innerHTML = 'Status: <span>–</span>';
