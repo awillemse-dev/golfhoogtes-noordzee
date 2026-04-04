@@ -921,12 +921,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
             try:
-                if code.startswith("rws.temp."):
-                    loc_code = code[9:].upper()   # strip "rws.temp."
-                    data = fetch_rws_temp_history(loc_code)
-                elif code.startswith("cefas.temp."):
-                    # Zoek cefas_id en cefas_source op in de temp-cache
-                    station_id = code[11:].upper()  # fallback
+                filename   = code.replace(".", "-") + ".json"
+                local_path = os.path.join(os.path.dirname(__file__),
+                                          "data", "temp-history", filename)
+
+                if code.startswith("cefas.temp."):
+                    # CEFAS: gebruik de live API voor volledige 24u data
+                    station_id = code[11:].upper()
                     source     = "INT"
                     cached = get_temp_data()
                     for feat in cached.get("features", []):
@@ -935,6 +936,17 @@ class Handler(BaseHTTPRequestHandler):
                             source     = feat["properties"].get("cefas_source", "INT")
                             break
                     data = fetch_cefas_temp_history(station_id, source)
+                elif os.path.exists(local_path):
+                    # RWS: lees uit lokaal bestand (RWS API ondersteunt geen T-geschiedenis)
+                    with open(local_path, "rb") as f:
+                        body = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type",   "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_cors()
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 else:
                     data = {"code": code, "naam": code, "data": []}
                 body = json.dumps(data, ensure_ascii=False).encode("utf-8")
