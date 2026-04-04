@@ -354,14 +354,6 @@ function renderTempMarkers(geojson) {
       ? `<div class="popup-waarde" style="color:${tempColor(t)}">${t.toFixed(1)} °C</div>`
       : `<div class="popup-waarde" style="color:#475569">Geen data</div>`;
 
-    marker.bindPopup(`
-      <div class="popup-naam">${p.naam || p.code} ${bronBadge}</div>
-      ${waardeHtml}
-      <div class="popup-meta">Zeewatertemperatuur</div>
-      <div class="popup-tijd">Meting: ${formatTijdstip(p.tijdstip)}</div>
-      <div class="popup-hint">Klik voor grafiek afgelopen 24 uur →</div>
-    `, { maxWidth: 220 });
-
     marker.on('click', () => openTempChart(p.code, p.naam || p.code, t, p.tijdstip));
 
     marker.addTo(map);
@@ -465,21 +457,7 @@ function renderMarkers(geojson) {
       ? `<div class="popup-waarde" style="color:${waveColor(h)}">${h.toFixed(2)} m</div>`
       : `<div class="popup-waarde" style="color:#475569">Geen data</div>`;
 
-    const bronLabel = p.bron === 'BSH' ? 'BSH' : p.bron === 'CEFAS' ? 'CEFAS' : 'RWS';
-    const bronBadge = `<span style="color:#94a3b8;font-size:0.68rem">${bronLabel}</span>`;
-    const hasHistory = true;
-
-    marker.bindPopup(`
-      <div class="popup-naam">${p.naam || p.code} ${bronBadge}</div>
-      ${waardeHtml}
-      <div class="popup-meta">Significante golfhoogte (Hm0)</div>
-      <div class="popup-tijd">Meting: ${formatTijdstip(p.tijdstip)}</div>
-      ${hasHistory ? '<div class="popup-hint">Klik voor grafiek afgelopen 24 uur →</div>' : ''}
-    `, { maxWidth: 220 });
-
-    if (hasHistory) {
-      marker.on('click', () => openChart(p.code, p.naam, h, p.tijdstip));
-    }
+    marker.on('click', () => openChart(p.code, p.naam, h, p.tijdstip));
     marker.addTo(map);
     markers.push(marker);
   });
