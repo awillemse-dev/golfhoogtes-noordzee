@@ -443,17 +443,8 @@ function renderTempMarkers(geojson) {
   }
 }
 
-function tempUrl() {
-  return LOCAL
-    ? `${PROXY}/api/temp`
-    : `${DATA_BASE}/temp.json?t=${Date.now()}`;
-}
-
-function tempHistoryUrl(code) {
-  return LOCAL
-    ? `${PROXY}/api/temp-history?code=${encodeURIComponent(code)}`
-    : `${DATA_BASE}/temp-history/${code.replace(/\./g, '-')}.json?t=${Date.now()}`;
-}
+function tempUrl()            { return `${PROXY_URL}/api/temp`; }
+function tempHistoryUrl(code) { return `${PROXY_URL}/api/temp-history?code=${encodeURIComponent(code)}`; }
 
 async function fetchTempData() {
   setStatus('loading', 'laden…');
@@ -526,14 +517,13 @@ document.addEventListener('click', e => {
 });
 
 // ── Kaartdata ─────────────────────────────────────────────────────────────────
-// Lokaal: live proxy op localhost:3001
-// Online (GitHub Pages): statische JSON-bestanden bijgewerkt door GitHub Actions
-const LOCAL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-const PROXY  = 'http://localhost:3001';
-const DATA_BASE = './data';
+// Lokaal: proxy op localhost:3001
+// Online: live proxy op Render (altijd actuele data)
+const LOCAL      = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const PROXY_URL  = LOCAL ? 'http://localhost:3001' : 'https://noordzee-proxy.onrender.com';
 
-function wavesUrl()              { return LOCAL ? `${PROXY}/api/waves`                                   : `${DATA_BASE}/waves.json?t=${Date.now()}`; }
-function historyUrl(code)        { return LOCAL ? `${PROXY}/api/history?code=${encodeURIComponent(code)}` : `${DATA_BASE}/history/${code.replace(/\./g, '-')}.json?t=${Date.now()}`; }
+function wavesUrl()              { return `${PROXY_URL}/api/waves`; }
+function historyUrl(code)        { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
 let markers = [];
 
 function clearMarkers() {

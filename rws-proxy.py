@@ -601,11 +601,34 @@ def fetch_history(code):
 
 # ── Cache ────────────────────────────────────────────────────────────────────
 
-_cache       = None
-_cache_time  = 0
-_stations    = None
-_temp_cache  = None
-_temp_time   = 0
+_cache          = None
+_cache_time     = 0
+_stations       = None
+_temp_cache     = None
+_temp_time      = 0
+_rws_temp_hist  = {}   # code → {tijdstip_iso: temp_c}  (ring buffer, net als BSH)
+
+
+def _record_rws_temp(code, tijdstip, temp_c):
+    """Sla RWS temperatuurmeting op in ring buffer (max 25 uur)."""
+    if tijdstip is None or temp_c is None:
+        return
+    if code not in _rws_temp_hist:
+        _rws_temp_hist[code] = {}
+    _rws_temp_hist[code][tijdstip] = temp_c
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    _rws_temp_hist[code] = {
+        ts: v for ts, v in _rws_temp_hist[code].items() if ts >= cutoff
+    }
+
+
+def get_rws_temp_history(code):
+    """Geef 24-uursgeschiedenis terug vanuit de RWS ring buffer."""
+    buf    = _rws_temp_hist.get(code, {})
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    data   = [{"t": ts, "v": v} for ts, v in buf.items() if ts >= cutoff and v is not None]
+    data.sort(key=lambda x: x["t"])
+    return {"code": code, "naam": code, "data": data}
 
 
 def get_data():
@@ -734,9 +757,11 @@ def get_temp_data():
                         pass
                 if temp_c is not None and not (-2 < temp_c < 35):
                     continue
+                rws_code = f"rws.temp.{loc_code.lower()}"
+                _record_rws_temp(rws_code, tijdstip, temp_c)
                 features.append({"type": "Feature",
                     "geometry": {"type": "Point", "coordinates": [lon, lat]},
-                    "properties": {"code": f"rws.temp.{loc_code.lower()}",
+                    "properties": {"code": rws_code,
                         "naam": naam, "temp_c": temp_c, "tijdstip": tijdstip, "bron": "RWS"},
                 })
         print(f"[RWS temp] {sum(1 for f in features if f['properties']['bron']=='RWS')} stations")
@@ -921,12 +946,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
             try:
-                filename   = code.replace(".", "-") + ".json"
-                local_path = os.path.join(os.path.dirname(__file__),
-                                          "data", "temp-history", filename)
-
                 if code.startswith("cefas.temp."):
-                    # CEFAS: gebruik de live API voor volledige 24u data
+                    # CEFAS: live API voor volledige 24u data
                     station_id = code[11:].upper()
                     source     = "INT"
                     cached = get_temp_data()
@@ -936,19 +957,9 @@ class Handler(BaseHTTPRequestHandler):
                             source     = feat["properties"].get("cefas_source", "INT")
                             break
                     data = fetch_cefas_temp_history(station_id, source)
-                elif os.path.exists(local_path):
-                    # RWS: lees uit lokaal bestand (RWS API ondersteunt geen T-geschiedenis)
-                    with open(local_path, "rb") as f:
-                        body = f.read()
-                    self.send_response(200)
-                    self.send_header("Content-Type",   "application/json; charset=utf-8")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.send_cors()
-                    self.end_headers()
-                    self.wfile.write(body)
-                    return
                 else:
-                    data = {"code": code, "naam": code, "data": []}
+                    # RWS: in-memory ring buffer (groeit elke 10 min)
+                    data = get_rws_temp_history(code)
                 body = json.dumps(data, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type",   "application/json; charset=utf-8")
