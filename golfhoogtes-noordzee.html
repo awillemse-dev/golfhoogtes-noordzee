@@ -637,8 +637,7 @@ function clearTempMarkers() {
 }
 
 function renderTempMarkers(geojson) {
-  clearMarkers();
-  clearTempMarkers();
+  clearMarkers(); clearTempMarkers(); clearWindMarkers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
@@ -902,7 +901,7 @@ function formatTijdstip(iso) {
 }
 
 function renderMarkers(geojson) {
-  clearMarkers();
+  clearMarkers(); clearTempMarkers(); clearWindMarkers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
