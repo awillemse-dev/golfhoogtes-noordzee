@@ -980,8 +980,9 @@ def get_temp_data():
 
 # ── Windsnelheid (RWS) ────────────────────────────────────────────────────────
 
-_wind_cache = None
-_wind_time  = 0
+_wind_cache    = None
+_wind_time     = 0
+_wind_stations = None   # eenmalig geladen uit catalogus, daarna hergebruikt
 
 WIND_INLAND = [
     "ijsselmeer", "markermeer", "markerwaard", "markerwadden", "slotermeer",
@@ -991,104 +992,125 @@ WIND_INLAND = [
     "zwembad", "badstrand", "recreatie", "bosbaan",
 ]
 
+def _fetch_wind_stations():
+    """Haal eenmalig de lijst van wind-stations op uit de RWS-catalogus."""
+    catalog   = rws_post("/METADATASERVICES/OphalenCatalogus", {"CatalogusFilter": {
+        "Grootheden": True, "Eenheden": True,
+        "Compartimenten": True, "ProcesTypes": True, "Groeperingen": True,
+    }})
+    meta      = catalog.get("AquoMetadataLijst", [])
+    locs      = catalog.get("LocatieLijst", [])
+    meta_locs = catalog.get("AquoMetadataLocatieLijst", [])
+
+    wind_meta_ids = {m["AquoMetadata_MessageID"] for m in meta
+                     if m.get("Grootheid", {}).get("Code") == "WINDSHD"
+                     and m.get("Eenheid", {}).get("Code") == "m/s"}
+    wind_loc_ids  = {r["Locatie_MessageID"] for r in meta_locs
+                     if r.get("AquoMetaData_MessageID") in wind_meta_ids}
+
+    return [l for l in locs
+            if l.get("Locatie_MessageID") in wind_loc_ids
+            and l.get("Lat") and l.get("Lon")
+            and 2.0 < l["Lon"] < 15.0 and 51.0 < l["Lat"] < 57.5
+            and not any(kw in l.get("Code","").lower() or kw in l.get("Naam","").lower()
+                        for kw in WIND_INLAND)]
+
+
+def _fetch_wind_batch(batch, station_map, now):
+    """Haal één batch windwaarnemingen op; retourneert lijst van features."""
+    try:
+        resp = rws_post("/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen", {
+            "AquoPlusWaarnemingMetadataLijst": [{"AquoMetadata": {
+                "Compartiment": {"Code": "LT"},
+                "Eenheid":      {"Code": "m/s"},
+                "Grootheid":    {"Code": "WINDSHD"},
+            }}],
+            "LocatieLijst": [{"Code": s["Code"]} for s in batch],
+        })
+    except Exception:
+        return []
+
+    best = {}
+    for w in resp.get("WaarnemingenLijst", []):
+        loc_code = (w.get("Locatie") or {}).get("Code")
+        if not loc_code:
+            continue
+        metingen = w.get("MetingenLijst") or []
+        tijdstip = metingen[0].get("Tijdstip") if metingen else None
+        if loc_code not in best or (tijdstip or "") > (
+            ((best[loc_code].get("MetingenLijst") or [{}])[0]).get("Tijdstip") or ""
+        ):
+            best[loc_code] = w
+
+    features = []
+    for loc_code, w in best.items():
+        station  = station_map.get(loc_code) or w.get("Locatie") or {}
+        lat = station.get("Lat") or (w.get("Locatie") or {}).get("Lat")
+        lon = station.get("Lon") or (w.get("Locatie") or {}).get("Lon")
+        if lat is None or lon is None:
+            continue
+        naam     = (w.get("Locatie") or {}).get("Naam") or station.get("Naam") or loc_code
+        metingen = w.get("MetingenLijst") or []
+        meting   = metingen[0] if metingen else {}
+        waarde   = (meting.get("Meetwaarde") or {}).get("Waarde_Numeriek")
+        wind_ms  = round(waarde, 1) if waarde is not None else None
+        tijdstip = meting.get("Tijdstip")
+        if tijdstip:
+            try:
+                dt = datetime.fromisoformat(tijdstip)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if (now - dt).total_seconds() > 6 * 3600:
+                    continue
+            except Exception:
+                pass
+        if wind_ms is not None and not (0 <= wind_ms <= 60):
+            continue
+        features.append({"type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {
+                "code":     f"rws.wind.{loc_code.lower()}",
+                "rws_code": loc_code,
+                "naam":     naam,
+                "wind_ms":  wind_ms,
+                "tijdstip": tijdstip,
+                "bron":     "RWS",
+            },
+        })
+    return features
+
+
 def get_wind_data():
     """Haal actuele windsnelheid op van RWS offshore stations (gecached)."""
-    global _wind_cache, _wind_time
+    global _wind_cache, _wind_time, _wind_stations
 
     if _wind_cache and (time.time() - _wind_time) < CACHE_S:
         return _wind_cache
 
-    now      = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
     features = []
 
     try:
-        catalog = rws_post("/METADATASERVICES/OphalenCatalogus", {"CatalogusFilter": {
-            "Grootheden": True, "Eenheden": True,
-            "Compartimenten": True, "ProcesTypes": True, "Groeperingen": True,
-        }})
-        meta      = catalog.get("AquoMetadataLijst", [])
-        locs      = catalog.get("LocatieLijst", [])
-        meta_locs = catalog.get("AquoMetadataLocatieLijst", [])
+        # Catalogus maar één keer ophalen; daarna hergebruiken
+        if _wind_stations is None:
+            _wind_stations = _fetch_wind_stations()
+            print(f"[WIND] {len(_wind_stations)} stations gevonden in catalogus")
 
-        # Vind WINDSHD metadata IDs (m/s, lucht-compartiment)
-        wind_meta_ids = {m["AquoMetadata_MessageID"] for m in meta
-                         if m.get("Grootheid", {}).get("Code") == "WINDSHD"
-                         and m.get("Eenheid", {}).get("Code") == "m/s"}
-        wind_loc_ids  = {r["Locatie_MessageID"] for r in meta_locs
-                         if r.get("AquoMetaData_MessageID") in wind_meta_ids}
-
-        # Offshore Noord/Oostzee stations, geen binnenwateren
-        stations = [l for l in locs
-                    if l.get("Locatie_MessageID") in wind_loc_ids
-                    and l.get("Lat") and l.get("Lon")
-                    and 2.0 < l["Lon"] < 15.0 and 51.0 < l["Lat"] < 57.5
-                    and not any(kw in l.get("Code","").lower() or kw in l.get("Naam","").lower()
-                                for kw in WIND_INLAND)]
-
-        BATCH = 20
+        stations    = _wind_stations
         station_map = {s["Code"]: s for s in stations}
-        for i in range(0, len(stations), BATCH):
-            batch = stations[i:i + BATCH]
-            try:
-                resp = rws_post("/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen", {
-                    "AquoPlusWaarnemingMetadataLijst": [{"AquoMetadata": {
-                        "Compartiment": {"Code": "LT"},
-                        "Eenheid":      {"Code": "m/s"},
-                        "Grootheid":    {"Code": "WINDSHD"},
-                    }}],
-                    "LocatieLijst": [{"Code": s["Code"]} for s in batch],
-                })
-            except Exception:
-                continue
+        BATCH       = 20
+        batches     = [stations[i:i+BATCH] for i in range(0, len(stations), BATCH)]
 
-            best = {}
-            for w in resp.get("WaarnemingenLijst", []):
-                loc_code = (w.get("Locatie") or {}).get("Code")
-                if not loc_code:
-                    continue
-                metingen = w.get("MetingenLijst") or []
-                tijdstip = metingen[0].get("Tijdstip") if metingen else None
-                if loc_code not in best or (tijdstip or "") > (
-                    ((best[loc_code].get("MetingenLijst") or [{}])[0]).get("Tijdstip") or ""
-                ):
-                    best[loc_code] = w
+        # Alle batches parallel ophalen
+        with ThreadPoolExecutor(max_workers=len(batches)) as ex:
+            futs = [ex.submit(_fetch_wind_batch, b, station_map, now) for b in batches]
+            for fut in futs:
+                try:
+                    features.extend(fut.result())
+                except Exception as e:
+                    print(f"[WIND] Batch fout: {e}")
 
-            for loc_code, w in best.items():
-                station  = station_map.get(loc_code) or w.get("Locatie") or {}
-                lat = station.get("Lat") or (w.get("Locatie") or {}).get("Lat")
-                lon = station.get("Lon") or (w.get("Locatie") or {}).get("Lon")
-                if lat is None or lon is None:
-                    continue
-                naam     = (w.get("Locatie") or {}).get("Naam") or station.get("Naam") or loc_code
-                metingen = w.get("MetingenLijst") or []
-                meting   = metingen[0] if metingen else {}
-                waarde   = (meting.get("Meetwaarde") or {}).get("Waarde_Numeriek")
-                wind_ms  = round(waarde, 1) if waarde is not None else None
-                tijdstip = meting.get("Tijdstip")
-                if tijdstip:
-                    try:
-                        dt = datetime.fromisoformat(tijdstip)
-                        if dt.tzinfo is None:
-                            dt = dt.replace(tzinfo=timezone.utc)
-                        if (now - dt).total_seconds() > 6 * 3600:   # max 6u oud
-                            continue
-                    except Exception:
-                        pass
-                if wind_ms is not None and not (0 <= wind_ms <= 60):
-                    continue
-                features.append({"type": "Feature",
-                    "geometry": {"type": "Point", "coordinates": [lon, lat]},
-                    "properties": {
-                        "code":     f"rws.wind.{loc_code.lower()}",
-                        "rws_code": loc_code,
-                        "naam":     naam,
-                        "wind_ms":  wind_ms,
-                        "tijdstip": tijdstip,
-                        "bron":     "RWS",
-                    },
-                })
-
-        print(f"[WIND] {len(features)} stations")
+        print(f"[WIND] {len(features)} stations geladen")
     except Exception as e:
         print(f"[WIND] Fout: {e}")
 
