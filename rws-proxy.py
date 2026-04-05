@@ -13,8 +13,10 @@ Poort:    3001
 import json
 import time
 import os
+import threading
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
@@ -658,37 +660,52 @@ def get_rws_temp_history(code):
     return {"code": code, "naam": code, "data": data}
 
 
-def get_data():
-    global _cache, _cache_time, _stations
+_refresh_lock = threading.Lock()
 
-    if _cache and (time.time() - _cache_time) < CACHE_S:
-        return _cache
+def _do_refresh():
+    """Haal alle bronnen parallel op en sla op in cache."""
+    global _cache, _cache_time, _stations
 
     if _stations is None:
         _stations = fetch_hm0_stations()
 
-    waarnemingen  = fetch_latest_values(_stations)
-    rws_geojson   = build_geojson(_stations, waarnemingen)
+    # RWS, BSH en CEFAS parallel ophalen
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        fut_rws   = ex.submit(fetch_latest_values, _stations)
+        fut_bsh   = ex.submit(fetch_bsh_data)
+        fut_cefas = ex.submit(fetch_cefas_data)
 
-    # BSH (Duits) toevoegen
-    try:
-        bsh_features = fetch_bsh_data()
-        rws_geojson["features"].extend(bsh_features)
-    except Exception as e:
-        print(f"[BSH] Fout: {e}")
+        waarnemingen   = fut_rws.result()
+        rws_geojson    = build_geojson(_stations, waarnemingen)
 
-    # CEFAS (Brits) toevoegen
-    try:
-        cefas_features = fetch_cefas_data()
-        rws_geojson["features"].extend(cefas_features)
-    except Exception as e:
-        print(f"[CEFAS] Fout: {e}")
+        try:
+            rws_geojson["features"].extend(fut_bsh.result())
+        except Exception as e:
+            print(f"[BSH] Fout: {e}")
+
+        try:
+            rws_geojson["features"].extend(fut_cefas.result())
+        except Exception as e:
+            print(f"[CEFAS] Fout: {e}")
 
     rws_geojson["aantalStations"] = len(rws_geojson["features"])
     _cache      = rws_geojson
     _cache_time = time.time()
-
     print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS)")
+
+
+def get_data():
+    global _cache, _cache_time
+
+    if _cache and (time.time() - _cache_time) < CACHE_S:
+        return _cache
+
+    # Voorkom dat meerdere requests tegelijk verversen
+    with _refresh_lock:
+        if _cache and (time.time() - _cache_time) < CACHE_S:
+            return _cache
+        _do_refresh()
+
     return _cache
 
 
@@ -1046,6 +1063,27 @@ if __name__ == "__main__":
     print("[BSH] Geschiedenis pre-seeden vanuit GitHub…")
     _seed_bsh_history()
     print()
+
+    # Cache opwarmen vóór de server start (zodat eerste request meteen snel is)
+    print("[CACHE] Gegevens vooraf ophalen (kan ~20 sec duren)…")
+    try:
+        with _refresh_lock:
+            _do_refresh()
+        print("[CACHE] Klaar — proxy gereed voor requests.\n")
+    except Exception as e:
+        print(f"[CACHE] Fout bij vooraf laden: {e}\n")
+
+    # Achtergrond-refresh elke 9 minuten (vóór cache-expiry van 10 min)
+    def _background_loop():
+        while True:
+            time.sleep(9 * 60)
+            print("[CACHE] Achtergrond-refresh gestart…")
+            try:
+                with _refresh_lock:
+                    _do_refresh()
+            except Exception as e:
+                print(f"[CACHE] Achtergrond-refresh mislukt: {e}")
+    threading.Thread(target=_background_loop, daemon=True).start()
 
     server = HTTPServer(("", PORT), Handler)
     try:
