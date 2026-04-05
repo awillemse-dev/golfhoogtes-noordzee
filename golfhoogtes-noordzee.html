@@ -534,6 +534,15 @@ const LEGEND_CONTENT = {
     <div class="legend-row"><div class="legend-dot" style="background:#f97316"></div>14 – 18 °C</div>
     <div class="legend-row"><div class="legend-dot" style="background:#ef4444"></div>&gt; 18 °C</div>
     <div class="legend-sub">Bron: RWS · CEFAS</div>`,
+  wind: `
+    <h4>Windsnelheid (m/s)</h4>
+    <div class="legend-row"><div class="legend-dot" style="background:#22c55e"></div>&lt; 3,4 m/s &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 0–1</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#84cc16"></div>3,4 – 5,5 m/s &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 2–3</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#eab308"></div>5,5 – 8,0 m/s &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 4–5</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#f97316"></div>8,0 – 10,8 m/s &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 6–7</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ef4444"></div>10,8 – 13,9 m/s &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 8</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#7f1d1d"></div>&gt; 13,9 m/s &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 9+</span></div>
+    <div class="legend-sub">Bron: RWS</div>`,
 };
 
 let legendEl = null;
@@ -649,6 +658,145 @@ function renderTempMarkers(geojson) {
 function tempUrl()            { return `${PROXY_URL}/api/temp`; }
 function tempHistoryUrl(code) { return `${PROXY_URL}/api/temp-history?code=${encodeURIComponent(code)}`; }
 
+// ── Windsnelheid ──────────────────────────────────────────────────────────────
+
+function windColor(w) {
+  if (w === null || isNaN(w)) return '#3d5167';
+  if (w < 3.4)  return '#22c55e';   // Bft 0-1
+  if (w < 5.5)  return '#84cc16';   // Bft 2-3
+  if (w < 8.0)  return '#eab308';   // Bft 4-5
+  if (w < 10.8) return '#f97316';   // Bft 6-7
+  if (w < 13.9) return '#ef4444';   // Bft 8
+  return '#7f1d1d';                  // Bft 9+
+}
+
+function makeWindIcon(w) {
+  const color = windColor(w);
+  const label = w !== null ? w.toFixed(1) : '–';
+  const ww = 40, ht = 24;
+  return L.divIcon({
+    className:   '',
+    iconSize:    [ww, ht],
+    iconAnchor:  [ww / 2, ht / 2],
+    popupAnchor: [0, -(ht / 2 + 6)],
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${ww}" height="${ht}">
+      <rect x="1" y="1" width="${ww-2}" height="${ht-2}" rx="5"
+        fill="${color}" fill-opacity="0.88"/>
+      <rect x="1" y="1" width="${ww-2}" height="${ht-2}" rx="5"
+        fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>
+      <text x="${ww/2}" y="${ht/2+3.8}" text-anchor="middle"
+        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="10"
+        font-weight="700" fill="white">${label}</text>
+    </svg>`,
+  });
+}
+
+let windMarkers = [];
+
+function clearWindMarkers() {
+  windMarkers.forEach(m => map.removeLayer(m));
+  windMarkers = [];
+}
+
+function renderWindMarkers(geojson) {
+  clearMarkers(); clearTempMarkers(); clearWindMarkers();
+  (geojson.features || []).forEach(f => {
+    const [lon, lat] = f.geometry.coordinates;
+    const p = f.properties;
+    const w = p.wind_ms;
+    const marker = L.marker([lat, lon], { icon: makeWindIcon(w) });
+    marker.on('click', () => openWindChart(p.code, p.naam || p.code, w, p.tijdstip));
+    marker.addTo(map);
+    windMarkers.push(marker);
+  });
+  if (windMarkers.length > 0 && map.getZoom() < 5) {
+    map.fitBounds(L.featureGroup(windMarkers).getBounds().pad(0.1));
+  }
+}
+
+function windUrl()            { return `${PROXY_URL}/api/wind`; }
+function windHistoryUrl(code) { return `${PROXY_URL}/api/wind-history?code=${encodeURIComponent(code)}`; }
+
+async function fetchWindData() {
+  setStatus('loading', 'laden…');
+  try {
+    const resp = await fetch(windUrl(), { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const geojson = await resp.json();
+    renderWindMarkers(geojson);
+    const opgehaald = geojson.opgehaald
+      ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+      : new Date().toLocaleTimeString('nl-NL');
+    setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+  } catch (err) {
+    console.error(err);
+    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Data niet beschikbaar');
+  }
+}
+
+async function openWindChart(code, naam, huidigWind, tijdstip) {
+  panel.classList.add('open');
+  setTimeout(() => map.invalidateSize({ pan: false }), 320);
+
+  document.getElementById('chart-naam').textContent      = naam || code;
+  document.getElementById('chart-subtitle').textContent  = 'Windsnelheid afgelopen 24 uur';
+  document.getElementById('chart-hm0-label').textContent = 'm/s';
+  const color = windColor(huidigWind);
+  document.getElementById('chart-hm0').textContent  = huidigWind !== null ? huidigWind.toFixed(1) : '–';
+  document.getElementById('chart-hm0').style.color  = color;
+  document.getElementById('chart-time').textContent = formatTijdstip(tijdstip);
+
+  loadingEl.textContent   = 'Geschiedenis laden…';
+  loadingEl.style.display = 'flex';
+  canvasEl.style.display  = 'none';
+  if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+
+  try {
+    const resp = await fetch(windHistoryUrl(code), { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = await resp.json();
+    if (!json.data || json.data.length === 0) {
+      loadingEl.textContent = 'Geen historische data beschikbaar.';
+      return;
+    }
+    loadingEl.style.display = 'none';
+    canvasEl.style.display  = 'block';
+
+    const labels = json.data.map(d => new Date(d.t));
+    const values = json.data.map(d => d.v);
+    const maxVal = Math.max(...values);
+
+    const opts = CHART_OPTS(color);
+    opts.plugins.tooltip.callbacks = {
+      title: items => new Date(items[0].parsed.x).toLocaleString('nl-NL', {
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+        timeZone: 'Europe/Amsterdam',
+      }),
+      label: item => ` ${item.parsed.y.toFixed(1)} m/s`,
+    };
+    opts.scales.y.min             = 0;
+    opts.scales.y.suggestedMax    = Math.max(maxVal * 1.2, 5);
+    opts.scales.y.ticks.callback  = v => v.toFixed(1) + ' m/s';
+
+    chartInstance = new Chart(canvasEl, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data: values, borderColor: color,
+          backgroundColor: color + '18',
+          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4,
+          fill: true, tension: 0.35,
+        }],
+      },
+      options: opts,
+    });
+  } catch (err) {
+    console.error(err);
+    loadingEl.textContent = 'Fout bij laden: ' + err.message;
+  }
+}
+
 async function fetchTempData() {
   setStatus('loading', 'laden…');
   try {
@@ -686,7 +834,7 @@ function selectSection(section) {
     selectLayer(layer);
   } else {
     nav.style.display = 'none';
-    clearMarkers(); clearTempMarkers();
+    clearMarkers(); clearTempMarkers(); clearWindMarkers();
     document.getElementById('map').style.display        = 'none';
     document.getElementById('coming-soon').style.display = 'flex';
     document.getElementById('coming-soon-label').textContent = 'Verwachtingen';
@@ -716,10 +864,14 @@ function selectLayer(layer) {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
     fetchTempData().then(startCountdown);
+  } else if (layer === 'wind') {
+    mapEl.style.display      = '';
+    comingSoon.style.display = 'none';
+    fetchWindData().then(startCountdown);
   } else {
     mapEl.style.display      = 'none';
     comingSoon.style.display = 'flex';
-    document.getElementById('coming-soon-label').textContent = { wind: 'Windsnelheid' }[layer] || layer;
+    document.getElementById('coming-soon-label').textContent = layer;
     setStatus('', '–');
     document.getElementById('status').className = '';
     document.getElementById('countdown').textContent = '';

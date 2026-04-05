@@ -978,6 +978,161 @@ def get_temp_data():
     return _temp_cache
 
 
+# ── Windsnelheid (RWS) ────────────────────────────────────────────────────────
+
+_wind_cache = None
+_wind_time  = 0
+
+WIND_INLAND = [
+    "ijsselmeer", "markermeer", "markerwaard", "markerwadden", "slotermeer",
+    "woudsend", "waddenzee", "grevelingen", "veerse", "volkerak", "haringvliet",
+    "hollands diep", "lek", "waal", "rijn", "maas", "ijssel", "zwarte meer",
+    "randmeer", "veluwemeer", "eemmeer", "gooimeer", "almere", "strand",
+    "zwembad", "badstrand", "recreatie", "bosbaan",
+]
+
+def get_wind_data():
+    """Haal actuele windsnelheid op van RWS offshore stations (gecached)."""
+    global _wind_cache, _wind_time
+
+    if _wind_cache and (time.time() - _wind_time) < CACHE_S:
+        return _wind_cache
+
+    now      = datetime.now(timezone.utc)
+    features = []
+
+    try:
+        catalog = rws_post("/METADATASERVICES/OphalenCatalogus", {"CatalogusFilter": {
+            "Grootheden": True, "Eenheden": True,
+            "Compartimenten": True, "ProcesTypes": True, "Groeperingen": True,
+        }})
+        meta      = catalog.get("AquoMetadataLijst", [])
+        locs      = catalog.get("LocatieLijst", [])
+        meta_locs = catalog.get("AquoMetadataLocatieLijst", [])
+
+        # Vind WINDSHD metadata IDs (m/s, lucht-compartiment)
+        wind_meta_ids = {m["AquoMetadata_MessageID"] for m in meta
+                         if m.get("Grootheid", {}).get("Code") == "WINDSHD"
+                         and m.get("Eenheid", {}).get("Code") == "m/s"}
+        wind_loc_ids  = {r["Locatie_MessageID"] for r in meta_locs
+                         if r.get("AquoMetaData_MessageID") in wind_meta_ids}
+
+        # Offshore Noord/Oostzee stations, geen binnenwateren
+        stations = [l for l in locs
+                    if l.get("Locatie_MessageID") in wind_loc_ids
+                    and l.get("Lat") and l.get("Lon")
+                    and 2.0 < l["Lon"] < 15.0 and 51.0 < l["Lat"] < 57.5
+                    and not any(kw in l.get("Code","").lower() or kw in l.get("Naam","").lower()
+                                for kw in WIND_INLAND)]
+
+        BATCH = 20
+        station_map = {s["Code"]: s for s in stations}
+        for i in range(0, len(stations), BATCH):
+            batch = stations[i:i + BATCH]
+            try:
+                resp = rws_post("/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen", {
+                    "AquoPlusWaarnemingMetadataLijst": [{"AquoMetadata": {
+                        "Compartiment": {"Code": "LT"},
+                        "Eenheid":      {"Code": "m/s"},
+                        "Grootheid":    {"Code": "WINDSHD"},
+                    }}],
+                    "LocatieLijst": [{"Code": s["Code"]} for s in batch],
+                })
+            except Exception:
+                continue
+
+            best = {}
+            for w in resp.get("WaarnemingenLijst", []):
+                loc_code = (w.get("Locatie") or {}).get("Code")
+                if not loc_code:
+                    continue
+                metingen = w.get("MetingenLijst") or []
+                tijdstip = metingen[0].get("Tijdstip") if metingen else None
+                if loc_code not in best or (tijdstip or "") > (
+                    ((best[loc_code].get("MetingenLijst") or [{}])[0]).get("Tijdstip") or ""
+                ):
+                    best[loc_code] = w
+
+            for loc_code, w in best.items():
+                station  = station_map.get(loc_code) or w.get("Locatie") or {}
+                lat = station.get("Lat") or (w.get("Locatie") or {}).get("Lat")
+                lon = station.get("Lon") or (w.get("Locatie") or {}).get("Lon")
+                if lat is None or lon is None:
+                    continue
+                naam     = (w.get("Locatie") or {}).get("Naam") or station.get("Naam") or loc_code
+                metingen = w.get("MetingenLijst") or []
+                meting   = metingen[0] if metingen else {}
+                waarde   = (meting.get("Meetwaarde") or {}).get("Waarde_Numeriek")
+                wind_ms  = round(waarde, 1) if waarde is not None else None
+                tijdstip = meting.get("Tijdstip")
+                if tijdstip:
+                    try:
+                        dt = datetime.fromisoformat(tijdstip)
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        if (now - dt).total_seconds() > 6 * 3600:   # max 6u oud
+                            continue
+                    except Exception:
+                        pass
+                if wind_ms is not None and not (0 <= wind_ms <= 60):
+                    continue
+                features.append({"type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                    "properties": {
+                        "code":     f"rws.wind.{loc_code.lower()}",
+                        "rws_code": loc_code,
+                        "naam":     naam,
+                        "wind_ms":  wind_ms,
+                        "tijdstip": tijdstip,
+                        "bron":     "RWS",
+                    },
+                })
+
+        print(f"[WIND] {len(features)} stations")
+    except Exception as e:
+        print(f"[WIND] Fout: {e}")
+
+    _wind_cache = {"type": "FeatureCollection", "features": features,
+                   "opgehaald": now.isoformat(), "aantalStations": len(features)}
+    _wind_time  = time.time()
+    return _wind_cache
+
+
+def fetch_wind_history(rws_code, naam):
+    """Haal 24u windsnelheid op van RWS via OphalenWaarnemingen."""
+    now   = datetime.now(timezone.utc)
+    start = now - timedelta(hours=24)
+    fmt   = "%Y-%m-%dT%H:%M:%S.000+00:00"
+    resp  = rws_post(
+        "/ONLINEWAARNEMINGENSERVICES/OphalenWaarnemingen",
+        {
+            "AquoPlusWaarnemingMetadata": {"AquoMetadata": {
+                "Compartiment": {"Code": "LT"},
+                "Eenheid":      {"Code": "m/s"},
+                "Grootheid":    {"Code": "WINDSHD"},
+            }},
+            "Locatie": {"Code": rws_code},
+            "Periode": {
+                "Begindatumtijd": start.strftime(fmt),
+                "Einddatumtijd":  now.strftime(fmt),
+            },
+        }
+    )
+    waarnemingen = resp.get("WaarnemingenLijst") or []
+    if not waarnemingen:
+        return {"code": f"rws.wind.{rws_code.lower()}", "naam": naam, "data": []}
+
+    best = max(waarnemingen, key=lambda w: len(w.get("MetingenLijst") or []))
+    data = []
+    for m in (best.get("MetingenLijst") or []):
+        waarde   = (m.get("Meetwaarde") or {}).get("Waarde_Numeriek")
+        tijdstip = m.get("Tijdstip")
+        if waarde is not None and tijdstip:
+            data.append({"t": tijdstip, "v": round(waarde, 1)})
+    data.sort(key=lambda x: x["t"])
+    return {"code": f"rws.wind.{rws_code.lower()}", "naam": naam, "data": data}
+
+
 # ── HTTP-handler ─────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
@@ -1035,6 +1190,68 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps({"error": str(exc)}).encode("utf-8")
                 self.send_response(500)
                 self.send_header("Content-Type",   "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+
+        # ── /api/wind ────────────────────────────────────────────────────
+        elif path == "/api/wind":
+            try:
+                data = get_wind_data()
+                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type",   "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                body = json.dumps({"error": str(exc)}).encode("utf-8")
+                self.send_response(500)
+                self.send_header("Content-Type",   "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+
+        # ── /api/wind-history?code=... ───────────────────────────────────
+        elif path == "/api/wind-history":
+            params = parse_qs(urlparse(self.path).query)
+            code   = (params.get("code") or [None])[0]
+            if not code:
+                body = json.dumps({"error": "code parameter verplicht"}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            try:
+                # code = "rws.wind.{loc_code}" → strip prefix
+                rws_code = code[9:].upper() if code.startswith("rws.wind.") else code.upper()
+                # naam opzoeken in cache
+                naam = rws_code
+                cached = get_wind_data()
+                for feat in cached.get("features", []):
+                    if feat["properties"].get("code") == code:
+                        naam     = feat["properties"].get("naam", naam)
+                        rws_code = feat["properties"].get("rws_code", rws_code)
+                        break
+                data = fetch_wind_history(rws_code, naam)
+                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type",   "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                print(f"[FOUT wind-history] {exc}")
+                body = json.dumps({"error": str(exc)}).encode()
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.send_cors()
                 self.end_headers()
@@ -1184,29 +1401,29 @@ if __name__ == "__main__":
         with _refresh_lock:
             _do_refresh()
 
-    # Waves + temp parallel pre-warmen vóór de server start
-    print("[CACHE] Gegevens vooraf ophalen (waves + temp parallel)…")
+    # Waves + temp + wind parallel pre-warmen vóór de server start
+    print("[CACHE] Gegevens vooraf ophalen (waves + temp + wind parallel)…")
     try:
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            fw = ex.submit(_refresh_waves)
-            ft = ex.submit(get_temp_data)
-            fw.result()
-            ft.result()
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            fw   = ex.submit(_refresh_waves)
+            ft   = ex.submit(get_temp_data)
+            fwnd = ex.submit(get_wind_data)
+            fw.result(); ft.result(); fwnd.result()
         print("[CACHE] Klaar — proxy gereed voor requests.\n")
     except Exception as e:
         print(f"[CACHE] Fout bij vooraf laden: {e}\n")
 
-    # Achtergrond-refresh elke 9 minuten (waves + temp tegelijk)
+    # Achtergrond-refresh elke 9 minuten (alle caches tegelijk)
     def _background_loop():
         while True:
             time.sleep(9 * 60)
             print("[CACHE] Achtergrond-refresh gestart…")
             try:
-                with ThreadPoolExecutor(max_workers=2) as ex:
-                    fw = ex.submit(_refresh_waves)
-                    ft = ex.submit(get_temp_data)
-                    fw.result()
-                    ft.result()
+                with ThreadPoolExecutor(max_workers=3) as ex:
+                    fw   = ex.submit(_refresh_waves)
+                    ft   = ex.submit(get_temp_data)
+                    fwnd = ex.submit(get_wind_data)
+                    fw.result(); ft.result(); fwnd.result()
             except Exception as e:
                 print(f"[CACHE] Achtergrond-refresh mislukt: {e}")
     threading.Thread(target=_background_loop, daemon=True).start()
