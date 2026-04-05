@@ -1064,23 +1064,33 @@ if __name__ == "__main__":
     _seed_bsh_history()
     print()
 
-    # Cache opwarmen vóór de server start (zodat eerste request meteen snel is)
-    print("[CACHE] Gegevens vooraf ophalen (kan ~20 sec duren)…")
-    try:
+    def _refresh_waves():
         with _refresh_lock:
             _do_refresh()
+
+    # Waves + temp parallel pre-warmen vóór de server start
+    print("[CACHE] Gegevens vooraf ophalen (waves + temp parallel)…")
+    try:
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            fw = ex.submit(_refresh_waves)
+            ft = ex.submit(get_temp_data)
+            fw.result()
+            ft.result()
         print("[CACHE] Klaar — proxy gereed voor requests.\n")
     except Exception as e:
         print(f"[CACHE] Fout bij vooraf laden: {e}\n")
 
-    # Achtergrond-refresh elke 9 minuten (vóór cache-expiry van 10 min)
+    # Achtergrond-refresh elke 9 minuten (waves + temp tegelijk)
     def _background_loop():
         while True:
             time.sleep(9 * 60)
             print("[CACHE] Achtergrond-refresh gestart…")
             try:
-                with _refresh_lock:
-                    _do_refresh()
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    fw = ex.submit(_refresh_waves)
+                    ft = ex.submit(get_temp_data)
+                    fw.result()
+                    ft.result()
             except Exception as e:
                 print(f"[CACHE] Achtergrond-refresh mislukt: {e}")
     threading.Thread(target=_background_loop, daemon=True).start()
