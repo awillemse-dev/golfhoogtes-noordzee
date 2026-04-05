@@ -560,6 +560,60 @@ def fetch_cefas_temp(cefas_data, now):
     return features
 
 
+# ── La Bouée: Golf van Biskaje boeien ────────────────────────────────────────
+
+LABOUEE_STATIONS = {
+    "bilbao-vizcaya-buoy": ("Bilbao-Vizcaya",    43.640, -3.040),
+    "anglet":              ("Anglet",             43.532, -1.615),
+    "saint-jean-de-luz":   ("Saint-Jean-de-Luz",  43.408, -1.682),
+    "cap-ferret":          ("Cap Ferret",         44.653, -1.447),
+    "noirmoutier":         ("Noirmoutier",        46.917, -2.466),
+    "belle-ile":           ("Belle-Île",          47.285, -3.285),
+    "les-pierres-noires":  ("Les Pierres Noires", 48.290, -4.968),
+}
+LABOUEE_BASE = "https://labouee.app/data/buoys"
+
+def fetch_labouee():
+    now      = datetime.now(timezone.utc)
+    features = []
+    for slug, (naam, lat, lon) in LABOUEE_STATIONS.items():
+        code = f"labouee.{slug}"
+        try:
+            url = f"{LABOUEE_BASE}/{slug}/latest.json"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            if data.get("status") != "ok":
+                continue
+            reading    = data.get("latest_reading", {})
+            hm0        = reading.get("wave_height_m")
+            tijdstip_s = reading.get("measured_at", "")
+            try:
+                ts_dt = datetime.fromisoformat(tijdstip_s.replace("Z", "+00:00"))
+                if (now - ts_dt).total_seconds() > 48 * 3600:
+                    continue
+                tijdstip = ts_dt.isoformat()
+            except Exception:
+                tijdstip = tijdstip_s or None
+            if hm0 is not None:
+                hm0 = round(float(hm0), 2)
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {
+                    "code": code, "naam": naam,
+                    "hm0_m": hm0, "tijdstip": tijdstip,
+                    "status": None, "kwaliteit": None, "bron": "LaBouee",
+                },
+            })
+            # Sla op in history-bestand (ring buffer via append_to_history)
+            append_to_history(code, naam, tijdstip, hm0)
+        except Exception as e:
+            print(f"[LaBouée] {slug}: {e}")
+    print(f"[LaBouée] {len(features)} stations")
+    return features
+
+
 def fetch_cefas_history(station_id, source, code, naam):
     """Haal 24-uursgeschiedenis (Hm0 + TEMP) op van CEFAS Detail/Results API."""
     now   = datetime.now(timezone.utc)
@@ -644,6 +698,10 @@ def main():
         wave_features.extend(fetch_cefas(cefas_raw, now))
     except Exception as e:
         print(f"[CEFAS golf] Fout: {e}")
+    try:
+        wave_features.extend(fetch_labouee())
+    except Exception as e:
+        print(f"[LaBouée] Fout: {e}")
 
     waves_geojson = {
         "type": "FeatureCollection", "features": wave_features,

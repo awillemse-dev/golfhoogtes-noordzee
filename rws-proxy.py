@@ -393,6 +393,111 @@ def fetch_cefas_data():
     return features
 
 
+# ── La Bouée: Golf van Biskaje boeien ────────────────────────────────────────
+#
+# Bron: La Bouée (labouee.app) – aggregator van Puertos del Estado (ES) en CANDHIS (FR)
+# Formaat: JSON per boei, https://labouee.app/data/buoys/{slug}/latest.json
+# Licentie: CC BY 4.0
+
+LABOUEE_STATIONS = {
+    # slug: (naam, lat, lon)
+    "bilbao-vizcaya-buoy": ("Bilbao-Vizcaya",    43.640, -3.040),
+    "anglet":              ("Anglet",             43.532, -1.615),
+    "saint-jean-de-luz":   ("Saint-Jean-de-Luz",  43.408, -1.682),
+    "cap-ferret":          ("Cap Ferret",         44.653, -1.447),
+    "noirmoutier":         ("Noirmoutier",        46.917, -2.466),
+    "belle-ile":           ("Belle-Île",          47.285, -3.285),
+    "les-pierres-noires":  ("Les Pierres Noires", 48.290, -4.968),
+}
+
+LABOUEE_BASE = "https://labouee.app/data/buoys"
+
+def fetch_labouee_data():
+    now      = datetime.now(timezone.utc)
+    features = []
+    for slug, (naam, lat, lon) in LABOUEE_STATIONS.items():
+        code = f"labouee.{slug}"
+        try:
+            url = f"{LABOUEE_BASE}/{slug}/latest.json"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            if data.get("status") != "ok":
+                continue
+            reading  = data.get("latest_reading", {})
+            hm0      = reading.get("wave_height_m")
+            tijdstip_s = reading.get("measured_at", "")
+            try:
+                ts_dt = datetime.fromisoformat(tijdstip_s.replace("Z", "+00:00"))
+                if (now - ts_dt).total_seconds() > 48 * 3600:
+                    continue
+                tijdstip = ts_dt.isoformat()
+            except Exception:
+                tijdstip = tijdstip_s or None
+            if hm0 is not None:
+                hm0 = round(float(hm0), 2)
+            _record_labouee_history(slug, tijdstip, hm0)
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {
+                    "code":     code,
+                    "naam":     naam,
+                    "hm0_m":    hm0,
+                    "tijdstip": tijdstip,
+                    "status":   None,
+                    "kwaliteit":None,
+                    "bron":     "LaBouee",
+                },
+            })
+        except Exception as e:
+            print(f"[LaBouée] {slug}: {e}")
+    print(f"[LaBouée] {len(features)} stations geladen")
+    return features
+
+
+# ── La Bouée geschiedenis: in-memory ring buffer ──────────────────────────────
+
+_labouee_history = {}  # slug → {tijdstip_iso: hm0_m}
+
+def _record_labouee_history(slug, tijdstip_iso, hm0_m):
+    if slug not in _labouee_history:
+        _labouee_history[slug] = {}
+    if tijdstip_iso:
+        _labouee_history[slug][tijdstip_iso] = hm0_m
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    _labouee_history[slug] = {
+        ts: v for ts, v in _labouee_history[slug].items() if ts >= cutoff
+    }
+
+def get_labouee_history(slug):
+    naam   = LABOUEE_STATIONS.get(slug, (slug,))[0]
+    buf    = _labouee_history.get(slug, {})
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    data   = [{"t": ts, "v": v} for ts, v in buf.items() if ts >= cutoff and v is not None]
+    data.sort(key=lambda x: x["t"])
+    return {"code": f"labouee.{slug}", "naam": naam, "data": data}
+
+def _seed_labouee_history():
+    """Laad La Bouée-geschiedenis uit GitHub-bestanden bij opstarten."""
+    for slug in LABOUEE_STATIONS:
+        safe  = slug.replace("-", "_")
+        url   = f"{GITHUB_RAW}/data/history/labouee-{safe}.json"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                payload = json.loads(r.read().decode("utf-8"))
+            count = 0
+            for pt in payload.get("data", []):
+                ts = pt.get("t"); v = pt.get("v")
+                if ts and v is not None:
+                    _record_labouee_history(slug, ts, v)
+                    count += 1
+            print(f"[LaBouée] {slug}: {count} historische punten geladen")
+        except Exception as e:
+            print(f"[LaBouée] {slug}: geen GitHub-history ({e})")
+
+
 # ── BSH geschiedenis: in-memory ring buffer ───────────────────────────────────
 #
 # BSH publiceert alleen de meest recente snapshot. We bouwen 24-uursgeschiedenis
@@ -669,14 +774,15 @@ def _do_refresh():
     if _stations is None:
         _stations = fetch_hm0_stations()
 
-    # RWS, BSH en CEFAS parallel ophalen
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        fut_rws   = ex.submit(fetch_latest_values, _stations)
-        fut_bsh   = ex.submit(fetch_bsh_data)
-        fut_cefas = ex.submit(fetch_cefas_data)
+    # RWS, BSH, CEFAS en La Bouée parallel ophalen
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        fut_rws     = ex.submit(fetch_latest_values, _stations)
+        fut_bsh     = ex.submit(fetch_bsh_data)
+        fut_cefas   = ex.submit(fetch_cefas_data)
+        fut_labouee = ex.submit(fetch_labouee_data)
 
-        waarnemingen   = fut_rws.result()
-        rws_geojson    = build_geojson(_stations, waarnemingen)
+        waarnemingen = fut_rws.result()
+        rws_geojson  = build_geojson(_stations, waarnemingen)
 
         try:
             rws_geojson["features"].extend(fut_bsh.result())
@@ -688,10 +794,15 @@ def _do_refresh():
         except Exception as e:
             print(f"[CEFAS] Fout: {e}")
 
+        try:
+            rws_geojson["features"].extend(fut_labouee.result())
+        except Exception as e:
+            print(f"[LaBouée] Fout: {e}")
+
     rws_geojson["aantalStations"] = len(rws_geojson["features"])
     _cache      = rws_geojson
     _cache_time = time.time()
-    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS)")
+    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée)")
 
 
 def get_data():
@@ -957,6 +1068,9 @@ class Handler(BaseHTTPRequestHandler):
                 elif code.startswith("bsh."):
                     ort  = code[4:].upper()
                     data = get_bsh_history(ort)
+                elif code.startswith("labouee."):
+                    slug = code[8:]
+                    data = get_labouee_history(slug)
                 else:
                     data = fetch_history(code)
                 body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -1062,6 +1176,8 @@ if __name__ == "__main__":
     print()
     print("[BSH] Geschiedenis pre-seeden vanuit GitHub…")
     _seed_bsh_history()
+    print("[LaBouée] Geschiedenis pre-seeden vanuit GitHub…")
+    _seed_labouee_history()
     print()
 
     def _refresh_waves():
