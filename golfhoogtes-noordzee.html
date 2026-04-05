@@ -552,15 +552,15 @@
         <label for="nl-param-select">Parameter</label>
         <select id="nl-param-select" onchange="onNlParamChange()">
           <option value="ta">🌡 Temperatuur (°C)</option>
+          <option value="feeltemperature">🥶 Gevoelstemperatuur (°C)</option>
           <option value="ff">💨 Windsnelheid (m/s)</option>
+          <option value="windgusts">💨 Windstoten (m/s)</option>
           <option value="dd">🧭 Windrichting</option>
           <option value="rh">💧 Luchtvochtigheid (%)</option>
           <option value="pp">⬆ Luchtdruk (hPa)</option>
           <option value="qg">☀ Zonnestraling (W/m²)</option>
           <option value="R1H">🌧 Neerslag afg. uur (mm)</option>
           <option value="vv">👁 Zicht (km)</option>
-          <option value="td">🌫 Dauwpunt (°C)</option>
-          <option value="n">☁ Bewolking (okta)</option>
         </select>
         <span id="nl-info">Klik op een station voor alle meetwaarden</span>
       </div>
@@ -1275,16 +1275,16 @@ let knmiData  = null;
 let nlParam   = 'ta';
 
 const NL_PARAMS = {
-  ta:  { label: 'Temperatuur',      eenheid: '°C',    fmt: v => v !== null ? v.toFixed(1) + ' °C'  : '–' },
-  ff:  { label: 'Windsnelheid',     eenheid: 'm/s',   fmt: v => v !== null ? v.toFixed(1) + ' m/s' : '–' },
-  dd:  { label: 'Windrichting',     eenheid: '',      fmt: v => v !== null ? v + '° ' + ddLabel(v) : '–' },
-  rh:  { label: 'Luchtvochtigheid', eenheid: '%',     fmt: v => v !== null ? v.toFixed(0) + ' %'   : '–' },
-  pp:  { label: 'Luchtdruk',        eenheid: 'hPa',   fmt: v => v !== null ? v.toFixed(1) + ' hPa' : '–' },
-  qg:  { label: 'Zonnestraling',    eenheid: 'W/m²',  fmt: v => v !== null ? v.toFixed(0) + ' W/m²': '–' },
-  R1H: { label: 'Neerslag (1u)',    eenheid: 'mm',    fmt: v => v !== null ? v.toFixed(1) + ' mm'  : '–' },
-  vv:  { label: 'Zicht',            eenheid: 'km',    fmt: v => v !== null ? v.toFixed(1) + ' km'  : '–' },
-  td:  { label: 'Dauwpunt',         eenheid: '°C',    fmt: v => v !== null ? v.toFixed(1) + ' °C'  : '–' },
-  n:   { label: 'Bewolking',        eenheid: 'okta',  fmt: v => v !== null ? v + '/8'              : '–' },
+  ta:              { label: 'Temperatuur',         eenheid: '°C',   fmt: v => v !== null ? v.toFixed(1) + ' °C'  : '–' },
+  feeltemperature: { label: 'Gevoelstemperatuur',  eenheid: '°C',   fmt: v => v !== null ? v.toFixed(1) + ' °C'  : '–' },
+  ff:              { label: 'Windsnelheid',         eenheid: 'm/s',  fmt: v => v !== null ? v.toFixed(1) + ' m/s' : '–' },
+  windgusts:       { label: 'Windstoten',           eenheid: 'm/s',  fmt: v => v !== null ? v.toFixed(1) + ' m/s' : '–' },
+  dd:              { label: 'Windrichting',          eenheid: '',     fmt: v => v !== null ? v + '° ' + ddLabel(v) : '–' },
+  rh:              { label: 'Luchtvochtigheid',     eenheid: '%',    fmt: v => v !== null ? v.toFixed(0) + ' %'   : '–' },
+  pp:              { label: 'Luchtdruk',            eenheid: 'hPa',  fmt: v => v !== null ? v.toFixed(1) + ' hPa' : '–' },
+  qg:              { label: 'Zonnestraling',        eenheid: 'W/m²', fmt: v => v !== null ? v.toFixed(0) + ' W/m²': '–' },
+  R1H:             { label: 'Neerslag (1u)',        eenheid: 'mm',   fmt: v => v !== null ? v.toFixed(1) + ' mm'  : '–' },
+  vv:              { label: 'Zicht',                eenheid: 'km',   fmt: v => v !== null ? v.toFixed(1) + ' km'  : '–' },
 };
 
 const DD_LABELS = ['N','NNO','NO','ONO','O','OZO','ZO','ZZO','Z','ZZW','ZW','WZW','W','WNW','NW','NNW'];
@@ -1293,7 +1293,7 @@ function ddLabel(d) { return DD_LABELS[Math.round(d / 22.5) % 16]; }
 function nlColor(param, val) {
   if (val === null || val === undefined || (typeof val === 'number' && isNaN(val))) return '#3d5167';
   switch (param) {
-    case 'ta': case 'td':
+    case 'ta': case 'feeltemperature':
       if (val < -5)  return '#1d4ed8';
       if (val < 0)   return '#60a5fa';
       if (val < 5)   return '#93c5fd';
@@ -1302,7 +1302,7 @@ function nlColor(param, val) {
       if (val < 20)  return '#eab308';
       if (val < 25)  return '#f97316';
       return '#ef4444';
-    case 'ff':
+    case 'ff': case 'windgusts':
       if (val < 3.4)  return '#22c55e';
       if (val < 5.5)  return '#84cc16';
       if (val < 8.0)  return '#eab308';
@@ -1356,13 +1356,12 @@ function makeNlIcon(param, val) {
   let label;
   if (val === null || val === undefined) {
     label = '–';
-  } else if (param === 'dd')  { label = ddLabel(val); }
-  else if (param === 'n')     { label = val + '/8'; }
-  else if (param === 'pp')    { label = Math.round(val); }
-  else if (param === 'qg')    { label = Math.round(val); }
-  else if (param === 'R1H')   { label = val.toFixed(1); }
-  else if (param === 'vv')    { label = val.toFixed(1); }
-  else                        { label = val.toFixed(1); }
+  } else if (param === 'dd')             { label = ddLabel(val); }
+  else if (param === 'pp')               { label = Math.round(val); }
+  else if (param === 'qg')               { label = Math.round(val); }
+  else if (param === 'R1H')              { label = val.toFixed(1); }
+  else if (param === 'vv')               { label = val.toFixed(1); }
+  else                                   { label = val.toFixed(1); }
 
   const w  = param === 'pp' ? 54 : 42;
   const ht = 22;
@@ -1406,10 +1405,13 @@ function renderNlMarkers() {
          <span class="nl-popup-val">${meta.fmt(p[k])}</span>
        </div>`
     ).join('');
+    const weather = p.weatherdescription
+      ? `<div class="popup-meta" style="margin:4px 0 2px">${p.weatherdescription}</div>` : '';
     marker.bindPopup(
       `<div class="popup-naam">${p.naam}</div>
+       ${weather}
        <div class="nl-popup-grid">${rows}</div>
-       <div class="popup-tijd">${formatTijdstip(p.tijdstip)}</div>`,
+       <div class="popup-tijd">${formatTijdstip(p.tijdstip)} · Bron: Buienradar/KNMI</div>`,
       { maxWidth: 320 }
     );
     marker.addTo(nlMap);

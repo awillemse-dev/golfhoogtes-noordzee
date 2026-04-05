@@ -1,2 +1,1 @@
-netCDF4
-numpy
+# Geen externe packages nodig — alleen Python standaardbibliotheek

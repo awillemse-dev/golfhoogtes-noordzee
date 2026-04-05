@@ -14,7 +14,6 @@ import json
 import time
 import os
 import threading
-import tempfile
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -22,54 +21,12 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
 
-try:
-    import netCDF4 as nc
-    import numpy as np
-    HAS_NETCDF4 = True
-except ImportError:
-    HAS_NETCDF4 = False
-    print("[KNMI] netCDF4 niet beschikbaar — KNMI endpoint uitgeschakeld")
-
 PORT      = int(os.environ.get("PORT", 3001))
 RWS_BASE  = "https://ddapi20-waterwebservices.rijkswaterstaat.nl"
 CEFAS_URL = "https://wavenet-api.cefas.co.uk/api/Map/Current"
 CACHE_S   = 10 * 60   # 10 minuten cache
 
-KNMI_API_KEY     = "eyJvcmciOiI1ZTU1NGUxOTI3NGE5NjAwMDEyYTNlYjEiLCJpZCI6ImVlNDFjMWI0MjlkODQ2MThiNWI4ZDViZDAyMTM2YTM3IiwiaCI6Im11cm11cjEyOCJ9"
-KNMI_DATASET_URL = "https://api.dataplatform.knmi.nl/open-data/v1/datasets/Actuele10mindataKNMIstations/versions/2"
-
-# De 37 stations die op knmi.nl/nederland-nu/weer/waarnemingen staan
-KNMI_STATION_IDS = {
-    "06215","06225","06229","06235","06240","06242","06249","06251",
-    "06257","06258","06260","06267","06269","06270","06273","06275",
-    "06277","06278","06279","06280","06283","06286","06290","06310",
-    "06319","06323","06330","06340","06344","06348","06350","06356",
-    "06370","06375","06377","06380","06392",
-}
-
-KNMI_NAMEN = {
-    "06215": "Voorschoten",    "06225": "IJmuiden",
-    "06229": "Texelhors",      "06235": "Den Helder",
-    "06240": "Schiphol",       "06242": "Vlieland",
-    "06249": "Berkhout",       "06251": "Terschelling",
-    "06257": "Wijk aan Zee",   "06258": "Houtribdijk",
-    "06260": "De Bilt",        "06267": "Stavoren",
-    "06269": "Lelystad",       "06270": "Leeuwarden",
-    "06273": "Marknesse",      "06275": "Deelen",
-    "06277": "Lauwersoog",     "06278": "Heino",
-    "06279": "Hoogeveen",      "06280": "Eelde",
-    "06283": "Hupsel",         "06286": "Nieuw Beerta",
-    "06290": "Twenthe",        "06310": "Vlissingen",
-    "06319": "Westdorpe",      "06323": "Wilhelminadorp",
-    "06330": "Hoek van Holland","06340": "Woensdrecht",
-    "06344": "Rotterdam",      "06348": "Cabauw",
-    "06350": "Gilze Rijen",    "06356": "Herwijnen",
-    "06370": "Eindhoven",      "06375": "Volkel",
-    "06377": "Ell",            "06380": "Maastricht",
-    "06392": "Horst",
-}
-
-KNMI_PARAMS = ["ta","ff","dd","rh","pp","qg","R1H","vv","td","n"]
+BUIENRADAR_URL = "https://data.buienradar.nl/2.0/feed/json"
 
 # ── Hulpfunctie: POST naar RWS API ──────────────────────────────────────────
 
@@ -1200,111 +1157,82 @@ def fetch_wind_history(rws_code, naam):
     return {"code": f"rws.wind.{rws_code.lower()}", "naam": naam, "data": data}
 
 
-# ── KNMI 10-minuten observaties ──────────────────────────────────────────────
+# ── Nederland actuele waarnemingen (Buienradar/KNMI) ─────────────────────────
 
 _knmi_cache = None
 _knmi_time  = 0
 
 def fetch_knmi_data():
-    if not HAS_NETCDF4:
-        raise RuntimeError("netCDF4 niet geïnstalleerd")
-
-    # 1. Nieuwste bestandsnaam ophalen
+    """Haalt actuele waarnemingen op van Buienradar (elke 10 min, geen API key)."""
     req = urllib.request.Request(
-        f"{KNMI_DATASET_URL}/files?maxKeys=1&sorting=desc",
-        headers={"Authorization": KNMI_API_KEY, "User-Agent": "KNMI-Proxy/1.0"},
+        BUIENRADAR_URL,
+        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=15) as r:
-        files_data = json.loads(r.read().decode())
+        data = json.loads(r.read().decode("utf-8"))
 
-    files = files_data.get("files", [])
-    if not files:
-        raise RuntimeError("Geen KNMI-bestanden beschikbaar")
+    stations = data.get("actual", {}).get("stationmeasurements", [])
+    now = datetime.now(timezone.utc)
 
-    filename   = files[0]["filename"]
-    bestandstijd = files[0].get("lastModified", "")
+    features = []
+    for s in stations:
+        lat = s.get("lat")
+        lon = s.get("lon")
+        if lat is None or lon is None:
+            continue
+        if lat < 50.5 or lat > 55.5 or lon < 2.5 or lon > 8.0:
+            continue
 
-    # 2. Tijdelijke download-URL ophalen
-    req2 = urllib.request.Request(
-        f"{KNMI_DATASET_URL}/files/{filename}/url",
-        headers={"Authorization": KNMI_API_KEY, "User-Agent": "KNMI-Proxy/1.0"},
-    )
-    with urllib.request.urlopen(req2, timeout=15) as r:
-        url_data = json.loads(r.read().decode())
+        naam = s.get("stationname", "").replace("Meetstation ", "")
+        ts   = s.get("timestamp", now.isoformat())
 
-    download_url = url_data["temporaryDownloadUrl"]
+        def fval(key):
+            v = s.get(key)
+            return round(float(v), 2) if v is not None and v != "" else None
 
-    # 3. NetCDF-bestand downloaden naar tijdelijk bestand
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tf:
-            tmp_path = tf.name
+        def ival(key):
+            v = s.get(key)
+            return int(v) if v is not None and v != "" else None
 
-        with urllib.request.urlopen(download_url, timeout=30) as r:
-            with open(tmp_path, "wb") as f:
-                f.write(r.read())
+        dd_raw = ival("winddirectiondegrees")
+        dd     = None if dd_raw in (0, 990) else dd_raw
+        vv_m   = fval("visibility")
+        vv     = round(vv_m / 1000, 2) if vv_m is not None else None
+        rh     = fval("rainFallLastHour")
 
-        # 4. Parsen
-        ds = nc.Dataset(tmp_path)
-        n  = len(ds.dimensions["station"])
-
-        station_ids = [str(ds.variables["station"][i])     for i in range(n)]
-        names       = [str(ds.variables["stationname"][i]) for i in range(n)]
-        lats        = ds.variables["lat"][:]
-        lons        = ds.variables["lon"][:]
-
-        features = []
-        for i, sid in enumerate(station_ids):
-            if sid not in KNMI_STATION_IDS:
-                continue
-
-            lat  = float(lats[i])
-            lon  = float(lons[i])
-            naam = KNMI_NAMEN.get(sid, names[i])
-
-            props = {
+        features.append({
+            "type":     "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {
                 "naam":       naam,
-                "station_id": sid,
-                "bron":       "KNMI",
-                "tijdstip":   bestandstijd,
-            }
+                "station_id": str(s.get("stationid", "")),
+                "bron":       "Buienradar/KNMI",
+                "tijdstip":   ts,
+                "ta":   fval("temperature"),
+                "ff":   fval("windspeed"),
+                "dd":   dd,
+                "rh":   fval("humidity"),
+                "pp":   fval("airpressure"),
+                "qg":   fval("sunpower"),
+                "R1H":  rh,
+                "vv":   vv,
+                "td":   None,
+                "n":    None,
+                "windgusts":          fval("windgusts"),
+                "winddirection":      s.get("winddirection"),
+                "weatherdescription": s.get("weatherdescription"),
+                "feeltemperature":    fval("feeltemperature"),
+                "groundtemperature":  fval("groundtemperature"),
+            },
+        })
 
-            for param in KNMI_PARAMS:
-                if param not in ds.variables:
-                    props[param] = None
-                    continue
-                raw = ds.variables[param][i, 0]
-                if hasattr(raw, "mask") and np.ma.is_masked(raw):
-                    props[param] = None
-                else:
-                    val = float(raw)
-                    if param in ("dd", "n"):
-                        props[param] = int(round(val))
-                    elif param == "vv":
-                        props[param] = round(val / 1000, 2)   # m → km
-                    else:
-                        props[param] = round(val, 2)
-
-            features.append({
-                "type":     "Feature",
-                "geometry": {"type": "Point", "coordinates": [lon, lat]},
-                "properties": props,
-            })
-
-        ds.close()
-        return {
-            "type":           "FeatureCollection",
-            "features":       features,
-            "opgehaald":      datetime.now(timezone.utc).isoformat(),
-            "aantalStations": len(features),
-        }
-
-    finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
+    print(f"[KNMI/BR] {len(features)} stations geladen")
+    return {
+        "type":           "FeatureCollection",
+        "features":       features,
+        "opgehaald":      now.isoformat(),
+        "aantalStations": len(features),
+    }
 
 
 def get_knmi_data():
@@ -1315,13 +1243,14 @@ def get_knmi_data():
         result = fetch_knmi_data()
         _knmi_cache = result
         _knmi_time  = time.time()
-        print(f"[KNMI] {result['aantalStations']} stations geladen")
     except Exception as e:
-        print(f"[KNMI] Fout: {e}")
+        print(f"[KNMI/BR] Fout: {e}")
         if _knmi_cache:
             return _knmi_cache
         raise
     return _knmi_cache
+
+
 
 
 # ── HTTP-handler ─────────────────────────────────────────────────────────────
