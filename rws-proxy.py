@@ -1550,23 +1550,35 @@ if __name__ == "__main__":
         with _refresh_lock:
             _do_refresh()
 
-    # Waves + temp + wind + KNMI parallel pre-warmen vóór de server start
-    print("[CACHE] Gegevens vooraf ophalen (waves + temp + wind + KNMI parallel)…")
-    try:
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            fw    = ex.submit(_refresh_waves)
-            ft    = ex.submit(get_temp_data)
-            fwnd  = ex.submit(get_wind_data)
-            fknmi = ex.submit(get_knmi_data)
-            fw.result(); ft.result(); fwnd.result()
-            try: fknmi.result()
-            except Exception as e: print(f"[KNMI] Prewarm mislukt: {e}")
-        print("[CACHE] Klaar — proxy gereed voor requests.\n")
-    except Exception as e:
-        print(f"[CACHE] Fout bij vooraf laden: {e}\n")
+    import socket as _socket
+    class DualStackServer(HTTPServer):
+        """Luistert op IPv4 én IPv6 zodat Safari via localhost verbinding maakt."""
+        address_family = _socket.AF_INET6
+        def server_bind(self):
+            self.socket.setsockopt(_socket.IPPROTO_IPV6, _socket.IPV6_V6ONLY, 0)
+            super().server_bind()
 
-    # Achtergrond-refresh elke 9 minuten (alle caches tegelijk)
+    # Server direct starten zodat Safari meteen verbinding kan maken
+    server = DualStackServer(("::", PORT), Handler)
+    print(f"[SERVER] Luistert op http://localhost:{PORT}/ (IPv4 + IPv6)\n")
+
+    # Prewarm + achtergrond-refresh in aparte thread — blokkeert de server niet
     def _background_loop():
+        # Eerste prewarm
+        print("[CACHE] Gegevens vooraf ophalen (waves + temp + wind + KNMI parallel)…")
+        try:
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                fw    = ex.submit(_refresh_waves)
+                ft    = ex.submit(get_temp_data)
+                fwnd  = ex.submit(get_wind_data)
+                fknmi = ex.submit(get_knmi_data)
+                fw.result(); ft.result(); fwnd.result()
+                try: fknmi.result()
+                except Exception as e: print(f"[KNMI] Prewarm mislukt: {e}")
+            print("[CACHE] Klaar.\n")
+        except Exception as e:
+            print(f"[CACHE] Fout bij vooraf laden: {e}\n")
+        # Daarna elke 9 minuten herhalen
         while True:
             time.sleep(9 * 60)
             print("[CACHE] Achtergrond-refresh gestart…")
@@ -1581,9 +1593,9 @@ if __name__ == "__main__":
                     except Exception as e: print(f"[KNMI] Achtergrond-refresh mislukt: {e}")
             except Exception as e:
                 print(f"[CACHE] Achtergrond-refresh mislukt: {e}")
+
     threading.Thread(target=_background_loop, daemon=True).start()
 
-    server = HTTPServer(("", PORT), Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
