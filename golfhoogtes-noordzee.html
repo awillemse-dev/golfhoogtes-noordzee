@@ -1328,14 +1328,15 @@ function cssToRgb(css) {
 function renderNlInterpolation() {
   if (!nlMap || !knmiData) return;
 
-  // dd (windrichting) is circulair → geen zinvolle IDW; toon geen kleurveld
-  if (nlParam === 'dd') {
-    const old = nlMap.getContainer().querySelector('#nl-interp-canvas');
+  // dd (windrichting) is circulair → geen zinvolle IDW; verberg canvas
+  const mapEl = nlMap.getContainer();
+  const hideCanvas = () => {
+    const old = mapEl.querySelector('#nl-interp-canvas');
     if (old) old.style.display = 'none';
-    return;
-  }
+  };
+  if (nlParam === 'dd') { hideCanvas(); return; }
 
-  // Stations met geldige waarde + bijbehorende RGB-kleur ophalen
+  // Stations met geldige waarde + bijbehorende RGB-kleur
   const pts = [];
   (knmiData.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
@@ -1345,41 +1346,61 @@ function renderNlInterpolation() {
   });
   if (pts.length < 2) return;
 
-  // Canvas aanmaken of hergebruiken (bovenop de kaarttiles, onder markers)
-  const mapEl = nlMap.getContainer();
+  // Canvas aanmaken of hergebruiken
+  // zIndex 350 = boven Leaflet tilePane (200) maar onder markerPane (600)
   let canvas = mapEl.querySelector('#nl-interp-canvas');
   if (!canvas) {
     canvas = document.createElement('canvas');
     canvas.id = 'nl-interp-canvas';
     Object.assign(canvas.style, {
       position:'absolute', top:'0', left:'0',
-      pointerEvents:'none', zIndex:'200',
+      pointerEvents:'none', zIndex:'350',
     });
     mapEl.appendChild(canvas);
   }
   canvas.style.display = '';
   const sz = nlMap.getSize();
+  if (!sz.x || !sz.y) return;           // kaart nog niet geïnitialiseerd
   canvas.width  = sz.x;
   canvas.height = sz.y;
 
-  // Bereken lat/lon voor elke rij/kolom via Leaflet (Mercator-correct)
+  // ── Stap 1: NL-polygon mask tekenen op offscreen canvas ──────────────────
+  // Wit = binnen NL (alpha 255), transparant = buiten NL (alpha 0)
+  const maskCv  = document.createElement('canvas');
+  maskCv.width  = sz.x; maskCv.height = sz.y;
+  const mctx    = maskCv.getContext('2d');
+  mctx.fillStyle = '#fff';
+  mctx.beginPath();
+  NL_POLY.forEach((c, i) => {
+    const pt = nlMap.latLngToContainerPoint(L.latLng(c[0], c[1]));
+    i === 0 ? mctx.moveTo(pt.x, pt.y) : mctx.lineTo(pt.x, pt.y);
+  });
+  mctx.closePath();
+  mctx.fill();
+  const mask = mctx.getImageData(0, 0, sz.x, sz.y).data; // alpha-kanaal = NL-grens
+
+  // ── Stap 2: lat/lon per pixel-rij/kolom (Mercator-correct via Leaflet) ───
   const lats = new Float32Array(sz.y);
   const lons  = new Float32Array(sz.x);
   for (let py = 0; py < sz.y; py++) lats[py] = nlMap.containerPointToLatLng([0, py]).lat;
   for (let px = 0; px < sz.x; px++) lons[px]  = nlMap.containerPointToLatLng([px, 0]).lng;
 
+  // ── Stap 3: IDW-raster met mask-check per pixel ──────────────────────────
   const ctx     = canvas.getContext('2d');
   const imgData = ctx.createImageData(sz.x, sz.y);
   const data    = imgData.data;
-  const STEP    = 3;   // rasterstap in pixels; balans snelheid ↔ vloeiendheid
-  const ALPHA   = 175; // transparantie (0-255)
+  const STEP    = 3;    // rasterstap (pixels); groter = sneller maar grovere raster
+  const ALPHA   = 178;  // dekking kleurveld (0-255)
 
   for (let py = 0; py < sz.y; py += STEP) {
     const lat    = lats[py];
     const cosLat = Math.cos(lat * Math.PI / 180);
     for (let px = 0; px < sz.x; px += STEP) {
+      // Sla cel over als middelpunt buiten NL-grens valt (mask alpha = 0)
+      if (mask[(py * sz.x + px) * 4 + 3] === 0) continue;
+
       const lon = lons[px];
-      // IDW: gewogen interpolatie van RGB-kleurkanalen (macht=2, geen sqrt nodig)
+      // IDW met macht=2 (gewicht = 1/d²) — geen sqrt nodig
       let wSum=0, r=0, g=0, b=0, exact=null;
       for (const p of pts) {
         const dy = (lat - p.lat) * 111.0;
@@ -1387,37 +1408,24 @@ function renderNlInterpolation() {
         const d2 = dx*dx + dy*dy;
         if (d2 < 0.001) { exact = p.rgb; break; }
         const w = 1.0 / d2;
-        wSum += w;
-        r += w * p.rgb[0];
-        g += w * p.rgb[1];
-        b += w * p.rgb[2];
+        wSum += w; r += w*p.rgb[0]; g += w*p.rgb[1]; b += w*p.rgb[2];
       }
+      if (!exact && wSum === 0) continue;
       const ri = exact ? exact[0] : Math.round(r/wSum);
       const gi = exact ? exact[1] : Math.round(g/wSum);
       const bi = exact ? exact[2] : Math.round(b/wSum);
-      // Vul STEP×STEP blok
+
+      // Vul STEP×STEP blok, per pixel gecheckt op mask
       for (let dy=0; dy<STEP && py+dy<sz.y; dy++) {
         for (let dx=0; dx<STEP && px+dx<sz.x; dx++) {
-          const i = ((py+dy)*sz.x + (px+dx)) * 4;
-          data[i]=ri; data[i+1]=gi; data[i+2]=bi; data[i+3]=ALPHA;
+          const idx = ((py+dy)*sz.x + (px+dx)) * 4;
+          if (mask[idx+3] === 0) continue;    // pixel buiten NL-grens
+          data[idx]=ri; data[idx+1]=gi; data[idx+2]=bi; data[idx+3]=ALPHA;
         }
       }
     }
   }
   ctx.putImageData(imgData, 0, 0);
-
-  // Mask op NL-polygon via destination-in: buiten NL wordt transparant
-  ctx.save();
-  ctx.globalCompositeOperation = 'destination-in';
-  ctx.beginPath();
-  NL_POLY.forEach((c, i) => {
-    const pt = nlMap.latLngToContainerPoint(L.latLng(c[0], c[1]));
-    i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y);
-  });
-  ctx.closePath();
-  ctx.fillStyle = '#000';
-  ctx.fill();
-  ctx.restore();
 }
 
 let nlMap    = null;
