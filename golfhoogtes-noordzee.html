@@ -396,25 +396,19 @@
       margin-left: auto;
     }
 
-    /* Wrapper centreert de kaart en geeft hem een portret-aspect passend bij NL */
+    /* Wrapper centreert de kaart horizontaal */
     #nl-map-outer {
       flex: 1;
       display: flex;
       justify-content: center;
-      align-items: center;
+      align-items: flex-start;
       overflow: hidden;
       background: var(--bg);
     }
 
+    /* Breedte + hoogte worden via JS gezet vóór Leaflet init */
     #nl-map {
-      /* NL-vasteland: ~295km N-Z, ~240km O-W → W/H ≈ 0.81
-         aspect-ratio dwingt de container tot de juiste portret-verhouding,
-         zodat fitBounds het hele frame vult zonder lege randen. */
-      aspect-ratio: 4 / 5;
-      height: 100%;
-      max-height: 100%;
-      max-width: 100%;
-      min-height: 0;
+      flex-shrink: 0;
     }
 
     /* KNMI popup */
@@ -1440,12 +1434,9 @@ function renderNlMarkers() {
     nlMarkers.push(marker);
   });
 
-  // Pas kaartvenster strak aan op werkelijke stationslocaties
+  // Pas viewport strak aan op werkelijke stationslocaties (geen offshore meer)
   if (nlMarkers.length > 0) {
-    setTimeout(() => {
-      nlMap.invalidateSize();
-      nlMap.fitBounds(L.featureGroup(nlMarkers).getBounds().pad(0.01), { padding: [4, 4] });
-    }, 50);
+    nlMap.fitBounds(L.featureGroup(nlMarkers).getBounds().pad(0.02), { padding: [4, 4] });
   }
 }
 
@@ -1474,6 +1465,18 @@ function onNlParamChange() {
 function initNlMap() {
   if (nlMap) { nlMap.invalidateSize(); return; }
 
+  // Bereken expliciete pixelafmetingen vóór Leaflet-init.
+  // NL-stationsextent: ~277km N-Z, ~243km O-W → W/H ≈ 0.877
+  // We gebruiken 0.82 zodat er minimale marge rondom blijft.
+  const outer  = document.getElementById('nl-map-outer');
+  const mapDiv = document.getElementById('nl-map');
+  const avH    = outer.clientHeight;
+  const avW    = outer.clientWidth;
+  const mapH   = avH;
+  const mapW   = Math.min(avW, Math.round(avH * 0.85));
+  mapDiv.style.width  = mapW + 'px';
+  mapDiv.style.height = mapH + 'px';
+
   nlMap = L.map('nl-map', {
     center:          [52.3, 5.3],
     zoom:            7,
@@ -1495,7 +1498,7 @@ function initNlMap() {
     { attribution: '', maxZoom: 17, opacity: 0.8 }
   ).addTo(nlMap);
 
-  // Strak begrensd op NL-vasteland; renderNlMarkers verfijnt dit na data-load
+  // Strak begrensd op NL-vasteland zonder offshore stations
   const NL_BOUNDS = [[50.75, 3.35], [53.55, 7.25]];
   nlMap.fitBounds(NL_BOUNDS, { padding: [4, 4] });
   nlMap.setMaxBounds([[49.5, 1.5], [54.5, 9.0]]);
