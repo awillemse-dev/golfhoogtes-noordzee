@@ -1566,12 +1566,18 @@ function renderNlMarkers() {
     nlMarkers.push(marker);
   });
 
-  // Pas viewport strak aan op werkelijke stationslocaties (geen offshore meer)
-  if (nlMarkers.length > 0) {
-    nlMap.fitBounds(L.featureGroup(nlMarkers).getBounds().pad(0.02), { padding: [4, 4] });
+  // Pas viewport strak aan op werkelijke stationslocaties (alleen bij eerste load).
+  // animate:false maakt fitBounds synchroon zodat containerPointToLatLng direct
+  // de juiste coördinaten teruggeeft wanneer renderNlInterpolation() wordt aangeroepen.
+  if (nlMarkers.length > 0 && !nlMap._nlBoundsFitted) {
+    nlMap.fitBounds(
+      L.featureGroup(nlMarkers).getBounds().pad(0.02),
+      { padding: [4, 4], animate: false }
+    );
+    nlMap._nlBoundsFitted = true;
   }
 
-  // Teken kleurveld na markers (zodat markers er bovenop blijven)
+  // Teken kleurveld — map is nu op de juiste viewport
   renderNlInterpolation();
 }
 
@@ -1635,7 +1641,7 @@ function initNlMap() {
 
   // Strak begrensd op NL-vasteland zonder offshore stations
   const NL_BOUNDS = [[50.75, 3.35], [53.55, 7.25]];
-  nlMap.fitBounds(NL_BOUNDS, { padding: [4, 4] });
+  nlMap.fitBounds(NL_BOUNDS, { padding: [4, 4], animate: false });
   nlMap.setMaxBounds([[49.5, 1.5], [54.5, 9.0]]);
 }
 
