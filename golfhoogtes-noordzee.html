@@ -579,8 +579,8 @@
         <span id="nl-info">Klik op een station voor alle meetwaarden</span>
       </div>
       <div id="nl-map-outer">
-        <canvas id="nl-interp-canvas" style="position:absolute;top:0;left:0;pointer-events:none;z-index:10;display:none;"></canvas>
         <div id="nl-map"></div>
+        <canvas id="nl-interp-canvas" style="position:absolute;top:0;left:0;pointer-events:none;z-index:9999;display:none;"></canvas>
       </div>
     </div>
 
@@ -1343,7 +1343,7 @@ function renderNlInterpolation() {
     const [lon, lat] = f.geometry.coordinates;
     const val = f.properties[nlParam];
     if (val === null || val === undefined) return;
-    pts.push({ lat, lon, rgb: cssToRgb(nlColor(nlParam, parseFloat(val))) });
+    pts.push({ lat, lon, rgb: nlColorRgb(nlParam, parseFloat(val)) });
   });
   if (pts.length < 2) return;
 
@@ -1431,65 +1431,53 @@ const NL_PARAMS = {
 const DD_LABELS = ['N','NNO','NO','ONO','O','OZO','ZO','ZZO','Z','ZZW','ZW','WZW','W','WNW','NW','NNW'];
 function ddLabel(d) { return DD_LABELS[Math.round(d / 22.5) % 16]; }
 
-function nlColor(param, val) {
-  if (val === null || val === undefined || (typeof val === 'number' && isNaN(val))) return '#3d5167';
-  switch (param) {
-    case 'ta': case 'feeltemperature':
-      if (val < -5)  return '#1d4ed8';
-      if (val < 0)   return '#60a5fa';
-      if (val < 5)   return '#93c5fd';
-      if (val < 10)  return '#6ee7b7';
-      if (val < 15)  return '#84cc16';
-      if (val < 20)  return '#eab308';
-      if (val < 25)  return '#f97316';
-      return '#ef4444';
-    case 'ff': case 'windgusts':
-      if (val < 3.4)  return '#22c55e';
-      if (val < 5.5)  return '#84cc16';
-      if (val < 8.0)  return '#eab308';
-      if (val < 10.8) return '#f97316';
-      if (val < 13.9) return '#ef4444';
-      return '#7f1d1d';
-    case 'dd':
-      return `hsl(${(Math.round(val) + 90) % 360},70%,52%)`;
-    case 'rh':
-      if (val < 40)  return '#d97706';
-      if (val < 60)  return '#eab308';
-      if (val < 75)  return '#84cc16';
-      if (val < 90)  return '#60a5fa';
-      return '#3b82f6';
-    case 'pp':
-      if (val < 990)  return '#6366f1';
-      if (val < 1005) return '#60a5fa';
-      if (val < 1015) return '#34d399';
-      if (val < 1025) return '#fbbf24';
-      return '#f97316';
-    case 'qg':
-      if (val < 10)   return '#1e3a5f';
-      if (val < 100)  return '#1d4ed8';
-      if (val < 300)  return '#eab308';
-      if (val < 600)  return '#f97316';
-      return '#fef08a';
-    case 'R1H':
-      if (val < 0.1)  return '#1e3a5f';
-      if (val < 0.5)  return '#93c5fd';
-      if (val < 1)    return '#60a5fa';
-      if (val < 3)    return '#3b82f6';
-      if (val < 6)    return '#1d4ed8';
-      return '#1e3a8a';
-    case 'vv':
-      if (val < 0.2)  return '#7f1d1d';
-      if (val < 1)    return '#ef4444';
-      if (val < 3)    return '#f97316';
-      if (val < 5)    return '#eab308';
-      if (val < 10)   return '#84cc16';
-      return '#22c55e';
-    case 'n': {
-      const sh = Math.round(val / 8 * 170);
-      return `rgb(${220 - sh},${220 - sh},${220 - sh})`;
+// Continue kleurschaal: interpoleert lineair tussen RGB-kleurstops.
+// Werkt voor zowel markers als het IDW-canvas.
+function colorScale(stops, val) {
+  // stops = [[waarde, [r,g,b]], ...]  gesorteerd op waarde
+  if (val <= stops[0][0]) return stops[0][1];
+  if (val >= stops[stops.length-1][0]) return stops[stops.length-1][1];
+  for (let i = 1; i < stops.length; i++) {
+    if (val <= stops[i][0]) {
+      const t = (val - stops[i-1][0]) / (stops[i][0] - stops[i-1][0]);
+      const a = stops[i-1][1], b = stops[i][1];
+      return [
+        Math.round(a[0] + t*(b[0]-a[0])),
+        Math.round(a[1] + t*(b[1]-a[1])),
+        Math.round(a[2] + t*(b[2]-a[2])),
+      ];
     }
-    default: return '#3d5167';
   }
+  return stops[stops.length-1][1];
+}
+function rgbHex([r,g,b]) { return `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`; }
+
+const NL_SCALES = {
+  ta:              [[-10,[29,78,216]],[-5,[96,165,250]],[0,[147,197,253]],[5,[110,231,183]],[10,[132,204,22]],[15,[234,179,8]],[20,[249,115,22]],[25,[239,68,68]],[35,[127,29,29]]],
+  feeltemperature: [[-10,[29,78,216]],[-5,[96,165,250]],[0,[147,197,253]],[5,[110,231,183]],[10,[132,204,22]],[15,[234,179,8]],[20,[249,115,22]],[25,[239,68,68]],[35,[127,29,29]]],
+  ff:              [[0,[34,197,94]],[3.4,[132,204,22]],[5.5,[234,179,8]],[8,[249,115,22]],[10.8,[239,68,68]],[13.9,[153,27,27]],[20,[80,0,0]]],
+  windgusts:       [[0,[34,197,94]],[3.4,[132,204,22]],[5.5,[234,179,8]],[8,[249,115,22]],[10.8,[239,68,68]],[13.9,[153,27,27]],[20,[80,0,0]]],
+  rh:              [[0,[217,119,6]],[40,[234,179,8]],[65,[132,204,22]],[80,[96,165,250]],[100,[29,78,216]]],
+  pp:              [[970,[99,102,241]],[990,[96,165,250]],[1005,[52,211,153]],[1015,[251,191,36]],[1025,[249,115,22]],[1040,[239,68,68]]],
+  qg:              [[0,[15,30,60]],[10,[29,78,216]],[150,[234,179,8]],[400,[249,115,22]],[800,[254,240,138]]],
+  R1H:             [[0,[15,30,60]],[0.1,[147,197,253]],[0.5,[96,165,250]],[1,[59,130,246]],[3,[29,78,216]],[6,[30,27,75]],[10,[80,0,80]]],
+  vv:              [[0,[127,29,29]],[0.2,[239,68,68]],[1,[249,115,22]],[3,[234,179,8]],[5,[132,204,22]],[10,[34,197,94]],[50,[34,197,94]]],
+};
+
+function nlColorRgb(param, val) {
+  if (val === null || val === undefined || (typeof val === 'number' && isNaN(val))) return [61,81,103];
+  if (param === 'dd') {
+    // circulaire schaal: windrichting → kleur op kleurenwiel
+    const h = ((val + 90) % 360) * Math.PI / 180;
+    return [Math.round(128+100*Math.cos(h)), Math.round(128+100*Math.sin(h)), 180];
+  }
+  const scale = NL_SCALES[param];
+  if (!scale) return [61,81,103];
+  return colorScale(scale, parseFloat(val));
+}
+
+function nlColor(param, val) {
+  return rgbHex(nlColorRgb(param, val));
 }
 
 function makeNlIcon(param, val) {
