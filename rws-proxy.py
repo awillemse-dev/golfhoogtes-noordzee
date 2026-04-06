@@ -1504,7 +1504,7 @@ class Handler(BaseHTTPRequestHandler):
         # ── / of /index.html ─────────────────────────────────────────────
         elif path in ("/", "/index.html"):
             html_path = os.path.join(os.path.dirname(__file__),
-                                     "golfhoogtes-noordzee.html")
+                                     "index.html")
             try:
                 with open(html_path, "rb") as f:
                     body = f.read()

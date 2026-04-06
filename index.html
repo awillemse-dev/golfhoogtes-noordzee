@@ -346,6 +346,89 @@
       opacity: 0.9;
     }
 
+    /* ── Nederland sectie ────────────────────────────────────────────────── */
+    #nederland-section {
+      flex: 1;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #nl-header {
+      padding: 8px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    #nl-header label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-dim);
+      white-space: nowrap;
+    }
+
+    #nl-param-select {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 0.8rem;
+      font-family: inherit;
+      padding: 5px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237a91a8' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      padding-right: 28px;
+    }
+    #nl-param-select:focus { border-color: var(--accent); }
+
+    #nl-info {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-left: auto;
+    }
+
+    /* Wrapper centreert de kaart horizontaal */
+    #nl-map-outer {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    /* Breedte + hoogte worden via JS gezet vóór Leaflet init */
+    #nl-map {
+      flex-shrink: 0;
+    }
+
+    /* KNMI popup */
+    .nl-popup-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0 16px;
+      margin: 8px 0;
+    }
+    .nl-popup-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.72rem;
+      padding: 2px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .nl-popup-lbl { color: var(--text-dim); }
+    .nl-popup-val { font-weight: 600; color: var(--text); }
+
     /* ── Leaflet overrides ──────────────────────────────────────────────── */
     .leaflet-div-icon { background: none !important; border: none !important; }
     .leaflet-control-attribution {
@@ -443,6 +526,15 @@
       </svg>
       <span class="tab-label">Waar&shy;nemingen</span>
     </div>
+    <div class="sidebar-tab" id="tab-nederland" onclick="selectSection('nederland')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 9h18v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9Z"/>
+        <path d="M3 9V6a2 2 0 0 1 2-2h1l2 3H3Z"/>
+        <path d="M13 9l2-5h3l-2 5"/>
+      </svg>
+      <span class="tab-label">Neder&shy;land</span>
+    </div>
     <div class="sidebar-tab" id="tab-verwachtingen" onclick="selectSection('verwachtingen')">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -465,6 +557,29 @@
       </div>
       <div id="coming-soon-label">Verwachtingen</div>
       <div class="coming-soon-sub">Data volgt binnenkort</div>
+    </div>
+
+    <!-- Nederland (KNMI) sectie -->
+    <div id="nederland-section">
+      <div id="nl-header">
+        <label for="nl-param-select">Parameter</label>
+        <select id="nl-param-select" onchange="onNlParamChange()">
+          <option value="ta">🌡 Temperatuur (°C)</option>
+          <option value="feeltemperature">🥶 Gevoelstemperatuur (°C)</option>
+          <option value="ff">💨 Windsnelheid (m/s)</option>
+          <option value="windgusts">💨 Windstoten (m/s)</option>
+          <option value="dd">🧭 Windrichting</option>
+          <option value="rh">💧 Luchtvochtigheid (%)</option>
+          <option value="pp">⬆ Luchtdruk (hPa)</option>
+          <option value="qg">☀ Zonnestraling (W/m²)</option>
+          <option value="R1H">🌧 Neerslag afg. uur (mm)</option>
+          <option value="vv">👁 Zicht (km)</option>
+        </select>
+        <span id="nl-info">Klik op een station voor alle meetwaarden</span>
+      </div>
+      <div id="nl-map-outer">
+        <div id="nl-map"></div>
+      </div>
     </div>
 
     <!-- Grafiekpaneel -->
@@ -824,19 +939,47 @@ function selectSection(section) {
   document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
   document.getElementById(`tab-${section}`).classList.add('active');
 
-  const nav = document.querySelector('nav');
+  const nav        = document.querySelector('nav');
+  const mapEl      = document.getElementById('map');
+  const comingSoon = document.getElementById('coming-soon');
+  const nlSection  = document.getElementById('nederland-section');
 
   if (section === 'waarnemingen') {
-    nav.style.display = '';
+    nav.style.display       = '';
+    nlSection.style.display = 'none';
+    comingSoon.style.display = 'none';
     const layer = activeLayer;
     activeLayer = '';
     selectLayer(layer);
-  } else {
-    nav.style.display = 'none';
+  } else if (section === 'nederland') {
+    nav.style.display        = 'none';
+    mapEl.style.display      = 'none';
+    comingSoon.style.display = 'none';
+    nlSection.style.display  = 'flex';
+    document.getElementById('chart-panel').classList.remove('open');
     clearMarkers(); clearTempMarkers(); clearWindMarkers();
-    document.getElementById('map').style.display        = 'none';
-    document.getElementById('coming-soon').style.display = 'flex';
+    // Kaart initialiseren (eenmalig) + data laden
+    // 80ms wachten zodat CSS aspect-ratio reflow klaar is vóór Leaflet init
+    setTimeout(() => {
+      initNlMap();
+      if (!knmiData) {
+        fetchKnmiData().then(startCountdown);
+      } else {
+        renderNlMarkers();
+        const t = knmiData.opgehaald
+          ? new Date(knmiData.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+          : '–';
+        setStatus('ok', `${knmiData.aantalStations} stations · ${t}`);
+        startCountdown();
+      }
+    }, 80);
+  } else {
+    nav.style.display        = 'none';
+    mapEl.style.display      = 'none';
+    nlSection.style.display  = 'none';
+    comingSoon.style.display = 'flex';
     document.getElementById('coming-soon-label').textContent = 'Verwachtingen';
+    clearMarkers(); clearTempMarkers(); clearWindMarkers();
     setStatus('', '–');
     document.getElementById('status').className = '';
     document.getElementById('countdown').textContent = '';
@@ -1127,7 +1270,10 @@ function startCountdown() {
     if (secondsLeft <= 0) {
       clearInterval(tid);
       el.textContent = '';
-      const fetchFn = activeLayer === 'temp' ? fetchTempData : fetchWaveData;
+      const fetchFn = activeSection === 'nederland' ? fetchKnmiData
+                    : activeLayer   === 'temp'      ? fetchTempData
+                    : activeLayer   === 'wind'      ? fetchWindData
+                    : fetchWaveData;
       fetchFn().then(startCountdown);
     } else {
       const m = Math.floor(secondsLeft / 60);
@@ -1135,6 +1281,227 @@ function startCountdown() {
       el.textContent = `${m}:${String(s).padStart(2, '0')}`;
     }
   }, 1000);
+}
+
+// ── Nederland (KNMI) ─────────────────────────────────────────────────────────
+
+let nlMap    = null;
+let nlMarkers = [];
+let knmiData  = null;
+let nlParam   = 'ta';
+
+const NL_PARAMS = {
+  ta:              { label: 'Temperatuur',         eenheid: '°C',   fmt: v => v !== null ? v.toFixed(1) + ' °C'  : '–' },
+  feeltemperature: { label: 'Gevoelstemperatuur',  eenheid: '°C',   fmt: v => v !== null ? v.toFixed(1) + ' °C'  : '–' },
+  ff:              { label: 'Windsnelheid',         eenheid: 'm/s',  fmt: v => v !== null ? v.toFixed(1) + ' m/s' : '–' },
+  windgusts:       { label: 'Windstoten',           eenheid: 'm/s',  fmt: v => v !== null ? v.toFixed(1) + ' m/s' : '–' },
+  dd:              { label: 'Windrichting',          eenheid: '',     fmt: v => v !== null ? v + '° ' + ddLabel(v) : '–' },
+  rh:              { label: 'Luchtvochtigheid',     eenheid: '%',    fmt: v => v !== null ? v.toFixed(0) + ' %'   : '–' },
+  pp:              { label: 'Luchtdruk',            eenheid: 'hPa',  fmt: v => v !== null ? v.toFixed(1) + ' hPa' : '–' },
+  qg:              { label: 'Zonnestraling',        eenheid: 'W/m²', fmt: v => v !== null ? v.toFixed(0) + ' W/m²': '–' },
+  R1H:             { label: 'Neerslag (1u)',        eenheid: 'mm',   fmt: v => v !== null ? v.toFixed(1) + ' mm'  : '–' },
+  vv:              { label: 'Zicht',                eenheid: 'km',   fmt: v => v !== null ? v.toFixed(1) + ' km'  : '–' },
+};
+
+const DD_LABELS = ['N','NNO','NO','ONO','O','OZO','ZO','ZZO','Z','ZZW','ZW','WZW','W','WNW','NW','NNW'];
+function ddLabel(d) { return DD_LABELS[Math.round(d / 22.5) % 16]; }
+
+function nlColor(param, val) {
+  if (val === null || val === undefined || (typeof val === 'number' && isNaN(val))) return '#3d5167';
+  switch (param) {
+    case 'ta': case 'feeltemperature':
+      if (val < -5)  return '#1d4ed8';
+      if (val < 0)   return '#60a5fa';
+      if (val < 5)   return '#93c5fd';
+      if (val < 10)  return '#6ee7b7';
+      if (val < 15)  return '#84cc16';
+      if (val < 20)  return '#eab308';
+      if (val < 25)  return '#f97316';
+      return '#ef4444';
+    case 'ff': case 'windgusts':
+      if (val < 3.4)  return '#22c55e';
+      if (val < 5.5)  return '#84cc16';
+      if (val < 8.0)  return '#eab308';
+      if (val < 10.8) return '#f97316';
+      if (val < 13.9) return '#ef4444';
+      return '#7f1d1d';
+    case 'dd':
+      return `hsl(${(Math.round(val) + 90) % 360},70%,52%)`;
+    case 'rh':
+      if (val < 40)  return '#d97706';
+      if (val < 60)  return '#eab308';
+      if (val < 75)  return '#84cc16';
+      if (val < 90)  return '#60a5fa';
+      return '#3b82f6';
+    case 'pp':
+      if (val < 990)  return '#6366f1';
+      if (val < 1005) return '#60a5fa';
+      if (val < 1015) return '#34d399';
+      if (val < 1025) return '#fbbf24';
+      return '#f97316';
+    case 'qg':
+      if (val < 10)   return '#1e3a5f';
+      if (val < 100)  return '#1d4ed8';
+      if (val < 300)  return '#eab308';
+      if (val < 600)  return '#f97316';
+      return '#fef08a';
+    case 'R1H':
+      if (val < 0.1)  return '#1e3a5f';
+      if (val < 0.5)  return '#93c5fd';
+      if (val < 1)    return '#60a5fa';
+      if (val < 3)    return '#3b82f6';
+      if (val < 6)    return '#1d4ed8';
+      return '#1e3a8a';
+    case 'vv':
+      if (val < 0.2)  return '#7f1d1d';
+      if (val < 1)    return '#ef4444';
+      if (val < 3)    return '#f97316';
+      if (val < 5)    return '#eab308';
+      if (val < 10)   return '#84cc16';
+      return '#22c55e';
+    case 'n': {
+      const sh = Math.round(val / 8 * 170);
+      return `rgb(${220 - sh},${220 - sh},${220 - sh})`;
+    }
+    default: return '#3d5167';
+  }
+}
+
+function makeNlIcon(param, val) {
+  const color = nlColor(param, val);
+  let label;
+  if (val === null || val === undefined) {
+    label = '–';
+  } else if (param === 'dd')             { label = ddLabel(val); }
+  else if (param === 'pp')               { label = Math.round(val); }
+  else if (param === 'qg')               { label = Math.round(val); }
+  else if (param === 'R1H')              { label = val.toFixed(1); }
+  else if (param === 'vv')               { label = val.toFixed(1); }
+  else                                   { label = val.toFixed(1); }
+
+  const w  = param === 'pp' ? 54 : 42;
+  const ht = 22;
+  const textCol = (param === 'n' && val !== null && val >= 5) ? '#1e293b' :
+                  (param === 'qg' && val !== null && val > 300) ? '#1e293b' : 'white';
+  return L.divIcon({
+    className: '',
+    iconSize:    [w, ht],
+    iconAnchor:  [w / 2, ht / 2],
+    popupAnchor: [0, -(ht / 2 + 8)],
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${ht}">
+      <rect x="1" y="1" width="${w-2}" height="${ht-2}" rx="5"
+        fill="${color}" fill-opacity="0.92"/>
+      <rect x="1" y="1" width="${w-2}" height="${ht-2}" rx="5"
+        fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+      <text x="${w/2}" y="${ht/2+3.8}" text-anchor="middle"
+        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="10"
+        font-weight="700" fill="${textCol}">${label}</text>
+    </svg>`,
+  });
+}
+
+function clearNlMarkers() {
+  nlMarkers.forEach(m => nlMap && nlMap.removeLayer(m));
+  nlMarkers = [];
+}
+
+function renderNlMarkers() {
+  if (!nlMap || !knmiData) return;
+  clearNlMarkers();
+  (knmiData.features || []).forEach(f => {
+    const [lon, lat] = f.geometry.coordinates;
+    const p   = f.properties;
+    const val = p[nlParam];
+    const marker = L.marker([lat, lon], { icon: makeNlIcon(nlParam, val) });
+
+    // Popup met alle waarden
+    const rows = Object.entries(NL_PARAMS).map(([k, meta]) =>
+      `<div class="nl-popup-row">
+         <span class="nl-popup-lbl">${meta.label}</span>
+         <span class="nl-popup-val">${meta.fmt(p[k])}</span>
+       </div>`
+    ).join('');
+    const weather = p.weatherdescription
+      ? `<div class="popup-meta" style="margin:4px 0 2px">${p.weatherdescription}</div>` : '';
+    marker.bindPopup(
+      `<div class="popup-naam">${p.naam}</div>
+       ${weather}
+       <div class="nl-popup-grid">${rows}</div>
+       <div class="popup-tijd">${formatTijdstip(p.tijdstip)} · Bron: Buienradar/KNMI</div>`,
+      { maxWidth: 320 }
+    );
+    marker.addTo(nlMap);
+    nlMarkers.push(marker);
+  });
+
+  // Pas viewport strak aan op werkelijke stationslocaties (geen offshore meer)
+  if (nlMarkers.length > 0) {
+    nlMap.fitBounds(L.featureGroup(nlMarkers).getBounds().pad(0.02), { padding: [4, 4] });
+  }
+}
+
+async function fetchKnmiData() {
+  setStatus('loading', 'laden…');
+  try {
+    const resp = await fetch(`${PROXY_URL}/api/knmi`, { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    knmiData = await resp.json();
+    renderNlMarkers();
+    const t = knmiData.opgehaald
+      ? new Date(knmiData.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+      : new Date().toLocaleTimeString('nl-NL');
+    setStatus('ok', `${knmiData.aantalStations} KNMI-stations · ${t}`);
+  } catch (err) {
+    console.error(err);
+    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Data niet beschikbaar');
+  }
+}
+
+function onNlParamChange() {
+  nlParam = document.getElementById('nl-param-select').value;
+  renderNlMarkers();
+}
+
+function initNlMap() {
+  if (nlMap) { nlMap.invalidateSize(); return; }
+
+  // Bereken expliciete pixelafmetingen vóór Leaflet-init.
+  // NL-stationsextent: ~277km N-Z, ~243km O-W → W/H ≈ 0.877
+  // We gebruiken 0.82 zodat er minimale marge rondom blijft.
+  const outer  = document.getElementById('nl-map-outer');
+  const mapDiv = document.getElementById('nl-map');
+  const avH    = outer.clientHeight;
+  const avW    = outer.clientWidth;
+  const mapH   = avH;
+  const mapW   = Math.min(avW, Math.round(avH * 0.85));
+  mapDiv.style.width  = mapW + 'px';
+  mapDiv.style.height = mapH + 'px';
+
+  nlMap = L.map('nl-map', {
+    center:          [52.3, 5.3],
+    zoom:            7,
+    zoomControl:     false,
+    dragging:        false,
+    scrollWheelZoom: false,
+    doubleClickZoom: false,
+    boxZoom:         false,
+    keyboard:        false,
+    touchZoom:       false,
+  });
+
+  L.tileLayer(
+    'https://services.arcgisonline.com/arcgis/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
+    { attribution: '&copy; <a href="https://www.esri.com/">Esri</a> | Data: <a href="https://www.knmi.nl">KNMI</a>', maxZoom: 17 }
+  ).addTo(nlMap);
+  L.tileLayer(
+    'https://services.arcgisonline.com/arcgis/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}',
+    { attribution: '', maxZoom: 17, opacity: 0.8 }
+  ).addTo(nlMap);
+
+  // Strak begrensd op NL-vasteland zonder offshore stations
+  const NL_BOUNDS = [[50.75, 3.35], [53.55, 7.25]];
+  nlMap.fitBounds(NL_BOUNDS, { padding: [4, 4] });
+  nlMap.setMaxBounds([[49.5, 1.5], [54.5, 9.0]]);
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
