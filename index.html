@@ -1285,6 +1285,141 @@ function startCountdown() {
 
 // ── Nederland (KNMI) ─────────────────────────────────────────────────────────
 
+// Vereenvoudigd NL-vasteland polygon (lat/lon, met de klok mee).
+// Dekt vasteland + Texel/Vlieland/Terschelling-strook; stopt aan kust.
+const NL_POLY = [
+  [51.370,3.370],[51.382,3.470],[51.440,3.600],[51.525,3.835],
+  [51.580,3.940],[51.600,4.048],[51.637,4.270],[51.740,4.225],
+  [51.648,4.638],[51.550,4.775],[51.490,5.022],[51.447,5.353],
+  [51.453,5.723],[51.254,5.882],[50.921,5.776],[50.903,5.970],
+  [51.109,6.155],[51.375,6.200],[51.600,6.542],[51.835,6.737],
+  [52.025,6.804],[52.107,6.952],[52.382,7.088],[52.730,7.055],
+  [53.008,7.200],[53.210,7.150],[53.480,6.855],[53.510,6.615],
+  [53.467,6.200],[53.418,5.940],[53.300,5.822],[53.255,5.402],
+  [53.258,5.020],[53.320,4.918],[53.180,4.775],[53.005,4.810],
+  [52.936,4.760],[52.680,4.680],[52.468,4.562],[52.373,4.529],
+  [52.180,4.427],[52.051,4.272],[51.971,4.107],[51.869,4.178],
+  [51.750,4.183],[51.750,4.047],[51.638,3.905],[51.560,3.860],
+  [51.370,3.370],
+];
+
+// CSS-kleur (#rrggbb of hsl(…)) → [r,g,b]
+function cssToRgb(css) {
+  const m6 = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(css);
+  if (m6) return [parseInt(m6[1],16), parseInt(m6[2],16), parseInt(m6[3],16)];
+  // hsl(Hdeg, S%, L%)
+  const mh = /hsl\((\d+(?:\.\d+)?)(?:deg)?,\s*(\d+(?:\.\d+)?)%,\s*(\d+(?:\.\d+)?)%\)/i.exec(css);
+  if (mh) {
+    let h=+mh[1]/360, s=+mh[2]/100, l=+mh[3]/100;
+    const q = l<.5 ? l*(1+s) : l+s-l*s, p2=2*l-q;
+    const hue2rgb = t => {
+      if(t<0)t+=1; if(t>1)t-=1;
+      if(t<1/6) return p2+(q-p2)*6*t;
+      if(t<1/2) return q;
+      if(t<2/3) return p2+(q-p2)*(2/3-t)*6;
+      return p2;
+    };
+    return [Math.round(hue2rgb(h+1/3)*255), Math.round(hue2rgb(h)*255), Math.round(hue2rgb(h-1/3)*255)];
+  }
+  return [100,100,100];
+}
+
+// Teken IDW-interpolatie-canvas over de kaart, gemasked op NL-polygon
+function renderNlInterpolation() {
+  if (!nlMap || !knmiData) return;
+
+  // dd (windrichting) is circulair → geen zinvolle IDW; toon geen kleurveld
+  if (nlParam === 'dd') {
+    const old = nlMap.getContainer().querySelector('#nl-interp-canvas');
+    if (old) old.style.display = 'none';
+    return;
+  }
+
+  // Stations met geldige waarde + bijbehorende RGB-kleur ophalen
+  const pts = [];
+  (knmiData.features || []).forEach(f => {
+    const [lon, lat] = f.geometry.coordinates;
+    const val = f.properties[nlParam];
+    if (val === null || val === undefined) return;
+    pts.push({ lat, lon, rgb: cssToRgb(nlColor(nlParam, parseFloat(val))) });
+  });
+  if (pts.length < 2) return;
+
+  // Canvas aanmaken of hergebruiken (bovenop de kaarttiles, onder markers)
+  const mapEl = nlMap.getContainer();
+  let canvas = mapEl.querySelector('#nl-interp-canvas');
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    canvas.id = 'nl-interp-canvas';
+    Object.assign(canvas.style, {
+      position:'absolute', top:'0', left:'0',
+      pointerEvents:'none', zIndex:'200',
+    });
+    mapEl.appendChild(canvas);
+  }
+  canvas.style.display = '';
+  const sz = nlMap.getSize();
+  canvas.width  = sz.x;
+  canvas.height = sz.y;
+
+  // Bereken lat/lon voor elke rij/kolom via Leaflet (Mercator-correct)
+  const lats = new Float32Array(sz.y);
+  const lons  = new Float32Array(sz.x);
+  for (let py = 0; py < sz.y; py++) lats[py] = nlMap.containerPointToLatLng([0, py]).lat;
+  for (let px = 0; px < sz.x; px++) lons[px]  = nlMap.containerPointToLatLng([px, 0]).lng;
+
+  const ctx     = canvas.getContext('2d');
+  const imgData = ctx.createImageData(sz.x, sz.y);
+  const data    = imgData.data;
+  const STEP    = 3;   // rasterstap in pixels; balans snelheid ↔ vloeiendheid
+  const ALPHA   = 175; // transparantie (0-255)
+
+  for (let py = 0; py < sz.y; py += STEP) {
+    const lat    = lats[py];
+    const cosLat = Math.cos(lat * Math.PI / 180);
+    for (let px = 0; px < sz.x; px += STEP) {
+      const lon = lons[px];
+      // IDW: gewogen interpolatie van RGB-kleurkanalen (macht=2, geen sqrt nodig)
+      let wSum=0, r=0, g=0, b=0, exact=null;
+      for (const p of pts) {
+        const dy = (lat - p.lat) * 111.0;
+        const dx = (lon - p.lon) * 111.0 * cosLat;
+        const d2 = dx*dx + dy*dy;
+        if (d2 < 0.001) { exact = p.rgb; break; }
+        const w = 1.0 / d2;
+        wSum += w;
+        r += w * p.rgb[0];
+        g += w * p.rgb[1];
+        b += w * p.rgb[2];
+      }
+      const ri = exact ? exact[0] : Math.round(r/wSum);
+      const gi = exact ? exact[1] : Math.round(g/wSum);
+      const bi = exact ? exact[2] : Math.round(b/wSum);
+      // Vul STEP×STEP blok
+      for (let dy=0; dy<STEP && py+dy<sz.y; dy++) {
+        for (let dx=0; dx<STEP && px+dx<sz.x; dx++) {
+          const i = ((py+dy)*sz.x + (px+dx)) * 4;
+          data[i]=ri; data[i+1]=gi; data[i+2]=bi; data[i+3]=ALPHA;
+        }
+      }
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  // Mask op NL-polygon via destination-in: buiten NL wordt transparant
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.beginPath();
+  NL_POLY.forEach((c, i) => {
+    const pt = nlMap.latLngToContainerPoint(L.latLng(c[0], c[1]));
+    i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = '#000';
+  ctx.fill();
+  ctx.restore();
+}
+
 let nlMap    = null;
 let nlMarkers = [];
 let knmiData  = null;
@@ -1438,6 +1573,9 @@ function renderNlMarkers() {
   if (nlMarkers.length > 0) {
     nlMap.fitBounds(L.featureGroup(nlMarkers).getBounds().pad(0.02), { padding: [4, 4] });
   }
+
+  // Teken kleurveld na markers (zodat markers er bovenop blijven)
+  renderNlInterpolation();
 }
 
 async function fetchKnmiData() {
@@ -1459,7 +1597,7 @@ async function fetchKnmiData() {
 
 function onNlParamChange() {
   nlParam = document.getElementById('nl-param-select').value;
-  renderNlMarkers();
+  renderNlMarkers(); // roept intern renderNlInterpolation() aan
 }
 
 function initNlMap() {
