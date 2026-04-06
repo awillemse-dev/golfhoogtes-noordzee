@@ -404,6 +404,7 @@
       align-items: flex-start;
       overflow: hidden;
       background: var(--bg);
+      position: relative; /* zodat #nl-interp-canvas absoluut t.o.v. deze wrapper staat */
     }
 
     /* Breedte + hoogte worden via JS gezet vóór Leaflet init */
@@ -578,6 +579,7 @@
         <span id="nl-info">Klik op een station voor alle meetwaarden</span>
       </div>
       <div id="nl-map-outer">
+        <canvas id="nl-interp-canvas" style="position:absolute;top:0;left:0;pointer-events:none;z-index:10;display:none;"></canvas>
         <div id="nl-map"></div>
       </div>
     </div>
@@ -1324,18 +1326,16 @@ function cssToRgb(css) {
   return [100,100,100];
 }
 
-// Teken IDW-interpolatie-canvas over de kaart, gemasked op NL-polygon.
-// Gebruikt ctx.clip() + ctx.fillRect() — putImageData negeert clip-paden,
-// dus imageData-aanpak werkt niet voor clipping. fillRect wél.
+// IDW-interpolatie kleurveld, gemasked op NL-polygon.
+// Canvas staat als vaste DOM-node BUITEN Leaflet (#nl-map-outer sibling),
+// zodat Leaflet's interne z-index/pane-structuur er nooit overheen schrijft.
 function renderNlInterpolation() {
   if (!nlMap || !knmiData) return;
 
-  const mapEl = nlMap.getContainer();
-  const hideCanvas = () => {
-    const c = mapEl.querySelector('#nl-interp-canvas');
-    if (c) c.style.display = 'none';
-  };
-  if (nlParam === 'dd') { hideCanvas(); return; }
+  const canvas = document.getElementById('nl-interp-canvas');
+  if (!canvas) return;
+
+  if (nlParam === 'dd') { canvas.style.display = 'none'; return; }
 
   // Stations met geldige waarde + bijbehorende RGB-kleur
   const pts = [];
@@ -1347,37 +1347,32 @@ function renderNlInterpolation() {
   });
   if (pts.length < 2) return;
 
-  // Canvas aanmaken of hergebruiken (zIndex 350: boven tiles, onder markers)
-  let canvas = mapEl.querySelector('#nl-interp-canvas');
-  if (!canvas) {
-    canvas = document.createElement('canvas');
-    canvas.id = 'nl-interp-canvas';
-    Object.assign(canvas.style, {
-      position: 'absolute', top: '0', left: '0',
-      pointerEvents: 'none', zIndex: '350',
-    });
-    mapEl.appendChild(canvas);
-  }
-  canvas.style.display = '';
-  const sz = nlMap.getSize();
+  // Canvas gelijkstellen aan #nl-map positie en afmetingen
+  const mapDiv = document.getElementById('nl-map');
+  const sz     = nlMap.getSize();
   if (!sz.x || !sz.y) return;
+
   canvas.width  = sz.x;
   canvas.height = sz.y;
+  canvas.style.width  = sz.x + 'px';
+  canvas.style.height = sz.y + 'px';
+  canvas.style.left   = mapDiv.offsetLeft + 'px';
+  canvas.style.top    = mapDiv.offsetTop  + 'px';
+  canvas.style.display = '';
 
-  // lat/lon per pixel-rij/kolom (Mercator-correct via Leaflet)
+  // lat/lon per pixel-rij en -kolom (Mercator-correct via Leaflet)
   const lats = new Float32Array(sz.y);
   const lons  = new Float32Array(sz.x);
   for (let py = 0; py < sz.y; py++) lats[py] = nlMap.containerPointToLatLng([0, py]).lat;
   for (let px = 0; px < sz.x; px++) lons[px]  = nlMap.containerPointToLatLng([px, 0]).lng;
 
   const ctx  = canvas.getContext('2d');
-  const STEP = 4;   // rasterstap px — groter=sneller/grover, kleiner=vloeiender
+  const STEP = 4;
 
   ctx.clearRect(0, 0, sz.x, sz.y);
   ctx.save();
 
-  // Clip EERST instellen op NL-polygon, dan tekenen
-  // ctx.clip() werkt wél samen met fillRect (anders dan met putImageData)
+  // Clip op NL-polygon zodat kleurveld stopt aan de landsgrens
   ctx.beginPath();
   NL_POLY.forEach((c, i) => {
     const pt = nlMap.latLngToContainerPoint(L.latLng(c[0], c[1]));
@@ -1386,15 +1381,14 @@ function renderNlInterpolation() {
   ctx.closePath();
   ctx.clip();
 
-  ctx.globalAlpha = 0.70;
+  ctx.globalAlpha = 0.72;
 
+  // IDW raster: voor elke cel de gewogen gemiddelde kleur berekenen
   for (let py = 0; py < sz.y; py += STEP) {
-    const lat    = lats[Math.min(py, sz.y - 1)];
+    const lat    = lats[py];
     const cosLat = Math.cos(lat * Math.PI / 180);
     for (let px = 0; px < sz.x; px += STEP) {
-      const lon = lons[Math.min(px, sz.x - 1)];
-
-      // IDW met macht=2 (gewicht = 1/d², geen sqrt nodig)
+      const lon = lons[px];
       let wSum = 0, r = 0, g = 0, b = 0, exact = null;
       for (const p of pts) {
         const dy = (lat - p.lat) * 111.0;
@@ -1408,7 +1402,6 @@ function renderNlInterpolation() {
       const ri = exact ? exact[0] : Math.round(r / wSum);
       const gi = exact ? exact[1] : Math.round(g / wSum);
       const bi = exact ? exact[2] : Math.round(b / wSum);
-
       ctx.fillStyle = `rgb(${ri},${gi},${bi})`;
       ctx.fillRect(px, py, STEP, STEP);
     }
