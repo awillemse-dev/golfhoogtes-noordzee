@@ -1168,11 +1168,9 @@ def get_nl_border():
         return _nl_border_cache
     urls = [
         "https://service.pdok.nl/kadaster/bestuurlijkegebieden/wfs/v1_0"
-        "?service=WFS&version=2.0.0&request=GetFeature&typeName=Landsgrens"
+        "?service=WFS&version=2.0.0&request=GetFeature"
+        "&typeName=bestuurlijkegebieden:Landgebied"
         "&srsName=EPSG:4326&outputFormat=application/json",
-        "https://geodata.nationaalgeoregister.nl/bestuurlijkegrenzen/ows"
-        "?service=WFS&version=1.1.0&request=GetFeature"
-        "&typeName=bestuurlijkegrenzen:Landsgrens&outputFormat=application/json",
     ]
     for url in urls:
         try:
