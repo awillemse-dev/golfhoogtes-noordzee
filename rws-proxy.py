@@ -1202,6 +1202,11 @@ def fetch_knmi_data():
             v = s.get(key)
             return int(v) if v is not None and v != "" else None
 
+        # Sla stations zonder temperatuurdata over
+        temp = fval("temperature")
+        if temp is None:
+            continue
+
         dd_raw = ival("winddirectiondegrees")
         dd     = None if dd_raw in (0, 990) else dd_raw
         vv_m   = fval("visibility")
@@ -1216,7 +1221,7 @@ def fetch_knmi_data():
                 "station_id": str(s.get("stationid", "")),
                 "bron":       "Buienradar/KNMI",
                 "tijdstip":   ts,
-                "ta":   fval("temperature"),
+                "ta":   temp,
                 "ff":   fval("windspeed"),
                 "dd":   dd,
                 "rh":   fval("humidity"),
