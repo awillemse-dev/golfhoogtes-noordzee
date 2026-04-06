@@ -1184,6 +1184,14 @@ def fetch_knmi_data():
             continue
 
         naam = s.get("stationname", "").replace("Meetstation ", "")
+
+        # Sla offshore/zee-platforms over (Lichteiland, Europlatform, K13, etc.)
+        naam_l = naam.lower()
+        if any(kw in naam_l for kw in (
+            "lichteiland", "europlatform", "k13", "meetpost", "platform",
+            "roughness", "north sea", "noordzee",
+        )):
+            continue
         ts   = s.get("timestamp", now.isoformat())
 
         def fval(key):

@@ -396,7 +396,26 @@
       margin-left: auto;
     }
 
-    #nl-map { flex: 1; }
+    /* Wrapper centreert de kaart en geeft hem een portret-aspect passend bij NL */
+    #nl-map-outer {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    #nl-map {
+      /* NL-vasteland: ~295km N-Z, ~240km O-W → W/H ≈ 0.81
+         aspect-ratio dwingt de container tot de juiste portret-verhouding,
+         zodat fitBounds het hele frame vult zonder lege randen. */
+      aspect-ratio: 4 / 5;
+      height: 100%;
+      max-height: 100%;
+      max-width: 100%;
+      min-height: 0;
+    }
 
     /* KNMI popup */
     .nl-popup-grid {
@@ -564,7 +583,9 @@
         </select>
         <span id="nl-info">Klik op een station voor alle meetwaarden</span>
       </div>
-      <div id="nl-map"></div>
+      <div id="nl-map-outer">
+        <div id="nl-map"></div>
+      </div>
     </div>
 
     <!-- Grafiekpaneel -->
@@ -944,6 +965,7 @@ function selectSection(section) {
     document.getElementById('chart-panel').classList.remove('open');
     clearMarkers(); clearTempMarkers(); clearWindMarkers();
     // Kaart initialiseren (eenmalig) + data laden
+    // 80ms wachten zodat CSS aspect-ratio reflow klaar is vóór Leaflet init
     setTimeout(() => {
       initNlMap();
       if (!knmiData) {
@@ -956,7 +978,7 @@ function selectSection(section) {
         setStatus('ok', `${knmiData.aantalStations} stations · ${t}`);
         startCountdown();
       }
-    }, 30);
+    }, 80);
   } else {
     nav.style.display        = 'none';
     mapEl.style.display      = 'none';
@@ -1417,6 +1439,14 @@ function renderNlMarkers() {
     marker.addTo(nlMap);
     nlMarkers.push(marker);
   });
+
+  // Pas kaartvenster strak aan op werkelijke stationslocaties
+  if (nlMarkers.length > 0) {
+    setTimeout(() => {
+      nlMap.invalidateSize();
+      nlMap.fitBounds(L.featureGroup(nlMarkers).getBounds().pad(0.01), { padding: [4, 4] });
+    }, 50);
+  }
 }
 
 async function fetchKnmiData() {
@@ -1443,6 +1473,7 @@ function onNlParamChange() {
 
 function initNlMap() {
   if (nlMap) { nlMap.invalidateSize(); return; }
+
   nlMap = L.map('nl-map', {
     center:          [52.3, 5.3],
     zoom:            7,
@@ -1464,9 +1495,10 @@ function initNlMap() {
     { attribution: '', maxZoom: 17, opacity: 0.8 }
   ).addTo(nlMap);
 
-  const NL_BOUNDS = [[50.4, 3.0], [53.8, 7.5]];
-  nlMap.fitBounds(NL_BOUNDS);
-  nlMap.setMaxBounds(NL_BOUNDS.map((c, i) => [c[0] + (i ? 0.5 : -0.5), c[1] + (i ? 0.5 : -0.5)]));
+  // Strak begrensd op NL-vasteland; renderNlMarkers verfijnt dit na data-load
+  const NL_BOUNDS = [[50.75, 3.35], [53.55, 7.25]];
+  nlMap.fitBounds(NL_BOUNDS, { padding: [4, 4] });
+  nlMap.setMaxBounds([[49.5, 1.5], [54.5, 9.0]]);
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
