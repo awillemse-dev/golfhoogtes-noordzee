@@ -1157,6 +1157,38 @@ def fetch_wind_history(rws_code, naam):
     return {"code": f"rws.wind.{rws_code.lower()}", "naam": naam, "data": data}
 
 
+# ── Nederland landsgrens (PDOK) ──────────────────────────────────────────────
+
+_nl_border_cache = None
+_nl_border_time  = 0
+
+def get_nl_border():
+    global _nl_border_cache, _nl_border_time
+    if _nl_border_cache and (time.time() - _nl_border_time) < 86400:
+        return _nl_border_cache
+    urls = [
+        "https://service.pdok.nl/kadaster/bestuurlijkegebieden/wfs/v1_0"
+        "?service=WFS&version=2.0.0&request=GetFeature&typeName=Landsgrens"
+        "&srsName=EPSG:4326&outputFormat=application/json",
+        "https://geodata.nationaalgeoregister.nl/bestuurlijkegrenzen/ows"
+        "?service=WFS&version=1.1.0&request=GetFeature"
+        "&typeName=bestuurlijkegrenzen:Landsgrens&outputFormat=application/json",
+    ]
+    for url in urls:
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            print(f"[NL-border] Geladen ({len(str(data))} bytes)")
+            _nl_border_cache = data
+            _nl_border_time  = time.time()
+            return data
+        except Exception as e:
+            print(f"[NL-border] Fout: {e}")
+    return None
+
 # ── Nederland actuele waarnemingen (Buienradar/KNMI) ─────────────────────────
 
 _knmi_cache = None
@@ -1410,6 +1442,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_cors()
                 self.end_headers()
                 self.wfile.write(body)
+
+        # ── /api/nl-border ───────────────────────────────────────────────
+        elif path == "/api/nl-border":
+            data = get_nl_border()
+            if data:
+                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type",   "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control",  "public, max-age=86400")
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(503)
+                self.send_cors()
+                self.end_headers()
 
         # ── /api/history?code=... ────────────────────────────────────────
         elif path == "/api/history":
