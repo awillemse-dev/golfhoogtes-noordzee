@@ -579,8 +579,8 @@
         <span id="nl-info">Klik op een station voor alle meetwaarden</span>
       </div>
       <div id="nl-map-outer">
-        <div id="nl-map"></div>
-        <canvas id="nl-interp-canvas" style="position:absolute;top:0;left:0;pointer-events:none;z-index:9999;display:none;"></canvas>
+        <canvas id="nl-interp-canvas" style="position:absolute;top:0;left:0;pointer-events:none;display:none;"></canvas>
+        <div id="nl-map" style="position:relative;z-index:1;"></div>
       </div>
     </div>
 
@@ -1560,35 +1560,37 @@ function nlColor(param, val) {
 }
 
 function makeNlIcon(param, val) {
-  const color = nlColor(param, val);
   let label;
   if (val === null || val === undefined) {
     label = '–';
-  } else if (param === 'dd')             { label = ddLabel(val); }
-  else if (param === 'pp')               { label = Math.round(val); }
-  else if (param === 'qg')               { label = Math.round(val); }
-  else if (param === 'R1H')              { label = val.toFixed(1); }
-  else if (param === 'vv')               { label = val.toFixed(1); }
-  else                                   { label = val.toFixed(1); }
+  } else if (param === 'dd')  { label = ddLabel(val); }
+  else if (param === 'pp')    { label = Math.round(val); }
+  else if (param === 'qg')    { label = Math.round(val); }
+  else if (param === 'R1H')   { label = val.toFixed(1); }
+  else if (param === 'vv')    { label = val.toFixed(1); }
+  else                        { label = val.toFixed(1); }
 
-  const w  = param === 'pp' ? 54 : 42;
-  const ht = 22;
-  const textCol = (param === 'n' && val !== null && val >= 5) ? '#1e293b' :
-                  (param === 'qg' && val !== null && val > 300) ? '#1e293b' : 'white';
+  // Geen box — dikgedrukte witte tekst met zwarte omlijning, goed leesbaar op elk kleurveld
   return L.divIcon({
     className: '',
-    iconSize:    [w, ht],
-    iconAnchor:  [w / 2, ht / 2],
-    popupAnchor: [0, -(ht / 2 + 8)],
-    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${ht}">
-      <rect x="1" y="1" width="${w-2}" height="${ht-2}" rx="5"
-        fill="${color}" fill-opacity="0.92"/>
-      <rect x="1" y="1" width="${w-2}" height="${ht-2}" rx="5"
-        fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
-      <text x="${w/2}" y="${ht/2+3.8}" text-anchor="middle"
-        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="10"
-        font-weight="700" fill="${textCol}">${label}</text>
-    </svg>`,
+    iconSize:    [44, 18],
+    iconAnchor:  [22, 9],
+    popupAnchor: [0, -14],
+    html: `<div style="
+      font-family:Inter,Segoe UI,system-ui,sans-serif;
+      font-size:12px;
+      font-weight:800;
+      color:#fff;
+      text-shadow:
+        -1px -1px 0 #000,  1px -1px 0 #000,
+        -1px  1px 0 #000,  1px  1px 0 #000,
+         0px  2px 3px rgba(0,0,0,0.6);
+      white-space:nowrap;
+      line-height:1;
+      text-align:center;
+      pointer-events:auto;
+      cursor:pointer;
+    ">${label}</div>`,
   });
 }
 
