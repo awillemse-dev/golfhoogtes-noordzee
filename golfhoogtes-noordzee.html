@@ -579,8 +579,7 @@
         <span id="nl-info">Klik op een station voor alle meetwaarden</span>
       </div>
       <div id="nl-map-outer">
-        <canvas id="nl-interp-canvas" style="position:absolute;top:0;left:0;pointer-events:none;display:none;"></canvas>
-        <div id="nl-map" style="position:relative;z-index:1;"></div>
+        <div id="nl-map"></div>
       </div>
     </div>
 
@@ -1416,14 +1415,11 @@ function renderNlInterpolation() {
   });
   if (pts.length < 3) return;
 
-  // Canvas positioneren over #nl-map
-  const mapDiv = document.getElementById('nl-map');
+  // Canvas zit in Leaflet interpPane — afmetingen gelijkstellen aan kaart
   const sz = nlMap.getSize();
   if (!sz.x || !sz.y) return;
-  canvas.width  = sz.x; canvas.height = sz.y;
-  canvas.style.width  = sz.x + 'px'; canvas.style.height = sz.y + 'px';
-  canvas.style.left   = mapDiv.offsetLeft + 'px';
-  canvas.style.top    = mapDiv.offsetTop  + 'px';
+  canvas.width  = sz.x;
+  canvas.height = sz.y;
   canvas.style.display = '';
 
   // lat/lon lookup-tabellen per pixel (Mercator-correct via Leaflet)
@@ -1700,6 +1696,17 @@ function initNlMap() {
     'https://services.arcgisonline.com/arcgis/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}',
     { attribution: '', maxZoom: 17, opacity: 0.8 }
   ).addTo(nlMap);
+
+  // Custom pane voor interpolatie-canvas: z-index 350
+  // → boven tilePane (200), onder markerPane (600)
+  nlMap.createPane('interpPane');
+  nlMap.getPane('interpPane').style.zIndex        = '350';
+  nlMap.getPane('interpPane').style.pointerEvents = 'none';
+
+  const canvas = document.createElement('canvas');
+  canvas.id = 'nl-interp-canvas';
+  Object.assign(canvas.style, { display: 'none', position: 'absolute', top: '0', left: '0' });
+  nlMap.getPane('interpPane').appendChild(canvas);
 
   // Strak begrensd op NL-vasteland zonder offshore stations
   const NL_BOUNDS = [[50.75, 3.35], [53.55, 7.25]];
