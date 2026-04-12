@@ -671,13 +671,32 @@ function tempHistoryUrl(code) { return `${PROXY_URL}/api/temp-history?code=${enc
 
 // ── Windsnelheid ──────────────────────────────────────────────────────────────
 
-function windColor(w) {
+// w altijd in m/s intern; conversie + Bft alleen voor weergave
+function msToBft(w) {
+  if (w === null || w === undefined) return null;
+  if (w < 0.3)  return 0;
+  if (w < 1.6)  return 1;
+  if (w < 3.4)  return 2;
+  if (w < 5.5)  return 3;
+  if (w < 8.0)  return 4;
+  if (w < 10.8) return 5;
+  if (w < 13.9) return 6;
+  if (w < 17.2) return 7;
+  if (w < 20.8) return 8;
+  if (w < 24.5) return 9;
+  if (w < 28.5) return 10;
+  if (w < 32.7) return 11;
+  return 12;
+}
+function msToKt(w) { return w !== null && w !== undefined ? w * 1.94384 : null; }
+
+function windColor(w) {   // w in m/s
   if (w === null || isNaN(w)) return '#3d5167';
-  if (w < 3.4)  return '#22c55e';   // Bft 0-1
-  if (w < 5.5)  return '#84cc16';   // Bft 2-3
+  if (w < 3.4)  return '#22c55e';   // Bft 0-2
+  if (w < 5.5)  return '#84cc16';   // Bft 3
   if (w < 8.0)  return '#eab308';   // Bft 4-5
-  if (w < 10.8) return '#f97316';   // Bft 6-7
-  if (w < 13.9) return '#ef4444';   // Bft 8
+  if (w < 10.8) return '#f97316';   // Bft 6
+  if (w < 13.9) return '#ef4444';   // Bft 7-8
   return '#7f1d1d';                  // Bft 9+
 }
 
@@ -690,24 +709,39 @@ function degToCompass(deg) {
 function makeWindIcon(w, dir) {
   const sc      = iconScale();
   const color   = windColor(w);
-  const speed   = w !== null && w !== undefined ? w.toFixed(1) : '–';
+  const kt      = msToKt(w);
+  const bft     = msToBft(w);
   const compass = degToCompass(dir);
   const hasDir  = compass !== null;
 
-  // Layout: [compass | speed] when direction known, else just [speed]
-  const ww = Math.round((hasDir ? 54 : 40) * sc);
-  const ht = Math.round(24 * sc);
-  const fs = Math.max(7, Math.round(10 * sc));
-  const rx = Math.max(2, Math.round(5 * sc));
-  const divW = Math.round(22 * sc);  // width of direction section
+  // Hoofdtekst: bijv "17 kt"  Subtekst: "(Bft 4)"
+  const speedLabel = kt !== null ? Math.round(kt) + ' kt' : '–';
+  const bftLabel   = bft !== null ? `(${bft})` : '';
+
+  // Iets groter dan voorheen: basisblok 30px hoog, breed genoeg voor alle tekst
+  const ht   = Math.round(30 * sc);
+  const dirW = hasDir ? Math.round(24 * sc) : 0;
+  const valW = Math.round(52 * sc);   // snelheid + bft sectie
+  const ww   = dirW + valW;
+  const fsMain = Math.max(8,  Math.round(11 * sc));
+  const fsSub  = Math.max(6,  Math.round(8  * sc));
+  const rx   = Math.max(2, Math.round(5 * sc));
 
   const dirSection = hasDir ? `
-    <text x="${divW / 2}" y="${ht/2 + 3.8}" text-anchor="middle"
-      font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fs}"
-      font-weight="700" fill="white" opacity="1">${compass}</text>
-    <line x1="${divW}" y1="3" x2="${divW}" y2="${ht-3}"
+    <text x="${dirW / 2}" y="${ht * 0.62}" text-anchor="middle"
+      font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fsMain}"
+      font-weight="700" fill="white">${compass}</text>
+    <line x1="${dirW}" y1="3" x2="${dirW}" y2="${ht - 3}"
       stroke="rgba(255,255,255,0.35)" stroke-width="1"/>` : '';
-  const speedX = hasDir ? divW + (ww - divW) / 2 : ww / 2;
+
+  const cx = dirW + valW / 2;
+  const valSection = `
+    <text x="${cx}" y="${ht * 0.50}" text-anchor="middle" dominant-baseline="middle"
+      font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fsMain}"
+      font-weight="700" fill="white">${speedLabel}</text>
+    <text x="${cx}" y="${ht * 0.85}" text-anchor="middle" dominant-baseline="middle"
+      font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fsSub}"
+      font-weight="400" fill="rgba(255,255,255,0.75)">${bftLabel}</text>`;
 
   return L.divIcon({
     className:   '',
@@ -719,10 +753,7 @@ function makeWindIcon(w, dir) {
         fill="${color}" fill-opacity="0.88"/>
       <rect x="1" y="1" width="${ww-2}" height="${ht-2}" rx="${rx}"
         fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>
-      ${dirSection}
-      <text x="${speedX}" y="${ht/2 + 3.8}" text-anchor="middle"
-        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fs}"
-        font-weight="700" fill="white">${speed}</text>
+      ${dirSection}${valSection}
     </svg>`,
   });
 }
@@ -774,9 +805,11 @@ async function openWindChart(code, naam, huidigWind, tijdstip) {
 
   document.getElementById('chart-naam').textContent      = naam || code;
   document.getElementById('chart-subtitle').textContent  = 'Windsnelheid afgelopen 24 uur';
-  document.getElementById('chart-hm0-label').textContent = 'm/s';
+  document.getElementById('chart-hm0-label').textContent = 'kt';
   const color = windColor(huidigWind);
-  document.getElementById('chart-hm0').textContent  = huidigWind !== null ? huidigWind.toFixed(1) : '–';
+  const huidigKt = msToKt(huidigWind);
+  const huidigBft = msToBft(huidigWind);
+  document.getElementById('chart-hm0').textContent  = huidigKt !== null ? `${Math.round(huidigKt)} kt (Bft ${huidigBft})` : '–';
   document.getElementById('chart-hm0').style.color  = color;
   document.getElementById('chart-time').textContent = formatTijdstip(tijdstip);
 
@@ -797,7 +830,7 @@ async function openWindChart(code, naam, huidigWind, tijdstip) {
     canvasEl.style.display  = 'block';
 
     const labels = json.data.map(d => new Date(d.t));
-    const values = json.data.map(d => d.v);
+    const values = json.data.map(d => Math.round(msToKt(d.v) * 10) / 10);  // m/s → kt
     const maxVal = Math.max(...values);
 
     // Windrichting dataset (rechter as)
@@ -817,12 +850,14 @@ async function openWindChart(code, naam, huidigWind, tijdstip) {
           const compass = dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
           return ` ${compass} (${deg}°)`;
         }
-        return ` ${item.parsed.y.toFixed(1)} m/s`;
+        const kt = item.parsed.y;
+        const bft = msToBft(kt / 1.94384);
+        return ` ${kt.toFixed(1)} kt (Bft ${bft})`;
       },
     };
     opts.scales.y.min             = 0;
-    opts.scales.y.suggestedMax    = Math.max(maxVal * 1.2, 5);
-    opts.scales.y.ticks.callback  = v => v.toFixed(1) + ' m/s';
+    opts.scales.y.suggestedMax    = Math.max(maxVal * 1.2, 10);
+    opts.scales.y.ticks.callback  = v => Math.round(v) + ' kt';
 
     // Rechter as voor windrichting (0–360°)
     opts.scales.yDir = {
