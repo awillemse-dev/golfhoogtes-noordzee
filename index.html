@@ -716,7 +716,7 @@ function makeWindIcon(w, dir) {
 
   // Hoofdtekst: bijv "17 kt"  Subtekst: "(Bft 4)"
   const speedLabel = kt !== null ? Math.round(kt) + ' kt' : '–';
-  const bftLabel   = bft !== null ? `(${bft})` : '';
+  const bftLabel   = bft !== null ? `${bft} bft` : '';
 
   // Iets groter dan voorheen: basisblok 30px hoog, breed genoeg voor alle tekst
   const ht   = Math.round(30 * sc);
