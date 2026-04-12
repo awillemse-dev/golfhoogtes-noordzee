@@ -414,6 +414,124 @@ LABOUEE_STATIONS = {
 
 LABOUEE_BASE = "https://labouee.app/data/buoys"
 
+# ── NDBC: NOAA boeien (Noord-Atlantisch / Europees gebied) ───────────────────
+#
+# Bron: NOAA National Data Buoy Center, https://www.ndbc.noaa.gov/
+# URL:  https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt
+# Formaat: space-delimited, eerste twee regels zijn headers
+# Licentie: US Government Open Data (publiek domein)
+#
+# Filter: alleen boeien in het Europese / Noord-Atlantische gebied
+#   lat 40–70 N, lon -40 – 15 O  → relevante NDBC/WMO boeien voor dit kaartgebied
+# Kolommen: 0=STN 1=LAT 2=LON 3=YYYY 4=MM 5=DD 6=hh 7=mm
+#           8=WDIR 9=WSPD 10=GST 11=WVHT 12=DPD 13=APD 14=MWD
+#           15=PRES 16=ATMP 17=WTMP ...
+# MM = ontbrekende waarde
+
+NDBC_URL = "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
+
+def fetch_ndbc_history(station_id):
+    """Haal 24-uursgeschiedenis op voor een NDBC-station via realtime2 tekstbestand."""
+    url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id.upper()}.txt"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        lines = r.read().decode("utf-8", errors="replace").splitlines()
+
+    now    = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=24)
+    data   = []
+
+    for line in lines:
+        if line.startswith("#") or not line.strip():
+            continue
+        cols = line.split()
+        if len(cols) < 12:
+            continue
+        try:
+            ts = datetime(int(cols[0]), int(cols[1]), int(cols[2]),
+                          int(cols[3]), int(cols[4]), tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if ts < cutoff:
+            continue
+        try:
+            hm0 = None if cols[8] == "MM" else round(float(cols[8]), 2)
+        except (ValueError, IndexError):
+            hm0 = None
+        if hm0 is not None:
+            data.append({"t": ts.isoformat(), "v": hm0})
+
+    data.sort(key=lambda x: x["t"])
+    return {"code": f"ndbc.{station_id.lower()}", "naam": f"NDBC {station_id}", "data": data}
+
+
+def fetch_ndbc_data():
+    req = urllib.request.Request(
+        NDBC_URL,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; ZeedataProxy/1.0)"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as r:
+        lines = r.read().decode("utf-8", errors="replace").splitlines()
+
+    now      = datetime.now(timezone.utc)
+    features = []
+
+    for line in lines:
+        if line.startswith("#") or not line.strip():
+            continue
+        cols = line.split()
+        if len(cols) < 12:
+            continue
+        try:
+            lat = float(cols[1])
+            lon = float(cols[2])
+        except ValueError:
+            continue
+
+        # Filter: Europees / Noord-Atlantisch gebied
+        if not (40 <= lat <= 70 and -40 <= lon <= 15):
+            continue
+
+        station_id = cols[0]
+
+        # Tijdstip
+        try:
+            tijdstip = datetime(
+                int(cols[3]), int(cols[4]), int(cols[5]),
+                int(cols[6]), int(cols[7]), tzinfo=timezone.utc
+            ).isoformat()
+            # Skip als ouder dan 3 uur
+            dt = datetime.fromisoformat(tijdstip)
+            if (now - dt).total_seconds() > 3 * 3600:
+                continue
+        except Exception:
+            tijdstip = None
+
+        # Golfhoogte (WVHT, kolom 11)
+        try:
+            hm0 = None if cols[11] == "MM" else round(float(cols[11]), 2)
+        except (ValueError, IndexError):
+            hm0 = None
+
+        # Sla boeien zonder golfdata over
+        if hm0 is None:
+            continue
+
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {
+                "code":     f"ndbc.{station_id.lower()}",
+                "naam":     f"NDBC {station_id}",
+                "hm0_m":    hm0,
+                "tijdstip": tijdstip,
+                "bron":     "NDBC/NOAA",
+            },
+        })
+
+    print(f"[NDBC] {len(features)} stations geladen")
+    return features
+
 def fetch_labouee_data():
     now      = datetime.now(timezone.utc)
     features = []
@@ -776,12 +894,13 @@ def _do_refresh():
     if _stations is None:
         _stations = fetch_hm0_stations()
 
-    # RWS, BSH, CEFAS en La Bouée parallel ophalen
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    # RWS, BSH, CEFAS, La Bouée en NDBC parallel ophalen
+    with ThreadPoolExecutor(max_workers=5) as ex:
         fut_rws     = ex.submit(fetch_latest_values, _stations)
         fut_bsh     = ex.submit(fetch_bsh_data)
         fut_cefas   = ex.submit(fetch_cefas_data)
         fut_labouee = ex.submit(fetch_labouee_data)
+        fut_ndbc    = ex.submit(fetch_ndbc_data)
 
         waarnemingen = fut_rws.result()
         rws_geojson  = build_geojson(_stations, waarnemingen)
@@ -801,10 +920,15 @@ def _do_refresh():
         except Exception as e:
             print(f"[LaBouée] Fout: {e}")
 
+        try:
+            rws_geojson["features"].extend(fut_ndbc.result())
+        except Exception as e:
+            print(f"[NDBC] Fout: {e}")
+
     rws_geojson["aantalStations"] = len(rws_geojson["features"])
     _cache      = rws_geojson
     _cache_time = time.time()
-    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée)")
+    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée + NDBC)")
 
 
 def get_data():
@@ -1489,6 +1613,9 @@ class Handler(BaseHTTPRequestHandler):
                 elif code.startswith("labouee."):
                     slug = code[8:]
                     data = get_labouee_history(slug)
+                elif code.startswith("ndbc."):
+                    station_id = code[5:].upper()
+                    data = fetch_ndbc_history(station_id)
                 else:
                     data = fetch_history(code)
                 body = json.dumps(data, ensure_ascii=False).encode("utf-8")
