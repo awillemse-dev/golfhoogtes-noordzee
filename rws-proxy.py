@@ -1384,11 +1384,229 @@ def get_temp_data():
     except Exception as e:
         print(f"[CEFAS temp] Fout: {e}")
 
+    # ── NDBC zeewatertemperatuur (WTMP kolom 18) ──────────────────────
+    try:
+        ndbc_temp = _fetch_ndbc_temp()
+        features.extend(ndbc_temp)
+        print(f"[NDBC temp] {len(ndbc_temp)} stations")
+    except Exception as e:
+        print(f"[NDBC temp] Fout: {e}")
+
+    # ── LaBouée zeewatertemperatuur ───────────────────────────────────
+    try:
+        lb_temp = _fetch_labouee_temp()
+        features.extend(lb_temp)
+        print(f"[LaBouée temp] {len(lb_temp)} stations")
+    except Exception as e:
+        print(f"[LaBouée temp] Fout: {e}")
+
+    # ── CDIP zeewatertemperatuur (sstSeaSurfaceTemperature) ───────────
+    try:
+        cdip_temp = _fetch_cdip_temp()
+        features.extend(cdip_temp)
+        print(f"[CDIP temp] {len(cdip_temp)} stations")
+    except Exception as e:
+        print(f"[CDIP temp] Fout: {e}")
+
+    # ── Irish Marine Institute zeewatertemperatuur ────────────────────
+    try:
+        imi_temp = _fetch_imi_temp()
+        features.extend(imi_temp)
+        print(f"[IMI temp] {len(imi_temp)} stations")
+    except Exception as e:
+        print(f"[IMI temp] Fout: {e}")
+
     _temp_cache = {"type": "FeatureCollection", "features": features,
                    "opgehaald": now.isoformat(), "aantalStations": len(features)}
     _temp_time  = time.time()
     print(f"[TEMP TOTAAL] {len(features)} stations")
     return _temp_cache
+
+
+def _fetch_ndbc_temp():
+    """Zeewatertemperatuur (WTMP, col 18) uit NDBC latest_obs.txt (al in geheugen via fetch_ndbc_data)."""
+    # Haal bestand opnieuw op (apart gecached via _ndbc_wind_features al in memory,
+    # maar WTMP niet opgeslagen — snel opnieuw ophalen, file is al gecached op OS-niveau)
+    req = urllib.request.Request(NDBC_URL, headers={"User-Agent": "Mozilla/5.0 (compatible; ZeedataProxy/1.0)"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        lines = r.read().decode("utf-8", errors="replace").splitlines()
+
+    now = datetime.now(timezone.utc)
+    features = []
+    for line in lines:
+        if line.startswith("#") or not line.strip():
+            continue
+        cols = line.split()
+        if len(cols) < 19:
+            continue
+        if cols[18] == "MM":
+            continue
+        try:
+            lat  = float(cols[1]); lon = float(cols[2])
+            wtmp = round(float(cols[18]), 1)
+            if not (-2 < wtmp < 35):
+                continue
+            tijdstip = datetime(int(cols[3]), int(cols[4]), int(cols[5]),
+                                int(cols[6]), int(cols[7]), tzinfo=timezone.utc)
+            if (now - tijdstip).total_seconds() > 6 * 3600:
+                continue
+            stn = cols[0]
+        except (ValueError, IndexError):
+            continue
+        features.append({"type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {
+                "code":     f"ndbc.temp.{stn.lower()}",
+                "naam":     f"NDBC {stn}",
+                "temp_c":   wtmp,
+                "tijdstip": tijdstip.isoformat(),
+                "bron":     "NDBC/NOAA",
+            }})
+    return features
+
+
+def _fetch_labouee_temp():
+    """Zeewatertemperatuur uit LaBouée buoys (water_temp_c veld)."""
+    features = []
+    for slug, (naam, lat, lon) in LABOUEE_STATIONS.items():
+        try:
+            url = f"{LABOUEE_BASE}/{slug}/latest.json"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read())
+            if data.get("status") != "ok":
+                continue
+            reading = data.get("latest_reading", {})
+            temp_c  = reading.get("water_temp_c")
+            if temp_c is None or float(temp_c) <= 0:
+                continue
+            temp_c = round(float(temp_c), 1)
+            if not (-2 < temp_c < 35):
+                continue
+            tijdstip = reading.get("measured_at", "")
+            features.append({"type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {
+                    "code":     f"labouee.temp.{slug}",
+                    "naam":     naam,
+                    "temp_c":   temp_c,
+                    "tijdstip": tijdstip,
+                    "bron":     "LaBouee",
+                }})
+        except Exception:
+            continue
+    return features
+
+
+def _fetch_cdip_temp():
+    """Zeewatertemperatuur uit CDIP stations via THREDDS OPeNDAP (sstSeaSurfaceTemperature)."""
+    import re as _re
+    try:
+        req = urllib.request.Request(CDIP_CATALOG, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+        r   = urllib.request.urlopen(req, timeout=15)
+        station_files = _re.findall(r'name="(\d+p1_rt\.nc)"', r.read().decode())
+    except Exception as e:
+        print(f"[CDIP temp] catalog fout: {e}")
+        return []
+
+    def fetch_stn(stn_file):
+        stn_id = stn_file.replace("_rt.nc", "")
+        try:
+            dds_url = f"{CDIP_ODAP}/{stn_file}.dds"
+            r_dds   = urllib.request.urlopen(urllib.request.Request(dds_url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"}), timeout=10)
+            dds     = r_dds.read().decode()
+            m = _re.search(r'sstSeaSurfaceTemperature\[sstTime = (\d+)\]', dds)
+            if not m: return None
+            n = int(m.group(1)); last = n - 1
+            # Also get lat/lon from waveHs section
+            mw = _re.search(r'waveHs\[waveTime = (\d+)\]', dds)
+            wlast = int(mw.group(1)) - 1 if mw else 0
+
+            data_url = (f"{CDIP_ODAP}/{stn_file}.ascii?"
+                        f"sstSeaSurfaceTemperature[{last}:1:{last}],"
+                        f"sstTime[{last}:1:{last}],"
+                        f"metaDeployLatitude[0:1:0],"
+                        f"metaDeployLongitude[0:1:0],"
+                        f"metaStationName[0:1:0]")
+            r_d  = urllib.request.urlopen(urllib.request.Request(data_url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"}), timeout=10)
+            text = r_d.read().decode()
+
+            parsed = {}; cur_key = None
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or line.startswith("Dataset") or line.startswith("}"): cur_key = None; continue
+                if ", " in line and "[" not in line:
+                    k, v = line.split(", ", 1)
+                    if "Latitude" in k:   parsed["lat"]  = v
+                    elif "Longitude" in k: parsed["lon"]  = v
+                    elif "StationName" in k: parsed["name"] = v.strip('"')
+                    cur_key = None; continue
+                if line.startswith("sstSeaSurfaceTemperature"): cur_key = "sst"
+                elif line.startswith("sstTime"):                  cur_key = "ts"
+                elif cur_key: parsed[cur_key] = line.rstrip(","); cur_key = None
+
+            sst  = float(parsed.get("sst", "nan"))
+            ts   = int(parsed.get("ts",  0))
+            lat  = float(parsed.get("lat", "nan"))
+            lon  = float(parsed.get("lon", "nan"))
+            naam = parsed.get("name", stn_id)
+
+            if not (-2 < sst < 35): return None
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180): return None
+            age = (datetime.utcnow() - datetime.utcfromtimestamp(ts)).total_seconds()
+            if age > 86400: return None
+
+            return {"type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [round(lon, 4), round(lat, 4)]},
+                "properties": {
+                    "code":     f"cdip.temp.{stn_id}",
+                    "naam":     naam,
+                    "temp_c":   round(sst, 1),
+                    "tijdstip": datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "bron":     "CDIP",
+                }}
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        results = list(ex.map(fetch_stn, station_files))
+    return [r for r in results if r is not None]
+
+
+def _fetch_imi_temp():
+    """Zeewatertemperatuur uit Irish Marine Institute ERDDAP (IWBNetwork)."""
+    from datetime import datetime, timedelta
+    start = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    url = (f"https://erddap.marine.ie/erddap/tabledap/IWBNetwork.json"
+           f"?time,latitude,longitude,station_id,SeaTemperature"
+           f"&time%3E={start}&orderByMax(%22station_id,time%22)")
+    try:
+        req  = urllib.request.Request(url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+        r    = urllib.request.urlopen(req, timeout=20)
+        data = json.loads(r.read())
+        rows = data["table"]["rows"]
+    except Exception as e:
+        print(f"[IMI temp] fetch fout: {e}")
+        return []
+
+    features = []
+    for row in rows:
+        ts_str, lat, lon, naam, temp = row
+        if temp is None or lat is None or lon is None:
+            continue
+        temp_c = round(float(temp), 1)
+        if not (-2 < temp_c < 35):
+            continue
+        features.append({"type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [round(float(lon), 4), round(float(lat), 4)]},
+            "properties": {
+                "code":     f"imi.temp.{naam.replace(' ', '_')}",
+                "naam":     naam,
+                "temp_c":   temp_c,
+                "tijdstip": ts_str,
+                "bron":     "IMI",
+            }})
+    return features
 
 
 # ── Windsnelheid (RWS) ────────────────────────────────────────────────────────
