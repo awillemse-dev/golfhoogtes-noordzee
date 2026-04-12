@@ -681,30 +681,33 @@ function windColor(w) {
   return '#7f1d1d';                  // Bft 9+
 }
 
+function degToCompass(deg) {
+  if (deg === null || deg === undefined) return null;
+  const dirs = ['N','NO','O','ZO','Z','ZW','W','NW'];
+  return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+}
+
 function makeWindIcon(w, dir) {
-  const sc    = iconScale();
-  const color = windColor(w);
-  const label = w !== null ? w.toFixed(1) : '–';
-  const hasDir = dir !== null && dir !== undefined;
-  // With arrow: wider box; without: compact
-  const ww = Math.round((hasDir ? 52 : 40) * sc), ht = Math.round(24 * sc);
+  const sc      = iconScale();
+  const color   = windColor(w);
+  const speed   = w !== null && w !== undefined ? w.toFixed(1) : '–';
+  const compass = degToCompass(dir);
+  const hasDir  = compass !== null;
+
+  // Layout: [compass | speed] when direction known, else just [speed]
+  const ww = Math.round((hasDir ? 54 : 40) * sc);
+  const ht = Math.round(24 * sc);
   const fs = Math.max(7, Math.round(10 * sc));
   const rx = Math.max(2, Math.round(5 * sc));
+  const divW = Math.round(22 * sc);  // width of direction section
 
-  // Arrow: 10px wide section on left, rotated to show wind-from direction
-  const arrowSvg = hasDir ? (() => {
-    const cx = Math.round(10 * sc), cy = ht / 2;
-    const ah = Math.round(7 * sc), aw = Math.round(4 * sc);
-    // Arrow points in wind direction (meteorological: from where wind comes)
-    const rad = (dir - 90) * Math.PI / 180;
-    const x1 = cx + ah * Math.cos(rad), y1 = cy + ah * Math.sin(rad);
-    const x2 = cx - ah * Math.cos(rad), y2 = cy - ah * Math.sin(rad);
-    const lx = cx + aw * Math.cos(rad + Math.PI/2), ly = cy + aw * Math.sin(rad + Math.PI/2);
-    const rx2 = cx + aw * Math.cos(rad - Math.PI/2), ry2 = cy + aw * Math.sin(rad - Math.PI/2);
-    return `<polygon points="${x1},${y1} ${lx},${ly} ${x2},${y2} ${rx2},${ry2}"
-      fill="white" fill-opacity="0.9"/>`;
-  })() : '';
-  const textX = hasDir ? Math.round(10 * sc) + (ww - Math.round(10 * sc)) / 2 : ww / 2;
+  const dirSection = hasDir ? `
+    <text x="${divW / 2}" y="${ht/2 + 3.8}" text-anchor="middle"
+      font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fs}"
+      font-weight="700" fill="white" opacity="1">${compass}</text>
+    <line x1="${divW}" y1="3" x2="${divW}" y2="${ht-3}"
+      stroke="rgba(255,255,255,0.35)" stroke-width="1"/>` : '';
+  const speedX = hasDir ? divW + (ww - divW) / 2 : ww / 2;
 
   return L.divIcon({
     className:   '',
@@ -716,11 +719,10 @@ function makeWindIcon(w, dir) {
         fill="${color}" fill-opacity="0.88"/>
       <rect x="1" y="1" width="${ww-2}" height="${ht-2}" rx="${rx}"
         fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>
-      ${arrowSvg}
-      ${hasDir ? `<line x1="${Math.round(10*sc)+Math.round(4*sc)}" y1="2" x2="${Math.round(10*sc)+Math.round(4*sc)}" y2="${ht-2}" stroke="rgba(255,255,255,0.25)" stroke-width="1"/>` : ''}
-      <text x="${textX}" y="${ht/2+3.8}" text-anchor="middle"
+      ${dirSection}
+      <text x="${speedX}" y="${ht/2 + 3.8}" text-anchor="middle"
         font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fs}"
-        font-weight="700" fill="white">${label}</text>
+        font-weight="700" fill="white">${speed}</text>
     </svg>`,
   });
 }

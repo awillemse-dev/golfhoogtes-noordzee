@@ -1420,33 +1420,52 @@ def _fetch_wind_stations():
 
 
 def _fetch_wind_batch(batch, station_map, now):
-    """Haal één batch windwaarnemingen op; retourneert lijst van features."""
-    try:
-        resp = rws_post("/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen", {
-            "AquoPlusWaarnemingMetadataLijst": [{"AquoMetadata": {
-                "Compartiment": {"Code": "LT"},
-                "Eenheid":      {"Code": "m/s"},
-                "Grootheid":    {"Code": "WINDSHD"},
-            }}],
-            "LocatieLijst": [{"Code": s["Code"]} for s in batch],
-        })
-    except Exception:
-        return []
+    """Haal één batch windwaarnemingen op (snelheid + richting parallel)."""
+    loc_list = [{"Code": s["Code"]} for s in batch]
 
-    best = {}
-    for w in resp.get("WaarnemingenLijst", []):
-        loc_code = (w.get("Locatie") or {}).get("Code")
-        if not loc_code:
-            continue
+    def call(grootheid, eenheid):
+        try:
+            return rws_post("/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen", {
+                "AquoPlusWaarnemingMetadataLijst": [{"AquoMetadata": {
+                    "Compartiment": {"Code": "LT"},
+                    "Eenheid":      {"Code": eenheid},
+                    "Grootheid":    {"Code": grootheid},
+                }}],
+                "LocatieLijst": loc_list,
+            })
+        except Exception:
+            return {}
+
+    def best_per_loc(resp):
+        best = {}
+        for w in resp.get("WaarnemingenLijst", []):
+            loc_code = (w.get("Locatie") or {}).get("Code")
+            if not loc_code:
+                continue
+            metingen = w.get("MetingenLijst") or []
+            tijdstip = metingen[0].get("Tijdstip") if metingen else None
+            if loc_code not in best or (tijdstip or "") > (
+                ((best[loc_code].get("MetingenLijst") or [{}])[0]).get("Tijdstip") or ""
+            ):
+                best[loc_code] = w
+        return best
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fut_spd = ex.submit(call, "WINDSHD", "m/s")
+        fut_dir = ex.submit(call, "WINDRTG", "graad")
+        best_spd = best_per_loc(fut_spd.result())
+        best_dir = best_per_loc(fut_dir.result())
+
+    # Richting per loc_code opslaan
+    dir_by_loc = {}
+    for loc_code, w in best_dir.items():
         metingen = w.get("MetingenLijst") or []
-        tijdstip = metingen[0].get("Tijdstip") if metingen else None
-        if loc_code not in best or (tijdstip or "") > (
-            ((best[loc_code].get("MetingenLijst") or [{}])[0]).get("Tijdstip") or ""
-        ):
-            best[loc_code] = w
+        waarde   = (metingen[0].get("Meetwaarde") or {}).get("Waarde_Numeriek") if metingen else None
+        if waarde is not None:
+            dir_by_loc[loc_code] = int(round(waarde)) % 360
 
     features = []
-    for loc_code, w in best.items():
+    for loc_code, w in best_spd.items():
         station  = station_map.get(loc_code) or w.get("Locatie") or {}
         lat = station.get("Lat") or (w.get("Locatie") or {}).get("Lat")
         lon = station.get("Lon") or (w.get("Locatie") or {}).get("Lon")
@@ -1476,6 +1495,7 @@ def _fetch_wind_batch(batch, station_map, now):
                 "rws_code": loc_code,
                 "naam":     naam,
                 "wind_ms":  wind_ms,
+                "wind_dir": dir_by_loc.get(loc_code),
                 "tijdstip": tijdstip,
                 "bron":     "RWS",
             },
