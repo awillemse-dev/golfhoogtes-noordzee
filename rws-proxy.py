@@ -963,6 +963,60 @@ def get_rws_temp_history(code):
     return {"code": code, "naam": code, "data": data}
 
 
+IMI_ERDDAP = "https://erddap.marine.ie/erddap/tabledap"
+_imi_cache = None
+_imi_time  = 0
+
+def fetch_imi_data():
+    """Fetch wave data from Irish Marine Institute ERDDAP (IWBNetwork - NRT buoys)."""
+    global _imi_cache, _imi_time
+    now = time.time()
+    if _imi_cache is not None and (now - _imi_time) < 3600:
+        return _imi_cache
+
+    from datetime import datetime, timedelta
+    start = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Use %3E= encoding for >= because this ERDDAP version rejects the raw character
+    url = (f"{IMI_ERDDAP}/IWBNetwork.json"
+           f"?time,latitude,longitude,station_id,WaveHeight"
+           f"&time%3E={start}"
+           f"&orderByMax(%22station_id,time%22)")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+        r = urllib.request.urlopen(req, timeout=20)
+        data = json.loads(r.read())
+        rows = data["table"]["rows"]
+    except Exception as e:
+        print(f"[IMI] fetch fout: {e}")
+        return _imi_cache or []
+
+    features = []
+    for row in rows:
+        ts_str, lat, lon, naam, hs_cm = row
+        if hs_cm is None or lat is None or lon is None:
+            continue
+        hs_m = round(float(hs_cm) / 100.0, 2)  # unit is cm
+        if not (0 < hs_m < 30):
+            continue
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [round(float(lon), 4), round(float(lat), 4)]},
+            "properties": {
+                "code":     f"imi.{naam.replace(' ', '_')}",
+                "naam":     naam,
+                "hm0_m":   hs_m,
+                "tijdstip": ts_str,
+                "bron":    "IMI",
+            },
+        })
+
+    print(f"[IMI] {len(features)} Ierse NRT golfboeien opgehaald")
+    _imi_cache = features
+    _imi_time  = now
+    return features
+
+
 CDIP_THREDDS  = "https://thredds.cdip.ucsd.edu/thredds"
 CDIP_CATALOG  = CDIP_THREDDS + "/catalog/cdip/realtime/catalog.xml"
 CDIP_ODAP     = CDIP_THREDDS + "/dodsC/cdip/realtime"
@@ -1094,8 +1148,8 @@ def _do_refresh():
     if _stations is None:
         _stations = fetch_hm0_stations()
 
-    # RWS, BSH, CEFAS, La Bouée, NDBC, FMI en CDIP parallel ophalen
-    with ThreadPoolExecutor(max_workers=7) as ex:
+    # RWS, BSH, CEFAS, La Bouée, NDBC, FMI, CDIP en IMI parallel ophalen
+    with ThreadPoolExecutor(max_workers=8) as ex:
         fut_rws     = ex.submit(fetch_latest_values, _stations)
         fut_bsh     = ex.submit(fetch_bsh_data)
         fut_cefas   = ex.submit(fetch_cefas_data)
@@ -1103,6 +1157,7 @@ def _do_refresh():
         fut_ndbc    = ex.submit(fetch_ndbc_data)
         fut_fmi     = ex.submit(fetch_fmi_data)
         fut_cdip    = ex.submit(fetch_cdip_data)
+        fut_imi     = ex.submit(fetch_imi_data)
 
         waarnemingen = fut_rws.result()
         rws_geojson  = build_geojson(_stations, waarnemingen)
@@ -1137,10 +1192,15 @@ def _do_refresh():
         except Exception as e:
             print(f"[CDIP] Fout: {e}")
 
+        try:
+            rws_geojson["features"].extend(fut_imi.result())
+        except Exception as e:
+            print(f"[IMI] Fout: {e}")
+
     rws_geojson["aantalStations"] = len(rws_geojson["features"])
     _cache      = rws_geojson
     _cache_time = time.time()
-    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée + NDBC + FMI + CDIP)")
+    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée + NDBC + FMI + CDIP + IMI)")
 
 
 def get_data():
