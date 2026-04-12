@@ -488,10 +488,6 @@ def fetch_ndbc_data():
         except ValueError:
             continue
 
-        # Filter: Europees / Noord-Atlantisch gebied
-        if not (40 <= lat <= 70 and -40 <= lon <= 15):
-            continue
-
         station_id = cols[0]
 
         # Tijdstip
@@ -500,9 +496,9 @@ def fetch_ndbc_data():
                 int(cols[3]), int(cols[4]), int(cols[5]),
                 int(cols[6]), int(cols[7]), tzinfo=timezone.utc
             ).isoformat()
-            # Skip als ouder dan 3 uur
+            # Skip als ouder dan 6 uur (offshore boeien updaten minder frequent)
             dt = datetime.fromisoformat(tijdstip)
-            if (now - dt).total_seconds() > 3 * 3600:
+            if (now - dt).total_seconds() > 6 * 3600:
                 continue
         except Exception:
             tijdstip = None

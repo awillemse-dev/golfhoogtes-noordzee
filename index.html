@@ -497,7 +497,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script>
 // ── Kaart ────────────────────────────────────────────────────────────────────
-const map = L.map('map', { center: [54.5, 8.5], zoom: 6, zoomControl: true });
+const map = L.map('map', { center: [20, 0], zoom: 3, zoomControl: true });
 
 map.zoomControl.setPosition('topright');
 
@@ -915,9 +915,6 @@ function renderMarkers(geojson) {
     markers.push(marker);
   });
 
-  if (markers.length > 0 && map.getZoom() < 5) {
-    map.fitBounds(L.featureGroup(markers).getBounds().pad(0.1));
-  }
 }
 
 async function fetchWaveData() {
