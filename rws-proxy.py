@@ -849,6 +849,88 @@ def fetch_history(code):
     return {"code": code, "naam": naam, "data": data}
 
 
+# ── FMI: Fins Meteorologisch Instituut – Baltische/Scandinavische golven ─────
+#
+# Bron: Finnish Meteorological Institute Open Data WFS
+# URL:  https://opendata.fmi.fi/wfs  (storedquery: fmi::observations::wave::simple)
+# Licentie: Creative Commons Attribution 4.0
+
+try:
+    import xml.etree.ElementTree as _ET
+    _FMI_ET = _ET
+except ImportError:
+    _FMI_ET = None
+
+FMI_WFS = ("https://opendata.fmi.fi/wfs?service=WFS&version=2.0.0"
+           "&request=getFeature&storedquery_id=fmi::observations::wave::simple"
+           "&bbox=-30,-90,50,90&maxlocations=500")
+
+_FMI_NS = {
+    "wfs":   "http://www.opengis.net/wfs/2.0",
+    "BsWfs": "http://xml.fmi.fi/schema/wfs/2.0",
+    "gml":   "http://www.opengis.net/gml/3.2",
+}
+
+def fetch_fmi_data():
+    if _FMI_ET is None:
+        return []
+    now = datetime.now(timezone.utc)
+    req = urllib.request.Request(FMI_WFS, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        content = r.read()
+
+    root = _FMI_ET.fromstring(content)
+    members = root.findall(".//BsWfs:BsWfsElement", _FMI_NS)
+
+    # Groepeer per locatie → pak meest recente WaveHs
+    stations = {}   # "lat,lon" → {naam, lat, lon, tijdstip, hm0}
+    for m in members:
+        name_el  = m.findtext("BsWfs:ParameterName",  namespaces=_FMI_NS)
+        if name_el != "WaveHs":
+            continue
+        val_s    = m.findtext("BsWfs:ParameterValue", namespaces=_FMI_NS)
+        time_s   = m.findtext("BsWfs:Time",           namespaces=_FMI_NS)
+        loc_el   = m.find("BsWfs:Location", _FMI_NS)
+        if loc_el is None:
+            continue
+        pos_el   = loc_el.find(".//gml:pos", _FMI_NS)
+        if pos_el is None or not pos_el.text:
+            continue
+        try:
+            lat, lon = [float(x) for x in pos_el.text.split()]
+            hm0      = round(float(val_s), 2)
+            ts_dt    = datetime.fromisoformat(time_s.replace("Z", "+00:00"))
+        except Exception:
+            continue
+
+        if (now - ts_dt).total_seconds() > 24 * 3600:
+            continue
+
+        key = f"{lat:.4f},{lon:.4f}"
+        if key not in stations or time_s > stations[key]["tijdstip"]:
+            stations[key] = {
+                "lat": lat, "lon": lon,
+                "hm0": hm0, "tijdstip": ts_dt.isoformat(),
+            }
+
+    features = []
+    for i, (key, s) in enumerate(stations.items()):
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [s["lon"], s["lat"]]},
+            "properties": {
+                "code":     f"fmi.{i}",
+                "naam":     f"FMI {s['lat']:.2f}°N {s['lon']:.2f}°E",
+                "hm0_m":    s["hm0"],
+                "tijdstip": s["tijdstip"],
+                "bron":     "FMI",
+            },
+        })
+
+    print(f"[FMI] {len(features)} stations geladen")
+    return features
+
+
 # ── Cache ────────────────────────────────────────────────────────────────────
 
 _cache          = None
@@ -890,13 +972,14 @@ def _do_refresh():
     if _stations is None:
         _stations = fetch_hm0_stations()
 
-    # RWS, BSH, CEFAS, La Bouée en NDBC parallel ophalen
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    # RWS, BSH, CEFAS, La Bouée, NDBC en FMI parallel ophalen
+    with ThreadPoolExecutor(max_workers=6) as ex:
         fut_rws     = ex.submit(fetch_latest_values, _stations)
         fut_bsh     = ex.submit(fetch_bsh_data)
         fut_cefas   = ex.submit(fetch_cefas_data)
         fut_labouee = ex.submit(fetch_labouee_data)
         fut_ndbc    = ex.submit(fetch_ndbc_data)
+        fut_fmi     = ex.submit(fetch_fmi_data)
 
         waarnemingen = fut_rws.result()
         rws_geojson  = build_geojson(_stations, waarnemingen)
@@ -921,10 +1004,15 @@ def _do_refresh():
         except Exception as e:
             print(f"[NDBC] Fout: {e}")
 
+        try:
+            rws_geojson["features"].extend(fut_fmi.result())
+        except Exception as e:
+            print(f"[FMI] Fout: {e}")
+
     rws_geojson["aantalStations"] = len(rws_geojson["features"])
     _cache      = rws_geojson
     _cache_time = time.time()
-    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée + NDBC)")
+    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée + NDBC + FMI)")
 
 
 def get_data():
