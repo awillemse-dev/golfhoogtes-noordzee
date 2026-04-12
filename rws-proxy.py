@@ -465,6 +465,45 @@ def fetch_ndbc_history(station_id):
     return {"code": f"ndbc.{station_id.lower()}", "naam": f"NDBC {station_id}", "data": data}
 
 
+def fetch_ndbc_wind_history(station_id):
+    """Haal 24-uursgeschiedenis van WINDSNELHEID op voor een NDBC-station."""
+    # realtime2 kolommen: YY MM DD hh mm WDIR WSPD GST WVHT ...
+    # col-index (0-based):  0  1  2  3  4   5    6   7   8
+    url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id.upper()}.txt"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        lines = r.read().decode("utf-8", errors="replace").splitlines()
+
+    now    = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=24)
+    data   = []
+
+    for line in lines:
+        if line.startswith("#") or not line.strip():
+            continue
+        cols = line.split()
+        if len(cols) < 7:
+            continue
+        try:
+            ts = datetime(int(cols[0]), int(cols[1]), int(cols[2]),
+                          int(cols[3]), int(cols[4]), tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if ts < cutoff:
+            continue
+        try:
+            wspd = None if cols[6] == "MM" else round(float(cols[6]), 1)
+        except (ValueError, IndexError):
+            wspd = None
+        if wspd is not None:
+            data.append({"t": ts.isoformat(), "v": wspd})
+
+    data.sort(key=lambda x: x["t"])
+    return {"code": f"ndbc.wind.{station_id.lower()}", "naam": f"NDBC {station_id}", "data": data}
+
+
+_ndbc_wind_features = []   # gevuld door fetch_ndbc_data(), gebruikt door get_wind_data()
+
 def fetch_ndbc_data():
     req = urllib.request.Request(
         NDBC_URL,
@@ -473,8 +512,10 @@ def fetch_ndbc_data():
     with urllib.request.urlopen(req, timeout=20) as r:
         lines = r.read().decode("utf-8", errors="replace").splitlines()
 
-    now      = datetime.now(timezone.utc)
-    features = []
+    global _ndbc_wind_features
+    now           = datetime.now(timezone.utc)
+    wave_features = []
+    wind_features = []
 
     for line in lines:
         if line.startswith("#") or not line.strip():
@@ -496,7 +537,6 @@ def fetch_ndbc_data():
                 int(cols[3]), int(cols[4]), int(cols[5]),
                 int(cols[6]), int(cols[7]), tzinfo=timezone.utc
             ).isoformat()
-            # Skip als ouder dan 6 uur (offshore boeien updaten minder frequent)
             dt = datetime.fromisoformat(tijdstip)
             if (now - dt).total_seconds() > 6 * 3600:
                 continue
@@ -509,24 +549,48 @@ def fetch_ndbc_data():
         except (ValueError, IndexError):
             hm0 = None
 
-        # Sla boeien zonder golfdata over
-        if hm0 is None:
-            continue
+        # Windsnelheid (WSPD, kolom 9) en richting (WDIR, kolom 8)
+        try:
+            wind_ms  = None if cols[9]  == "MM" else round(float(cols[9]),  1)
+            wind_dir = None if cols[8]  == "MM" else int(float(cols[8]))
+        except (ValueError, IndexError):
+            wind_ms  = None
+            wind_dir = None
 
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [lon, lat]},
-            "properties": {
-                "code":     f"ndbc.{station_id.lower()}",
-                "naam":     f"NDBC {station_id}",
-                "hm0_m":    hm0,
-                "tijdstip": tijdstip,
-                "bron":     "NDBC/NOAA",
-            },
-        })
+        code = f"ndbc.{station_id.lower()}"
+        naam = f"NDBC {station_id}"
+        geom = {"type": "Point", "coordinates": [lon, lat]}
 
-    print(f"[NDBC] {len(features)} stations geladen")
-    return features
+        if hm0 is not None:
+            wave_features.append({
+                "type": "Feature",
+                "geometry": geom,
+                "properties": {
+                    "code":     code,
+                    "naam":     naam,
+                    "hm0_m":    hm0,
+                    "tijdstip": tijdstip,
+                    "bron":     "NDBC/NOAA",
+                },
+            })
+
+        if wind_ms is not None and 0 <= wind_ms <= 60:
+            wind_features.append({
+                "type": "Feature",
+                "geometry": geom,
+                "properties": {
+                    "code":     f"ndbc.wind.{station_id.lower()}",
+                    "naam":     naam,
+                    "wind_ms":  wind_ms,
+                    "wind_dir": wind_dir,
+                    "tijdstip": tijdstip,
+                    "bron":     "NDBC/NOAA",
+                },
+            })
+
+    _ndbc_wind_features = wind_features
+    print(f"[NDBC] {len(wave_features)} golfstations, {len(wind_features)} windstations geladen")
+    return wave_features
 
 def fetch_labouee_data():
     now      = datetime.now(timezone.utc)
@@ -1449,9 +1513,14 @@ def get_wind_data():
                 except Exception as e:
                     print(f"[WIND] Batch fout: {e}")
 
-        print(f"[WIND] {len(features)} stations geladen")
+        print(f"[WIND] {len(features)} RWS stations geladen")
     except Exception as e:
         print(f"[WIND] Fout: {e}")
+
+    # NDBC windstations toevoegen (gevuld door fetch_ndbc_data in _do_refresh)
+    ndbc_wind = _ndbc_wind_features
+    features.extend(ndbc_wind)
+    print(f"[WIND] +{len(ndbc_wind)} NDBC windstations → totaal {len(features)}")
 
     _wind_cache = {"type": "FeatureCollection", "features": features,
                    "opgehaald": now.isoformat(), "aantalStations": len(features)}
@@ -1729,17 +1798,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
             try:
-                # code = "rws.wind.{loc_code}" → strip prefix
-                rws_code = code[9:].upper() if code.startswith("rws.wind.") else code.upper()
-                # naam opzoeken in cache
-                naam = rws_code
-                cached = get_wind_data()
-                for feat in cached.get("features", []):
-                    if feat["properties"].get("code") == code:
-                        naam     = feat["properties"].get("naam", naam)
-                        rws_code = feat["properties"].get("rws_code", rws_code)
-                        break
-                data = fetch_wind_history(rws_code, naam)
+                if code.startswith("ndbc.wind."):
+                    station_id = code[len("ndbc.wind."):]
+                    data = fetch_ndbc_wind_history(station_id)
+                else:
+                    # code = "rws.wind.{loc_code}" → strip prefix
+                    rws_code = code[9:].upper() if code.startswith("rws.wind.") else code.upper()
+                    naam = rws_code
+                    cached = get_wind_data()
+                    for feat in cached.get("features", []):
+                        if feat["properties"].get("code") == code:
+                            naam     = feat["properties"].get("naam", naam)
+                            rws_code = feat["properties"].get("rws_code", rws_code)
+                            break
+                    data = fetch_wind_history(rws_code, naam)
                 body = json.dumps(data, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type",   "application/json; charset=utf-8")
