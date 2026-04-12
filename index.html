@@ -800,29 +800,70 @@ async function openWindChart(code, naam, huidigWind, tijdstip) {
     const values = json.data.map(d => d.v);
     const maxVal = Math.max(...values);
 
+    // Windrichting dataset (rechter as)
+    const dirPoints = (json.dir_data || []).map(d => ({ x: new Date(d.t), y: d.v }));
+    const dirColor  = 'rgba(148,163,184,0.85)';
+
     const opts = CHART_OPTS(color);
     opts.plugins.tooltip.callbacks = {
       title: items => new Date(items[0].parsed.x).toLocaleString('nl-NL', {
         day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
         timeZone: 'Europe/Amsterdam',
       }),
-      label: item => ` ${item.parsed.y.toFixed(1)} m/s`,
+      label: item => {
+        if (item.dataset.yAxisID === 'yDir') {
+          const deg = item.parsed.y;
+          const dirs = ['N','NO','O','ZO','Z','ZW','W','NW'];
+          const compass = dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+          return ` ${compass} (${deg}°)`;
+        }
+        return ` ${item.parsed.y.toFixed(1)} m/s`;
+      },
     };
     opts.scales.y.min             = 0;
     opts.scales.y.suggestedMax    = Math.max(maxVal * 1.2, 5);
     opts.scales.y.ticks.callback  = v => v.toFixed(1) + ' m/s';
 
+    // Rechter as voor windrichting (0–360°)
+    opts.scales.yDir = {
+      type: 'linear',
+      position: 'right',
+      min: 0, max: 360,
+      grid: { drawOnChartArea: false },
+      ticks: {
+        color: dirColor,
+        font: { size: 10 },
+        stepSize: 90,
+        callback: v => ({ 0:'N', 90:'O', 180:'Z', 270:'W', 360:'N' }[v] ?? ''),
+      },
+      border: { color: dirColor },
+    };
+
+    const datasets = [{
+      label: 'Windsnelheid',
+      yAxisID: 'y',
+      data: values, borderColor: color,
+      backgroundColor: color + '18',
+      borderWidth: 2, pointRadius: 0, pointHoverRadius: 4,
+      fill: true, tension: 0.35,
+    }];
+    if (dirPoints.length > 0) {
+      datasets.push({
+        label: 'Windrichting',
+        yAxisID: 'yDir',
+        data: dirPoints,
+        borderColor: dirColor,
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0, pointHoverRadius: 3,
+        fill: false, tension: 0.2,
+        parsing: false,
+      });
+    }
+
     chartInstance = new Chart(canvasEl, {
       type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          data: values, borderColor: color,
-          backgroundColor: color + '18',
-          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4,
-          fill: true, tension: 0.35,
-        }],
-      },
+      data: { labels, datasets },
       options: opts,
     });
   } catch (err) {

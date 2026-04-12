@@ -466,9 +466,9 @@ def fetch_ndbc_history(station_id):
 
 
 def fetch_ndbc_wind_history(station_id):
-    """Haal 24-uursgeschiedenis van WINDSNELHEID op voor een NDBC-station."""
-    # realtime2 kolommen: YY MM DD hh mm WDIR WSPD GST WVHT ...
-    # col-index (0-based):  0  1  2  3  4   5    6   7   8
+    """Haal 24u windsnelheid + richting op voor een NDBC-station via realtime2."""
+    # realtime2 cols: YY MM DD hh mm WDIR WSPD GST WVHT ...
+    # index:          0  1  2  3  4   5    6   7   8
     url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id.upper()}.txt"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=15) as r:
@@ -476,7 +476,8 @@ def fetch_ndbc_wind_history(station_id):
 
     now    = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=24)
-    data   = []
+    data     = []
+    dir_data = []
 
     for line in lines:
         if line.startswith("#") or not line.strip():
@@ -491,15 +492,24 @@ def fetch_ndbc_wind_history(station_id):
             continue
         if ts < cutoff:
             continue
+        t = ts.isoformat()
         try:
             wspd = None if cols[6] == "MM" else round(float(cols[6]), 1)
         except (ValueError, IndexError):
             wspd = None
+        try:
+            wdir = None if cols[5] == "MM" else int(float(cols[5])) % 360
+        except (ValueError, IndexError):
+            wdir = None
         if wspd is not None:
-            data.append({"t": ts.isoformat(), "v": wspd})
+            data.append({"t": t, "v": wspd})
+        if wdir is not None:
+            dir_data.append({"t": t, "v": wdir})
 
     data.sort(key=lambda x: x["t"])
-    return {"code": f"ndbc.wind.{station_id.lower()}", "naam": f"NDBC {station_id}", "data": data}
+    dir_data.sort(key=lambda x: x["t"])
+    return {"code": f"ndbc.wind.{station_id.lower()}", "naam": f"NDBC {station_id}",
+            "data": data, "dir_data": dir_data}
 
 
 _ndbc_wind_features = []   # gevuld door fetch_ndbc_data(), gebruikt door get_wind_data()
@@ -1549,38 +1559,48 @@ def get_wind_data():
 
 
 def fetch_wind_history(rws_code, naam):
-    """Haal 24u windsnelheid op van RWS via OphalenWaarnemingen."""
+    """Haal 24u windsnelheid + richting parallel op van RWS."""
     now   = datetime.now(timezone.utc)
     start = now - timedelta(hours=24)
     fmt   = "%Y-%m-%dT%H:%M:%S.000+00:00"
-    resp  = rws_post(
-        "/ONLINEWAARNEMINGENSERVICES/OphalenWaarnemingen",
-        {
+    periode = {"Begindatumtijd": start.strftime(fmt), "Einddatumtijd": now.strftime(fmt)}
+    locatie = {"Code": rws_code}
+
+    def call(grootheid, eenheid):
+        return rws_post("/ONLINEWAARNEMINGENSERVICES/OphalenWaarnemingen", {
             "AquoPlusWaarnemingMetadata": {"AquoMetadata": {
                 "Compartiment": {"Code": "LT"},
-                "Eenheid":      {"Code": "m/s"},
-                "Grootheid":    {"Code": "WINDSHD"},
+                "Eenheid":      {"Code": eenheid},
+                "Grootheid":    {"Code": grootheid},
             }},
-            "Locatie": {"Code": rws_code},
-            "Periode": {
-                "Begindatumtijd": start.strftime(fmt),
-                "Einddatumtijd":  now.strftime(fmt),
-            },
-        }
-    )
-    waarnemingen = resp.get("WaarnemingenLijst") or []
-    if not waarnemingen:
-        return {"code": f"rws.wind.{rws_code.lower()}", "naam": naam, "data": []}
+            "Locatie": locatie,
+            "Periode": periode,
+        })
 
-    best = max(waarnemingen, key=lambda w: len(w.get("MetingenLijst") or []))
-    data = []
-    for m in (best.get("MetingenLijst") or []):
-        waarde   = (m.get("Meetwaarde") or {}).get("Waarde_Numeriek")
-        tijdstip = m.get("Tijdstip")
-        if waarde is not None and tijdstip:
-            data.append({"t": tijdstip, "v": round(waarde, 1)})
-    data.sort(key=lambda x: x["t"])
-    return {"code": f"rws.wind.{rws_code.lower()}", "naam": naam, "data": data}
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fut_spd = ex.submit(call, "WINDSHD", "m/s")
+        fut_dir = ex.submit(call, "WINDRTG", "graad")
+        resp_spd = fut_spd.result()
+        resp_dir = fut_dir.result()
+
+    def extract(resp, transform=None):
+        waarnemingen = resp.get("WaarnemingenLijst") or []
+        if not waarnemingen:
+            return []
+        best = max(waarnemingen, key=lambda w: len(w.get("MetingenLijst") or []))
+        out = []
+        for m in (best.get("MetingenLijst") or []):
+            waarde   = (m.get("Meetwaarde") or {}).get("Waarde_Numeriek")
+            tijdstip = m.get("Tijdstip")
+            if waarde is not None and tijdstip:
+                v = transform(waarde) if transform else round(waarde, 1)
+                out.append({"t": tijdstip, "v": v})
+        out.sort(key=lambda x: x["t"])
+        return out
+
+    data     = extract(resp_spd)
+    dir_data = extract(resp_dir, transform=lambda v: int(round(v)) % 360)
+    return {"code": f"rws.wind.{rws_code.lower()}", "naam": naam, "data": data, "dir_data": dir_data}
 
 
 # ── Nederland landsgrens (PDOK) ──────────────────────────────────────────────
