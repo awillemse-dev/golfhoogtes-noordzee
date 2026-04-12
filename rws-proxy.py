@@ -963,6 +963,128 @@ def get_rws_temp_history(code):
     return {"code": code, "naam": code, "data": data}
 
 
+CDIP_THREDDS  = "https://thredds.cdip.ucsd.edu/thredds"
+CDIP_CATALOG  = CDIP_THREDDS + "/catalog/cdip/realtime/catalog.xml"
+CDIP_ODAP     = CDIP_THREDDS + "/dodsC/cdip/realtime"
+_cdip_cache   = None
+_cdip_time    = 0
+
+def fetch_cdip_data():
+    """Fetch wave data from CDIP (Coastal Data Information Program) via THREDDS OPeNDAP."""
+    global _cdip_cache, _cdip_time
+    import re as _re
+
+    now = time.time()
+    if _cdip_cache is not None and (now - _cdip_time) < 3600:
+        return _cdip_cache
+
+    # Get station list from THREDDS catalog
+    try:
+        req = urllib.request.Request(CDIP_CATALOG, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+        r = urllib.request.urlopen(req, timeout=15)
+        catalog_xml = r.read().decode()
+        station_files = _re.findall(r'name="(\d+p1_rt\.nc)"', catalog_xml)
+    except Exception as e:
+        print(f"[CDIP] catalog fout: {e}")
+        return _cdip_cache or []
+
+    def fetch_station(stn_file):
+        stn_id = stn_file.replace("_rt.nc", "")  # e.g. "028p1"
+        try:
+            # Step 1: get DDS to find array dimension size
+            dds_url = f"{CDIP_ODAP}/{stn_file}.dds"
+            req_dds = urllib.request.Request(dds_url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+            r_dds = urllib.request.urlopen(req_dds, timeout=10)
+            dds = r_dds.read().decode()
+            m = _re.search(r'waveHs\[waveTime = (\d+)\]', dds)
+            if not m:
+                return None
+            n = int(m.group(1))
+            if n == 0:
+                return None
+            last = n - 1
+
+            # Step 2: fetch last waveHs, waveTime, lat, lon
+            data_url = (f"{CDIP_ODAP}/{stn_file}.ascii?"
+                        f"waveHs[{last}:1:{last}],"
+                        f"waveTime[{last}:1:{last}],"
+                        f"metaDeployLatitude[0:1:0],"
+                        f"metaDeployLongitude[0:1:0],"
+                        f"metaStationName[0:1:0]")
+            req_d = urllib.request.Request(data_url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+            r_d = urllib.request.urlopen(req_d, timeout=10)
+            text = r_d.read().decode()
+
+            # Parse ASCII OPeNDAP response
+            # Arrays: key[N] header then value on next line
+            # Scalars: "keyname, value" on one line
+            parsed = {}
+            cur_key = None
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or line.startswith("Dataset") or line.startswith("}"):
+                    cur_key = None
+                    continue
+                # Scalar inline format
+                if ", " in line and not line.startswith("-") and "[" not in line:
+                    k, v = line.split(", ", 1)
+                    if "Latitude" in k:
+                        parsed["lat"] = v
+                    elif "Longitude" in k:
+                        parsed["lon"] = v
+                    elif "StationName" in k:
+                        parsed["name"] = v.strip('"')
+                    cur_key = None
+                    continue
+                # Array header
+                if line.startswith("waveHs"):
+                    cur_key = "hs"
+                elif line.startswith("waveTime"):
+                    cur_key = "ts"
+                elif cur_key:
+                    parsed[cur_key] = line.rstrip(",")
+                    cur_key = None
+
+            hs  = float(parsed.get("hs", "nan"))
+            ts  = int(parsed.get("ts", 0))
+            lat = float(parsed.get("lat", "nan"))
+            lon = float(parsed.get("lon", "nan"))
+            naam = parsed.get("name", stn_id).strip('"')
+
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                return None
+            if not (0 < hs < 30):
+                return None
+            # Max 24h staleness
+            obs_dt = datetime.utcfromtimestamp(ts)
+            age    = (datetime.utcnow() - obs_dt).total_seconds()
+            if age > 86400:
+                return None
+
+            return {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [round(lon, 4), round(lat, 4)]},
+                "properties": {
+                    "code":     f"cdip.{stn_id}",
+                    "naam":     naam,
+                    "hm0_m":   round(hs, 2),
+                    "tijdstip": obs_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "bron":    "CDIP",
+                },
+            }
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        results = list(ex.map(fetch_station, station_files))
+
+    features = [r for r in results if r is not None]
+    print(f"[CDIP] {len(features)} stations met verse data (van {len(station_files)} realtime stations)")
+    _cdip_cache = features
+    _cdip_time  = now
+    return features
+
+
 _refresh_lock = threading.Lock()
 
 def _do_refresh():
@@ -972,14 +1094,15 @@ def _do_refresh():
     if _stations is None:
         _stations = fetch_hm0_stations()
 
-    # RWS, BSH, CEFAS, La Bouée, NDBC en FMI parallel ophalen
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    # RWS, BSH, CEFAS, La Bouée, NDBC, FMI en CDIP parallel ophalen
+    with ThreadPoolExecutor(max_workers=7) as ex:
         fut_rws     = ex.submit(fetch_latest_values, _stations)
         fut_bsh     = ex.submit(fetch_bsh_data)
         fut_cefas   = ex.submit(fetch_cefas_data)
         fut_labouee = ex.submit(fetch_labouee_data)
         fut_ndbc    = ex.submit(fetch_ndbc_data)
         fut_fmi     = ex.submit(fetch_fmi_data)
+        fut_cdip    = ex.submit(fetch_cdip_data)
 
         waarnemingen = fut_rws.result()
         rws_geojson  = build_geojson(_stations, waarnemingen)
@@ -1009,10 +1132,15 @@ def _do_refresh():
         except Exception as e:
             print(f"[FMI] Fout: {e}")
 
+        try:
+            rws_geojson["features"].extend(fut_cdip.result())
+        except Exception as e:
+            print(f"[CDIP] Fout: {e}")
+
     rws_geojson["aantalStations"] = len(rws_geojson["features"])
     _cache      = rws_geojson
     _cache_time = time.time()
-    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée + NDBC + FMI)")
+    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée + NDBC + FMI + CDIP)")
 
 
 def get_data():
