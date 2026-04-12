@@ -574,12 +574,21 @@ function waveColor(h) {
   return '#b91c1c';
 }
 
+// Schaalfactor op basis van zoomniveau
+function iconScale() {
+  const z = map.getZoom();
+  return Math.max(0.38, Math.min(1.0, z / 7));
+}
+
 function makeIcon(h) {
+  const sc    = iconScale();
   const color = waveColor(h);
-  const size  = h !== null ? Math.max(34, Math.min(58, 34 + h * 7)) : 34;
+  const base  = h !== null ? Math.max(34, Math.min(58, 34 + h * 7)) : 34;
+  const size  = Math.round(base * sc);
   const ht    = Math.round(size * 0.58);
+  const fs    = Math.max(7, Math.round(10 * sc));
   const label = h !== null ? h.toFixed(1) : '–';
-  const r     = 5;
+  const r     = Math.max(2, Math.round(5 * sc));
   return L.divIcon({
     className:   '',
     iconSize:    [size, ht],
@@ -591,7 +600,7 @@ function makeIcon(h) {
       <rect x="1" y="1" width="${size-2}" height="${ht-2}" rx="${r}"
         fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>
       <text x="${size/2}" y="${ht/2+3.8}" text-anchor="middle"
-        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="10"
+        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fs}"
         font-weight="700" fill="white">${label}</text>
     </svg>`,
   });
@@ -609,8 +618,10 @@ function tempColor(t) {
 }
 
 function makeTempIcon(t) {
+  const sc    = iconScale();
   const color = tempColor(t);
-  const w = 38, ht = 22;
+  const w = Math.round(38 * sc), ht = Math.round(22 * sc);
+  const fs = Math.max(7, Math.round(10 * sc));
   const label = t !== null ? t.toFixed(1) : '–';
   return L.divIcon({
     className:   '',
@@ -618,12 +629,12 @@ function makeTempIcon(t) {
     iconAnchor:  [w / 2, ht / 2],
     popupAnchor: [0, -(ht / 2 + 6)],
     html: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${ht}">
-      <rect x="1" y="1" width="${w-2}" height="${ht-2}" rx="5"
+      <rect x="1" y="1" width="${w-2}" height="${ht-2}" rx="${Math.max(2,Math.round(5*sc))}"
         fill="${color}" fill-opacity="0.88"/>
-      <rect x="1" y="1" width="${w-2}" height="${ht-2}" rx="5"
+      <rect x="1" y="1" width="${w-2}" height="${ht-2}" rx="${Math.max(2,Math.round(5*sc))}"
         fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>
       <text x="${w/2}" y="${ht/2+3.8}" text-anchor="middle"
-        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="10"
+        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fs}"
         font-weight="700" fill="white">${label}</text>
     </svg>`,
   });
@@ -637,6 +648,7 @@ function clearTempMarkers() {
 }
 
 function renderTempMarkers(geojson) {
+  _lastTempGeoJSON = geojson;
   clearMarkers(); clearTempMarkers(); clearWindMarkers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
@@ -670,21 +682,23 @@ function windColor(w) {
 }
 
 function makeWindIcon(w) {
+  const sc    = iconScale();
   const color = windColor(w);
   const label = w !== null ? w.toFixed(1) : '–';
-  const ww = 40, ht = 24;
+  const ww = Math.round(40 * sc), ht = Math.round(24 * sc);
+  const fs = Math.max(7, Math.round(10 * sc));
   return L.divIcon({
     className:   '',
     iconSize:    [ww, ht],
     iconAnchor:  [ww / 2, ht / 2],
     popupAnchor: [0, -(ht / 2 + 6)],
     html: `<svg xmlns="http://www.w3.org/2000/svg" width="${ww}" height="${ht}">
-      <rect x="1" y="1" width="${ww-2}" height="${ht-2}" rx="5"
+      <rect x="1" y="1" width="${ww-2}" height="${ht-2}" rx="${Math.max(2,Math.round(5*sc))}"
         fill="${color}" fill-opacity="0.88"/>
-      <rect x="1" y="1" width="${ww-2}" height="${ht-2}" rx="5"
+      <rect x="1" y="1" width="${ww-2}" height="${ht-2}" rx="${Math.max(2,Math.round(5*sc))}"
         fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>
       <text x="${ww/2}" y="${ht/2+3.8}" text-anchor="middle"
-        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="10"
+        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fs}"
         font-weight="700" fill="white">${label}</text>
     </svg>`,
   });
@@ -698,6 +712,7 @@ function clearWindMarkers() {
 }
 
 function renderWindMarkers(geojson) {
+  _lastWindGeoJSON = geojson;
   clearMarkers(); clearTempMarkers(); clearWindMarkers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
@@ -888,6 +903,14 @@ function wavesUrl()       { return `${PROXY_URL}/api/waves`; }
 function historyUrl(code) { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
 
 let markers = [];
+let _lastWaveGeoJSON = null, _lastTempGeoJSON = null, _lastWindGeoJSON = null;
+
+// Herlaad markers bij zoomwijziging (aanpassen icongrootte)
+map.on('zoomend', () => {
+  if (_lastWaveGeoJSON && activeLayer === 'golf') renderMarkers(_lastWaveGeoJSON);
+  else if (_lastTempGeoJSON && activeLayer === 'temp') renderTempMarkers(_lastTempGeoJSON);
+  else if (_lastWindGeoJSON && activeLayer === 'wind') renderWindMarkers(_lastWindGeoJSON);
+});
 
 function clearMarkers() {
   markers.forEach(m => map.removeLayer(m));
@@ -904,6 +927,7 @@ function formatTijdstip(iso) {
 }
 
 function renderMarkers(geojson) {
+  _lastWaveGeoJSON = geojson;
   clearMarkers(); clearTempMarkers(); clearWindMarkers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
