@@ -661,9 +661,6 @@ function renderTempMarkers(geojson) {
     tempMarkers.push(marker);
   });
 
-  if (tempMarkers.length > 0 && map.getZoom() < 5) {
-    map.fitBounds(L.featureGroup(tempMarkers).getBounds().pad(0.1));
-  }
 }
 
 function tempUrl()            { return `${PROXY_URL}/api/temp`; }
