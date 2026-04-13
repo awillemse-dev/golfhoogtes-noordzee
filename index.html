@@ -782,7 +782,7 @@ function windHistoryUrl(code) { return `${PROXY_URL}/api/wind-history?code=${enc
 async function fetchWindData() {
   setStatus('loading', 'laden…');
   try {
-    const resp = await fetch(windUrl(), { cache: 'no-store' });
+    const resp = await fetchWithTimeout(windUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     renderWindMarkers(geojson);
@@ -792,7 +792,8 @@ async function fetchWindData() {
     setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
   } catch (err) {
     console.error(err);
-    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Data niet beschikbaar');
+    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Opnieuw laden…');
+    if (!LOCAL) setTimeout(() => { if (activeLayer === 'wind') fetchWindData().then(startCountdown); }, 5000);
   }
 }
 
@@ -907,7 +908,7 @@ async function openWindChart(code, naam, huidigWind, tijdstip) {
 async function fetchTempData() {
   setStatus('loading', 'laden…');
   try {
-    const resp = await fetch(tempUrl(), { cache: 'no-store' });
+    const resp = await fetchWithTimeout(tempUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     renderTempMarkers(geojson);
@@ -917,7 +918,8 @@ async function fetchTempData() {
     setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
   } catch (err) {
     console.error(err);
-    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Data niet beschikbaar');
+    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Opnieuw laden…');
+    if (!LOCAL) setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
   }
 }
 
@@ -957,6 +959,7 @@ function selectSection(section) {
 
 function selectLayer(layer) {
   if (layer === activeLayer) return;
+  stopCountdown();
   activeLayer = layer;
 
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -1034,10 +1037,21 @@ function renderMarkers(geojson) {
 
 }
 
+async function fetchWithTimeout(url, timeoutMs = 90000) {
+  const ctrl = new AbortController();
+  const tid  = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, { cache: 'no-store', signal: ctrl.signal });
+    return resp;
+  } finally {
+    clearTimeout(tid);
+  }
+}
+
 async function fetchWaveData() {
   setStatus('loading', 'laden…');
   try {
-    const resp = await fetch(wavesUrl(), { cache: 'no-store' });
+    const resp = await fetchWithTimeout(wavesUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     renderMarkers(geojson);
@@ -1047,7 +1061,8 @@ async function fetchWaveData() {
     setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
   } catch (err) {
     console.error(err);
-    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Data niet beschikbaar');
+    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Opnieuw laden…');
+    if (!LOCAL) setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
   }
 }
 
@@ -1235,17 +1250,23 @@ function setStatus(state, text) {
 
 const UPDATE_SEC = 10 * 60;
 let secondsLeft  = 0;
+let _countdownTid = null;
+
+function stopCountdown() {
+  if (_countdownTid) { clearInterval(_countdownTid); _countdownTid = null; }
+  document.getElementById('countdown').textContent = '';
+}
 
 function startCountdown() {
+  stopCountdown();
   secondsLeft = UPDATE_SEC;
-  const el  = document.getElementById('countdown');
-  const tid = setInterval(() => {
+  const el = document.getElementById('countdown');
+  _countdownTid = setInterval(() => {
     secondsLeft--;
     if (secondsLeft <= 0) {
-      clearInterval(tid);
-      el.textContent = '';
-      const fetchFn = activeLayer   === 'temp'      ? fetchTempData
-                    : activeLayer   === 'wind'      ? fetchWindData
+      stopCountdown();
+      const fetchFn = activeLayer === 'temp' ? fetchTempData
+                    : activeLayer === 'wind' ? fetchWindData
                     : fetchWaveData;
       fetchFn().then(startCountdown);
     } else {

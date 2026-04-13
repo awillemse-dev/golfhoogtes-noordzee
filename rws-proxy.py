@@ -1384,37 +1384,20 @@ def get_temp_data():
     except Exception as e:
         print(f"[CEFAS temp] Fout: {e}")
 
-    # ── NDBC zeewatertemperatuur (WTMP kolom 18) ──────────────────────
-    try:
-        ndbc_temp = _fetch_ndbc_temp()
-        features.extend(ndbc_temp)
-        print(f"[NDBC temp] {len(ndbc_temp)} stations")
-    except Exception as e:
-        print(f"[NDBC temp] Fout: {e}")
-
-    # ── LaBouée zeewatertemperatuur ───────────────────────────────────
-    try:
-        lb_temp = _fetch_labouee_temp()
-        features.extend(lb_temp)
-        print(f"[LaBouée temp] {len(lb_temp)} stations")
-    except Exception as e:
-        print(f"[LaBouée temp] Fout: {e}")
-
-    # ── CDIP zeewatertemperatuur (sstSeaSurfaceTemperature) ───────────
-    try:
-        cdip_temp = _fetch_cdip_temp()
-        features.extend(cdip_temp)
-        print(f"[CDIP temp] {len(cdip_temp)} stations")
-    except Exception as e:
-        print(f"[CDIP temp] Fout: {e}")
-
-    # ── Irish Marine Institute zeewatertemperatuur ────────────────────
-    try:
-        imi_temp = _fetch_imi_temp()
-        features.extend(imi_temp)
-        print(f"[IMI temp] {len(imi_temp)} stations")
-    except Exception as e:
-        print(f"[IMI temp] Fout: {e}")
+    # ── NDBC, LaBouée, CDIP en IMI temperatuur parallel ophalen ──────
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        fut_ndbc_t  = ex.submit(_fetch_ndbc_temp)
+        fut_lb_t    = ex.submit(_fetch_labouee_temp)
+        fut_cdip_t  = ex.submit(_fetch_cdip_temp)
+        fut_imi_t   = ex.submit(_fetch_imi_temp)
+        for label, fut in [("NDBC temp", fut_ndbc_t), ("LaBouée temp", fut_lb_t),
+                            ("CDIP temp", fut_cdip_t), ("IMI temp", fut_imi_t)]:
+            try:
+                res = fut.result()
+                features.extend(res)
+                print(f"[{label}] {len(res)} stations")
+            except Exception as e:
+                print(f"[{label}] Fout: {e}")
 
     _temp_cache = {"type": "FeatureCollection", "features": features,
                    "opgehaald": now.isoformat(), "aantalStations": len(features)}
@@ -2286,18 +2269,24 @@ if __name__ == "__main__":
 
     # Prewarm + achtergrond-refresh in aparte thread — blokkeert de server niet
     def _background_loop():
-        # Eerste prewarm
-        print("[CACHE] Gegevens vooraf ophalen (waves + temp + wind + KNMI parallel)…")
+        # Fase 1: waves snel ophalen zodat de server meteen reageert
+        print("[CACHE] Fase 1: waves ophalen…")
         try:
-            with ThreadPoolExecutor(max_workers=4) as ex:
-                fw    = ex.submit(_refresh_waves)
+            _refresh_waves()
+            print("[CACHE] Waves klaar.\n")
+        except Exception as e:
+            print(f"[CACHE] Waves fout: {e}\n")
+        # Fase 2: temp + wind parallel (langzamer vanwege RWS catalog + CDIP)
+        print("[CACHE] Fase 2: temp + wind + KNMI ophalen…")
+        try:
+            with ThreadPoolExecutor(max_workers=3) as ex:
                 ft    = ex.submit(get_temp_data)
                 fwnd  = ex.submit(get_wind_data)
                 fknmi = ex.submit(get_knmi_data)
-                fw.result(); ft.result(); fwnd.result()
+                ft.result(); fwnd.result()
                 try: fknmi.result()
                 except Exception as e: print(f"[KNMI] Prewarm mislukt: {e}")
-            print("[CACHE] Klaar.\n")
+            print("[CACHE] Alles klaar.\n")
         except Exception as e:
             print(f"[CACHE] Fout bij vooraf laden: {e}\n")
         # Daarna elke 9 minuten herhalen
