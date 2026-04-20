@@ -1092,6 +1092,8 @@ SOCIB_WIND_NAMES = {
 _socib_wave_paths = {}   # station_dir → nc urlPath
 _socib_wind_paths = {}   # station_dir → nc urlPath
 _socib_paths_time = 0
+_socib_wave_bg    = []   # achtergrond-cache: golven (gevuld buiten _do_refresh)
+_socib_wind_bg    = []   # achtergrond-cache: wind
 
 
 def _get_socib_latest_path(category, station_dir):
@@ -1326,6 +1328,25 @@ def fetch_socib_wind_data():
     return features
 
 
+def _refresh_socib_bg():
+    """Vul _socib_wave_bg en _socib_wind_bg vanuit SOCIB THREDDS.
+    Roept _ensure_socib_paths() aan (kan traag zijn) en slaat resultaat op
+    in de achtergrond-caches. Blokkeert _do_refresh() NIET."""
+    global _socib_wave_bg, _socib_wind_bg
+    try:
+        waves = fetch_socib_data()
+        _socib_wave_bg = waves
+        print(f"[SOCIB bg] {len(waves)} golfstations geladen")
+    except Exception as e:
+        print(f"[SOCIB bg wave] Fout: {e}")
+    try:
+        wind = fetch_socib_wind_data()
+        _socib_wind_bg = wind
+        print(f"[SOCIB bg] {len(wind)} windstations geladen")
+    except Exception as e:
+        print(f"[SOCIB bg wind] Fout: {e}")
+
+
 def fetch_socib_wave_history(nc_path, naam, code):
     """Haal 24u golfgeschiedenis op van een SOCIB THREDDS bestand."""
     import re as _re
@@ -1553,8 +1574,8 @@ def _do_refresh():
     if _stations is None:
         _stations = fetch_hm0_stations()
 
-    # RWS, BSH, CEFAS, La Bouée, NDBC, FMI, CDIP en SOCIB parallel ophalen
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    # RWS, BSH, CEFAS, La Bouée, NDBC, FMI en CDIP parallel ophalen
+    with ThreadPoolExecutor(max_workers=7) as ex:
         fut_rws     = ex.submit(fetch_latest_values, _stations)
         fut_bsh     = ex.submit(fetch_bsh_data)
         fut_cefas   = ex.submit(fetch_cefas_data)
@@ -1562,7 +1583,6 @@ def _do_refresh():
         fut_ndbc    = ex.submit(fetch_ndbc_data)
         fut_fmi     = ex.submit(fetch_fmi_data)
         fut_cdip    = ex.submit(fetch_cdip_data)
-        fut_socib   = ex.submit(fetch_socib_data)
 
         waarnemingen = fut_rws.result()
         rws_geojson  = build_geojson(_stations, waarnemingen)
@@ -1597,10 +1617,8 @@ def _do_refresh():
         except Exception as e:
             print(f"[CDIP] Fout: {e}")
 
-        try:
-            rws_geojson["features"].extend(fut_socib.result(timeout=25))
-        except Exception as e:
-            print(f"[SOCIB] Fout/timeout: {e}")
+    # SOCIB uit achtergrond-cache toevoegen (nooit blokkerend)
+    rws_geojson["features"].extend(_socib_wave_bg)
 
     rws_geojson["aantalStations"] = len(rws_geojson["features"])
     _cache      = rws_geojson
@@ -2143,13 +2161,9 @@ def get_wind_data():
     features.extend(ndbc_wind)
     print(f"[WIND] +{len(ndbc_wind)} NDBC windstations → totaal {len(features)}")
 
-    # SOCIB windstations toevoegen (Middellandse Zee)
-    try:
-        socib_wind = fetch_socib_wind_data()
-        features.extend(socib_wind)
-        print(f"[WIND] +{len(socib_wind)} SOCIB windstations → totaal {len(features)}")
-    except Exception as e:
-        print(f"[SOCIB wind] Fout: {e}")
+    # SOCIB windstations uit achtergrond-cache (nooit blokkerend)
+    features.extend(_socib_wind_bg)
+    print(f"[WIND] +{len(_socib_wind_bg)} SOCIB windstations → totaal {len(features)}")
 
     _wind_cache = {"type": "FeatureCollection", "features": features,
                    "opgehaald": now.isoformat(), "aantalStations": len(features)}
@@ -2715,9 +2729,10 @@ if __name__ == "__main__":
             print("[CACHE] Waves klaar.\n")
         except Exception as e:
             print(f"[CACHE] Waves fout: {e}\n")
-        # Fase 2: temp + wind parallel (langzamer vanwege RWS catalog + CDIP)
-        print("[CACHE] Fase 2: temp + wind + KNMI ophalen…")
+        # Fase 2: SOCIB + temp + wind parallel (traag, niet blokkerend voor golven)
+        print("[CACHE] Fase 2: SOCIB + temp + wind + KNMI ophalen…")
         try:
+            _refresh_socib_bg()   # SOCIB golven + wind in achtergrond cache laden
             with ThreadPoolExecutor(max_workers=3) as ex:
                 ft    = ex.submit(get_temp_data)
                 fwnd  = ex.submit(get_wind_data)
@@ -2725,6 +2740,8 @@ if __name__ == "__main__":
                 ft.result(); fwnd.result()
                 try: fknmi.result()
                 except Exception as e: print(f"[KNMI] Prewarm mislukt: {e}")
+            # Na SOCIB + wind/temp: waves opnieuw cachen met SOCIB-data
+            _refresh_waves()
             print("[CACHE] Alles klaar.\n")
         except Exception as e:
             print(f"[CACHE] Fout bij vooraf laden: {e}\n")
@@ -2734,11 +2751,12 @@ if __name__ == "__main__":
             print("[CACHE] Achtergrond-refresh gestart…")
             try:
                 with ThreadPoolExecutor(max_workers=4) as ex:
-                    fw    = ex.submit(_refresh_waves)
-                    ft    = ex.submit(get_temp_data)
-                    fwnd  = ex.submit(get_wind_data)
-                    fknmi = ex.submit(get_knmi_data)
-                    fw.result(); ft.result(); fwnd.result()
+                    fsocib = ex.submit(_refresh_socib_bg)
+                    ft     = ex.submit(get_temp_data)
+                    fwnd   = ex.submit(get_wind_data)
+                    fknmi  = ex.submit(get_knmi_data)
+                    fsocib.result(); fw_done = ex.submit(_refresh_waves)
+                    ft.result(); fwnd.result(); fw_done.result()
                     try: fknmi.result()
                     except Exception as e: print(f"[KNMI] Achtergrond-refresh mislukt: {e}")
             except Exception as e:
