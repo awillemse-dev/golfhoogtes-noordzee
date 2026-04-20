@@ -1119,18 +1119,27 @@ def _get_socib_latest_path(category, station_dir):
 
 
 def _ensure_socib_paths():
-    """Ververs de gecachede bestandspaden voor alle SOCIB stations (max 1× per 24 uur)."""
+    """Ververs de gecachede bestandspaden voor alle SOCIB stations (max 1× per 24 uur).
+    Alle catalog-lookups parallel om blokkering te voorkomen."""
     global _socib_wave_paths, _socib_wind_paths, _socib_paths_time
     if _socib_wave_paths and (time.time() - _socib_paths_time) < 86400:
         return
-    for d in SOCIB_WAVE_DIRS:
-        p = _get_socib_latest_path("waves_recorder", d)
-        if p:
-            _socib_wave_paths[d] = p
-    for d in SOCIB_WIND_DIRS:
-        p = _get_socib_latest_path("weather_station", d)
-        if p:
-            _socib_wind_paths[d] = p
+    all_dirs = (
+        [("waves_recorder", d) for d in SOCIB_WAVE_DIRS] +
+        [("weather_station", d) for d in SOCIB_WIND_DIRS]
+    )
+    with ThreadPoolExecutor(max_workers=len(all_dirs)) as ex:
+        futs = {(cat, d): ex.submit(_get_socib_latest_path, cat, d) for cat, d in all_dirs}
+    for (cat, d), fut in futs.items():
+        try:
+            p = fut.result(timeout=15)
+            if p:
+                if cat == "waves_recorder":
+                    _socib_wave_paths[d] = p
+                else:
+                    _socib_wind_paths[d] = p
+        except Exception:
+            pass
     _socib_paths_time = time.time()
     print(f"[SOCIB] Paths: {len(_socib_wave_paths)} wave, {len(_socib_wind_paths)} wind")
 
@@ -1589,9 +1598,9 @@ def _do_refresh():
             print(f"[CDIP] Fout: {e}")
 
         try:
-            rws_geojson["features"].extend(fut_socib.result())
+            rws_geojson["features"].extend(fut_socib.result(timeout=25))
         except Exception as e:
-            print(f"[SOCIB] Fout: {e}")
+            print(f"[SOCIB] Fout/timeout: {e}")
 
     rws_geojson["aantalStations"] = len(rws_geojson["features"])
     _cache      = rws_geojson
