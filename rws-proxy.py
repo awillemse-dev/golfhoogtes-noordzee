@@ -1044,7 +1044,382 @@ CDIP_ODAP     = CDIP_THREDDS + "/dodsC/cdip/realtime"
 _cdip_cache   = None
 _cdip_time    = 0
 
+
+# ── SOCIB: THREDDS OPeNDAP – Middellandse Zee (Balearen) ─────────────────────
+#
+# Bron: SOCIB (Sistema d'Observació i Predicció Costaner de les Illes Balears)
+# URL:  https://thredds.socib.es/thredds/  (THREDDS/OPeNDAP)
+# Licentie: Open data (CC BY 4.0)
+#
+# Golfboeien: WAV_HEI_SIG (significante golfhoogte)
+# Weerstations: WIN_SPE (windsnelheid m/s) + WIN_DIR (windrichting graden)
+#
+# Ophaalstrategie (zelfde als CDIP):
+#   1. DDS ophalen → Float64 time[time = N]
+#   2. ASCII laatste element [N-1:1:N-1]
+
+SOCIB_DODC = "https://thredds.socib.es/thredds/dodsC"
+SOCIB_CAT  = "https://thredds.socib.es/thredds/catalog"
+
+SOCIB_WAVE_DIRS = [
+    "buoy_bahiadepalma-scb_wave006",
+    "buoy_canaldeibiza-scb_wave007",
+    "buoy_portocolom-scb_wave005",
+    "buoy_soller-scb_wave004",
+    "mobims_sonbou-scb_awac005",
+]
+SOCIB_WAVE_NAMES = {
+    "buoy_bahiadepalma-scb_wave006": "Palma de Mallorca (golf)",
+    "buoy_canaldeibiza-scb_wave007": "Ibiza Kanaal (golf)",
+    "buoy_portocolom-scb_wave005":   "Porto Colom (golf)",
+    "buoy_soller-scb_wave004":       "Soller (golf)",
+    "mobims_sonbou-scb_awac005":     "Son Bou (golf)",
+}
+
+SOCIB_WIND_DIRS = [
+    "buoy_bahiadepalma-scb_met029",
+    "buoy_canaldeibiza-scb_met030",
+    "buoy_soller-scb_met024",
+    "buoy_portocolom-scb_met025",
+]
+SOCIB_WIND_NAMES = {
+    "buoy_bahiadepalma-scb_met029": "Palma de Mallorca (wind)",
+    "buoy_canaldeibiza-scb_met030": "Ibiza Kanaal (wind)",
+    "buoy_soller-scb_met024":       "Soller (wind)",
+    "buoy_portocolom-scb_met025":   "Porto Colom (wind)",
+}
+
+_socib_wave_paths = {}   # station_dir → nc urlPath
+_socib_wind_paths = {}   # station_dir → nc urlPath
+_socib_paths_time = 0
+
+
+def _get_socib_latest_path(category, station_dir):
+    """Fetch L1 catalog voor een SOCIB station en geef urlPath terug van de hoogste dep."""
+    import re as _re
+    try:
+        import xml.etree.ElementTree as _ET_socib
+        cat_url = f"{SOCIB_CAT}/mooring/{category}/{station_dir}/L1/catalog.xml"
+        req = urllib.request.Request(cat_url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            root = _ET_socib.fromstring(r.read())
+        best_dep = -1; best_path = None
+        for el in root.iter():
+            tag = el.tag.split("}")[-1] if "}" in el.tag else el.tag
+            if tag == "dataset":
+                up = el.get("urlPath", "")
+                if "_latest.nc" in up:
+                    m = _re.search(r'dep(\d+)_', up)
+                    if m and int(m.group(1)) > best_dep:
+                        best_dep = int(m.group(1)); best_path = up
+        return best_path
+    except Exception as e:
+        print(f"[SOCIB] catalog fout {station_dir}: {e}")
+        return None
+
+
+def _ensure_socib_paths():
+    """Ververs de gecachede bestandspaden voor alle SOCIB stations (max 1× per 24 uur)."""
+    global _socib_wave_paths, _socib_wind_paths, _socib_paths_time
+    if _socib_wave_paths and (time.time() - _socib_paths_time) < 86400:
+        return
+    for d in SOCIB_WAVE_DIRS:
+        p = _get_socib_latest_path("waves_recorder", d)
+        if p:
+            _socib_wave_paths[d] = p
+    for d in SOCIB_WIND_DIRS:
+        p = _get_socib_latest_path("weather_station", d)
+        if p:
+            _socib_wind_paths[d] = p
+    _socib_paths_time = time.time()
+    print(f"[SOCIB] Paths: {len(_socib_wave_paths)} wave, {len(_socib_wind_paths)} wind")
+
+
+def _socib_parse_ascii(text):
+    """Parset een OPeNDAP ASCII-response: scalars → str/float, arrays → lijst of float."""
+    lines    = text.splitlines()
+    in_data  = False
+    parsed   = {}
+    cur_key  = None
+    cur_vals = []
+
+    for line in lines:
+        s = line.strip()
+        # Wacht op scheidingslijn "---..."
+        if not in_data:
+            if s.startswith("---"):
+                in_data = True
+            continue
+
+        if not s:
+            if cur_key is not None and cur_vals:
+                parsed[cur_key] = cur_vals[0] if len(cur_vals) == 1 else cur_vals
+                cur_key = None; cur_vals = []
+            continue
+
+        if cur_key is not None:
+            # Dataregel van huidige array
+            try:
+                for v in s.split(","):
+                    v = v.strip()
+                    if v:
+                        cur_vals.append(float(v))
+            except ValueError:
+                pass
+        elif "[" in s:
+            # Array-header: "WAV_HEI_SIG[1]"
+            if cur_key is not None and cur_vals:
+                parsed[cur_key] = cur_vals[0] if len(cur_vals) == 1 else cur_vals
+                cur_vals = []
+            cur_key = s.split("[")[0].strip()
+        elif ", " in s:
+            # Scalar: "LAT, 39.498883" of "station_name, \"...\""
+            k, v = s.split(", ", 1)
+            parsed[k.strip()] = v.strip().strip('"')
+
+    if cur_key is not None and cur_vals:
+        parsed[cur_key] = cur_vals[0] if len(cur_vals) == 1 else cur_vals
+    return parsed
+
+
+def _socib_fetch_station_wave(station_dir):
+    """Haal actuele WAV_HEI_SIG op van één SOCIB golfboei via THREDDS OPeNDAP."""
+    import re as _re
+    nc_path = _socib_wave_paths.get(station_dir)
+    if not nc_path:
+        return None
+    naam = SOCIB_WAVE_NAMES.get(station_dir, station_dir)
+    try:
+        dds_url = f"{SOCIB_DODC}/{nc_path}.dds"
+        with urllib.request.urlopen(
+            urllib.request.Request(dds_url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"}),
+            timeout=10
+        ) as r:
+            dds = r.read().decode()
+        m = _re.search(r'Float64 time\[time = (\d+)\]', dds)
+        if not m: return None
+        n = int(m.group(1)); last = n - 1
+
+        data_url = (f"{SOCIB_DODC}/{nc_path}.ascii?"
+                    f"LAT,LON,station_name,time[{last}:1:{last}],WAV_HEI_SIG[{last}:1:{last}]")
+        with urllib.request.urlopen(
+            urllib.request.Request(data_url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"}),
+            timeout=10
+        ) as r:
+            text = r.read().decode()
+
+        p   = _socib_parse_ascii(text)
+        lat = float(p.get("LAT", "nan"))
+        lon = float(p.get("LON", "nan"))
+        hs_raw = p.get("WAV_HEI_SIG")
+        hs  = float(hs_raw) if hs_raw is not None else float("nan")
+        ts_posix = float(p.get("time", 0))
+
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180): return None
+        if not (0 < hs < 30): return None
+        obs_dt = datetime.utcfromtimestamp(ts_posix)
+        if (datetime.utcnow() - obs_dt).total_seconds() > 12 * 3600: return None
+
+        return {
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [round(lon, 4), round(lat, 4)]},
+            "properties": {
+                "code":       f"socib.{station_dir}",
+                "naam":       naam,
+                "hm0_m":      round(hs, 2),
+                "tijdstip":   obs_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "bron":       "SOCIB",
+                "socib_path": nc_path,
+            },
+        }
+    except Exception as e:
+        print(f"[SOCIB wave] {station_dir}: {e}")
+        return None
+
+
+def fetch_socib_data():
+    """Haal golfdata op van SOCIB THREDDS OPeNDAP (Middellandse Zee, Balearen)."""
+    _ensure_socib_paths()
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        results = list(ex.map(_socib_fetch_station_wave, SOCIB_WAVE_DIRS))
+    features = [r for r in results if r is not None]
+    print(f"[SOCIB] {len(features)} golfstations geladen")
+    return features
+
+
+def _socib_fetch_station_wind(station_dir):
+    """Haal actuele WIN_SPE + WIN_DIR op van één SOCIB weerstation via THREDDS OPeNDAP."""
+    import re as _re
+    nc_path = _socib_wind_paths.get(station_dir)
+    if not nc_path:
+        return None
+    naam = SOCIB_WIND_NAMES.get(station_dir, station_dir)
+    try:
+        dds_url = f"{SOCIB_DODC}/{nc_path}.dds"
+        with urllib.request.urlopen(
+            urllib.request.Request(dds_url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"}),
+            timeout=10
+        ) as r:
+            dds = r.read().decode()
+        m = _re.search(r'Float64 time\[time = (\d+)\]', dds)
+        if not m: return None
+        n = int(m.group(1)); last = n - 1
+
+        data_url = (f"{SOCIB_DODC}/{nc_path}.ascii?"
+                    f"LAT,LON,station_name,time[{last}:1:{last}],"
+                    f"WIN_SPE[{last}:1:{last}],WIN_DIR[{last}:1:{last}]")
+        with urllib.request.urlopen(
+            urllib.request.Request(data_url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"}),
+            timeout=10
+        ) as r:
+            text = r.read().decode()
+
+        p    = _socib_parse_ascii(text)
+        lat  = float(p.get("LAT", "nan"))
+        lon  = float(p.get("LON", "nan"))
+        spd  = p.get("WIN_SPE")
+        wdir = p.get("WIN_DIR")
+        ts_posix = float(p.get("time", 0))
+
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180): return None
+        wind_ms = round(float(spd), 1) if spd is not None else None
+        if wind_ms is None or not (0 <= wind_ms <= 60): return None
+        wind_dir = int(round(float(wdir))) % 360 if wdir is not None else None
+
+        obs_dt = datetime.utcfromtimestamp(ts_posix)
+        if (datetime.utcnow() - obs_dt).total_seconds() > 6 * 3600: return None
+
+        return {
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [round(lon, 4), round(lat, 4)]},
+            "properties": {
+                "code":       f"socib.wind.{station_dir}",
+                "naam":       naam,
+                "wind_ms":    wind_ms,
+                "wind_dir":   wind_dir,
+                "tijdstip":   obs_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "bron":       "SOCIB",
+                "socib_path": nc_path,
+            },
+        }
+    except Exception as e:
+        print(f"[SOCIB wind] {station_dir}: {e}")
+        return None
+
+
+def fetch_socib_wind_data():
+    """Haal winddata op van SOCIB THREDDS OPeNDAP (Middellandse Zee, Balearen)."""
+    _ensure_socib_paths()
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        results = list(ex.map(_socib_fetch_station_wind, SOCIB_WIND_DIRS))
+    features = [r for r in results if r is not None]
+    print(f"[SOCIB wind] {len(features)} stations geladen")
+    return features
+
+
+def fetch_socib_wave_history(nc_path, naam, code):
+    """Haal 24u golfgeschiedenis op van een SOCIB THREDDS bestand."""
+    import re as _re
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{SOCIB_DODC}/{nc_path}.dds",
+                                   headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"}),
+            timeout=10
+        ) as r:
+            dds = r.read().decode()
+        m = _re.search(r'Float64 time\[time = (\d+)\]', dds)
+        if not m: return {"code": code, "naam": naam, "data": []}
+        n = int(m.group(1))
+        start = max(0, n - 96)   # 96 punten = 24h bij uurlijkse data
+
+        data_url = (f"{SOCIB_DODC}/{nc_path}.ascii?"
+                    f"time[{start}:1:{n-1}],WAV_HEI_SIG[{start}:1:{n-1}]")
+        with urllib.request.urlopen(
+            urllib.request.Request(data_url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"}),
+            timeout=15
+        ) as r:
+            text = r.read().decode()
+
+        p     = _socib_parse_ascii(text)
+        times = p.get("time", [])
+        vals  = p.get("WAV_HEI_SIG", [])
+        if isinstance(times, (int, float)): times = [times]
+        if isinstance(vals,  (int, float)): vals  = [vals]
+
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+        data   = []
+        for ts_posix, hs in zip(times, vals):
+            try:
+                obs_dt = datetime.utcfromtimestamp(float(ts_posix))
+                if obs_dt < cutoff or not (0 < float(hs) < 30): continue
+                data.append({"t": obs_dt.strftime("%Y-%m-%dT%H:%M:%SZ"), "v": round(float(hs), 2)})
+            except Exception:
+                pass
+        data.sort(key=lambda x: x["t"])
+        return {"code": code, "naam": naam, "data": data}
+    except Exception as e:
+        print(f"[SOCIB wave history] {e}")
+        return {"code": code, "naam": naam, "data": []}
+
+
+def fetch_socib_wind_history(nc_path, naam, code):
+    """Haal 24u windgeschiedenis op van een SOCIB THREDDS weerstation-bestand."""
+    import re as _re
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{SOCIB_DODC}/{nc_path}.dds",
+                                   headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"}),
+            timeout=10
+        ) as r:
+            dds = r.read().decode()
+        m = _re.search(r'Float64 time\[time = (\d+)\]', dds)
+        if not m: return {"code": code, "naam": naam, "data": [], "dir_data": []}
+        n = int(m.group(1))
+        start = max(0, n - 200)  # meer punten voor mogelijk hogere frequentie
+
+        data_url = (f"{SOCIB_DODC}/{nc_path}.ascii?"
+                    f"time[{start}:1:{n-1}],"
+                    f"WIN_SPE[{start}:1:{n-1}],WIN_DIR[{start}:1:{n-1}]")
+        with urllib.request.urlopen(
+            urllib.request.Request(data_url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"}),
+            timeout=15
+        ) as r:
+            text = r.read().decode()
+
+        p     = _socib_parse_ascii(text)
+        times = p.get("time", [])
+        spds  = p.get("WIN_SPE", [])
+        dirs  = p.get("WIN_DIR", [])
+        if isinstance(times, (int, float)): times = [times]
+        if isinstance(spds,  (int, float)): spds  = [spds]
+        if isinstance(dirs,  (int, float)): dirs  = [dirs]
+
+        cutoff   = datetime.utcnow() - timedelta(hours=24)
+        data     = []
+        dir_data = []
+        for i, ts_posix in enumerate(times):
+            try:
+                obs_dt = datetime.utcfromtimestamp(float(ts_posix))
+                if obs_dt < cutoff: continue
+                t   = obs_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                spd = float(spds[i]) if i < len(spds) else None
+                d   = float(dirs[i]) if i < len(dirs) else None
+                if spd is not None and 0 <= spd <= 60:
+                    data.append({"t": t, "v": round(spd, 1)})
+                if d is not None:
+                    dir_data.append({"t": t, "v": int(round(d)) % 360})
+            except Exception:
+                pass
+        data.sort(key=lambda x: x["t"])
+        dir_data.sort(key=lambda x: x["t"])
+        return {"code": code, "naam": naam, "data": data, "dir_data": dir_data}
+    except Exception as e:
+        print(f"[SOCIB wind history] {e}")
+        return {"code": code, "naam": naam, "data": [], "dir_data": []}
+
+
 def fetch_cdip_data():
+
     """Fetch wave data from CDIP (Coastal Data Information Program) via THREDDS OPeNDAP."""
     global _cdip_cache, _cdip_time
     import re as _re
@@ -1169,8 +1544,8 @@ def _do_refresh():
     if _stations is None:
         _stations = fetch_hm0_stations()
 
-    # RWS, BSH, CEFAS, La Bouée, NDBC, FMI en CDIP parallel ophalen
-    with ThreadPoolExecutor(max_workers=7) as ex:
+    # RWS, BSH, CEFAS, La Bouée, NDBC, FMI, CDIP en SOCIB parallel ophalen
+    with ThreadPoolExecutor(max_workers=8) as ex:
         fut_rws     = ex.submit(fetch_latest_values, _stations)
         fut_bsh     = ex.submit(fetch_bsh_data)
         fut_cefas   = ex.submit(fetch_cefas_data)
@@ -1178,6 +1553,7 @@ def _do_refresh():
         fut_ndbc    = ex.submit(fetch_ndbc_data)
         fut_fmi     = ex.submit(fetch_fmi_data)
         fut_cdip    = ex.submit(fetch_cdip_data)
+        fut_socib   = ex.submit(fetch_socib_data)
 
         waarnemingen = fut_rws.result()
         rws_geojson  = build_geojson(_stations, waarnemingen)
@@ -1212,10 +1588,15 @@ def _do_refresh():
         except Exception as e:
             print(f"[CDIP] Fout: {e}")
 
+        try:
+            rws_geojson["features"].extend(fut_socib.result())
+        except Exception as e:
+            print(f"[SOCIB] Fout: {e}")
+
     rws_geojson["aantalStations"] = len(rws_geojson["features"])
     _cache      = rws_geojson
     _cache_time = time.time()
-    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée + NDBC + FMI + CDIP)")
+    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée + NDBC + FMI + CDIP + SOCIB)")
 
 
 def get_data():
@@ -1753,6 +2134,14 @@ def get_wind_data():
     features.extend(ndbc_wind)
     print(f"[WIND] +{len(ndbc_wind)} NDBC windstations → totaal {len(features)}")
 
+    # SOCIB windstations toevoegen (Middellandse Zee)
+    try:
+        socib_wind = fetch_socib_wind_data()
+        features.extend(socib_wind)
+        print(f"[WIND] +{len(socib_wind)} SOCIB windstations → totaal {len(features)}")
+    except Exception as e:
+        print(f"[SOCIB wind] Fout: {e}")
+
     _wind_cache = {"type": "FeatureCollection", "features": features,
                    "opgehaald": now.isoformat(), "aantalStations": len(features)}
     _wind_time  = time.time()
@@ -2039,7 +2428,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
             try:
-                if code.startswith("ndbc.wind."):
+                if code.startswith("socib.wind."):
+                    # SOCIB weerstation wind history via THREDDS OPeNDAP
+                    socib_path = None; naam_wh = code
+                    cached_wnd = get_wind_data()
+                    for feat in cached_wnd.get("features", []):
+                        if feat["properties"].get("code") == code:
+                            socib_path = feat["properties"].get("socib_path")
+                            naam_wh    = feat["properties"].get("naam", naam_wh)
+                            break
+                    if socib_path:
+                        data = fetch_socib_wind_history(socib_path, naam_wh, code)
+                    else:
+                        data = {"code": code, "naam": naam_wh, "data": [], "dir_data": []}
+                elif code.startswith("ndbc.wind."):
                     station_id = code[len("ndbc.wind."):]
                     data = fetch_ndbc_wind_history(station_id)
                 else:
@@ -2122,7 +2524,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
             try:
-                if code.startswith("cefas."):
+                if code.startswith("socib.") and not code.startswith("socib.wind."):
+                    # SOCIB golfstation history via THREDDS OPeNDAP
+                    socib_path = None; naam_h = code
+                    cached = get_data()
+                    for feat in cached.get("features", []):
+                        if feat["properties"].get("code") == code:
+                            socib_path = feat["properties"].get("socib_path")
+                            naam_h     = feat["properties"].get("naam", naam_h)
+                            break
+                    if socib_path:
+                        data = fetch_socib_wave_history(socib_path, naam_h, code)
+                    else:
+                        data = {"code": code, "naam": naam_h, "data": []}
+                elif code.startswith("cefas."):
                     # Zoek cefas_id en cefas_source op in de cache
                     station_id = code[6:].upper()
                     source     = "INT"
