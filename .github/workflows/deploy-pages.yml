@@ -1,0 +1,45 @@
+name: Deploy naar GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'golfhoogtes-noordzee.html'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository ophalen
+        uses: actions/checkout@v4
+
+      - name: Kopieer index.html naar site-map
+        run: |
+          mkdir -p _site
+          cp index.html _site/index.html
+
+      - name: GitHub Pages instellen
+        uses: actions/configure-pages@v5
+
+      - name: Artefact uploaden
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deployen naar GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
