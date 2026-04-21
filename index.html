@@ -792,8 +792,8 @@ async function fetchWindData() {
     setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
   } catch (err) {
     console.error(err);
-    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Opnieuw laden…');
-    if (!LOCAL) setTimeout(() => { if (activeLayer === 'wind') fetchWindData().then(startCountdown); }, 5000);
+    setStatus('error', 'Opnieuw laden…');
+    setTimeout(() => { if (activeLayer === 'wind') fetchWindData().then(startCountdown); }, 5000);
   }
 }
 
@@ -918,8 +918,8 @@ async function fetchTempData() {
     setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
   } catch (err) {
     console.error(err);
-    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Opnieuw laden…');
-    if (!LOCAL) setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
+    setStatus('error', 'Opnieuw laden…');
+    setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
   }
 }
 
@@ -1066,8 +1066,8 @@ async function fetchWaveData() {
     setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
   } catch (err) {
     console.error(err);
-    setStatus('error', LOCAL ? 'Proxy niet bereikbaar' : 'Opnieuw laden…');
-    if (!LOCAL) setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
+    setStatus('error', 'Opnieuw laden…');
+    setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
   }
 }
 

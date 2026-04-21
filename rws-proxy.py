@@ -18,6 +18,7 @@ import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
 
@@ -2392,7 +2393,8 @@ def get_knmi_data():
 class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
-        print(f"[HTTP] {self.address_string()} – {fmt % args}")
+        addr = self.client_address[0] if self.client_address else "?"
+        print(f"[HTTP] {addr} – {fmt % args}")
 
     def send_cors(self):
         self.send_header("Access-Control-Allow-Origin",  "*")
@@ -2763,9 +2765,10 @@ if __name__ == "__main__":
             _do_refresh()
 
     import socket as _socket
-    class DualStackServer(HTTPServer):
-        """Luistert op IPv4 én IPv6 zodat Safari via localhost verbinding maakt."""
-        address_family = _socket.AF_INET6
+    class DualStackServer(ThreadingMixIn, HTTPServer):
+        """Multi-threaded server op IPv4 + IPv6 — elke request in eigen thread."""
+        daemon_threads  = True
+        address_family  = _socket.AF_INET6
         def server_bind(self):
             self.socket.setsockopt(_socket.IPPROTO_IPV6, _socket.IPV6_V6ONLY, 0)
             super().server_bind()
