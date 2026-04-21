@@ -1043,6 +1043,7 @@ CDIP_CATALOG  = CDIP_THREDDS + "/catalog/cdip/realtime/catalog.xml"
 CDIP_ODAP     = CDIP_THREDDS + "/dodsC/cdip/realtime"
 _cdip_cache   = None
 _cdip_time    = 0
+_cdip_bg      = []   # achtergrond-cache (nooit blokkerend voor _do_refresh)
 
 
 # ── SOCIB: THREDDS OPeNDAP – Middellandse Zee (Balearen) ─────────────────────
@@ -1328,6 +1329,17 @@ def fetch_socib_wind_data():
     return features
 
 
+def _refresh_cdip_bg():
+    """Vul _cdip_bg vanuit CDIP THREDDS (kan 50s duren, blokkeert _do_refresh NIET)."""
+    global _cdip_bg
+    try:
+        data = fetch_cdip_data()
+        _cdip_bg = data
+        print(f"[CDIP bg] {len(data)} stations geladen")
+    except Exception as e:
+        print(f"[CDIP bg] Fout: {e}")
+
+
 def _refresh_socib_bg():
     """Vul _socib_wave_bg en _socib_wind_bg vanuit SOCIB THREDDS.
     Roept _ensure_socib_paths() aan (kan traag zijn) en slaat resultaat op
@@ -1555,8 +1567,18 @@ def fetch_cdip_data():
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=20) as ex:
-        results = list(ex.map(fetch_station, station_files))
+    from concurrent.futures import wait as _wait
+    ex = ThreadPoolExecutor(max_workers=20)
+    futs = [ex.submit(fetch_station, sf) for sf in station_files]
+    _wait(futs, timeout=50)           # max 50s totaal; hangende threads worden genegeerd
+    ex.shutdown(wait=False)           # laat resterende threads uitsterven, blokkeer niet
+    results = []
+    for f in futs:
+        if f.done():
+            try:
+                results.append(f.result())
+            except Exception:
+                pass
 
     features = [r for r in results if r is not None]
     print(f"[CDIP] {len(features)} stations met verse data (van {len(station_files)} realtime stations)")
@@ -1568,56 +1590,49 @@ def fetch_cdip_data():
 _refresh_lock = threading.Lock()
 
 def _do_refresh():
-    """Haal alle bronnen parallel op en sla op in cache."""
+    """Haal snelle bronnen parallel op (max ~35s) en sla op in cache.
+    CDIP en SOCIB komen uit de achtergrond-cache zodat _do_refresh nooit blokkeert."""
     global _cache, _cache_time, _stations
 
     if _stations is None:
-        _stations = fetch_hm0_stations()
-
-    # RWS, BSH, CEFAS, La Bouée, NDBC, FMI en CDIP parallel ophalen
-    with ThreadPoolExecutor(max_workers=7) as ex:
-        fut_rws     = ex.submit(fetch_latest_values, _stations)
-        fut_bsh     = ex.submit(fetch_bsh_data)
-        fut_cefas   = ex.submit(fetch_cefas_data)
-        fut_labouee = ex.submit(fetch_labouee_data)
-        fut_ndbc    = ex.submit(fetch_ndbc_data)
-        fut_fmi     = ex.submit(fetch_fmi_data)
-        fut_cdip    = ex.submit(fetch_cdip_data)
-
-        waarnemingen = fut_rws.result()
-        rws_geojson  = build_geojson(_stations, waarnemingen)
-
         try:
-            rws_geojson["features"].extend(fut_bsh.result())
+            _stations = fetch_hm0_stations()
         except Exception as e:
-            print(f"[BSH] Fout: {e}")
+            print(f"[RWS] Catalogus mislukt: {e}")
+            _stations = []
 
-        try:
-            rws_geojson["features"].extend(fut_cefas.result())
-        except Exception as e:
-            print(f"[CEFAS] Fout: {e}")
+    from concurrent.futures import wait as _wait
+    ex = ThreadPoolExecutor(max_workers=6)
+    fut_rws     = ex.submit(fetch_latest_values, _stations)
+    fut_bsh     = ex.submit(fetch_bsh_data)
+    fut_cefas   = ex.submit(fetch_cefas_data)
+    fut_labouee = ex.submit(fetch_labouee_data)
+    fut_ndbc    = ex.submit(fetch_ndbc_data)
+    fut_fmi     = ex.submit(fetch_fmi_data)
 
-        try:
-            rws_geojson["features"].extend(fut_labouee.result())
-        except Exception as e:
-            print(f"[LaBouée] Fout: {e}")
+    # Wacht max 35s op alle snelle bronnen; daarna doorgaan met wat klaar is
+    _wait([fut_rws, fut_bsh, fut_cefas, fut_labouee, fut_ndbc, fut_fmi], timeout=35)
+    ex.shutdown(wait=False)
 
-        try:
-            rws_geojson["features"].extend(fut_ndbc.result())
-        except Exception as e:
-            print(f"[NDBC] Fout: {e}")
+    try:
+        waarnemingen = fut_rws.result() if fut_rws.done() else []
+    except Exception as e:
+        print(f"[RWS] Fout: {e}")
+        waarnemingen = []
+    rws_geojson = build_geojson(_stations, waarnemingen)
 
-        try:
-            rws_geojson["features"].extend(fut_fmi.result())
-        except Exception as e:
-            print(f"[FMI] Fout: {e}")
+    for fut, label in [(fut_bsh, "BSH"), (fut_cefas, "CEFAS"),
+                       (fut_labouee, "LaBouée"), (fut_ndbc, "NDBC"), (fut_fmi, "FMI")]:
+        if fut.done():
+            try:
+                rws_geojson["features"].extend(fut.result())
+            except Exception as e:
+                print(f"[{label}] Fout: {e}")
+        else:
+            print(f"[{label}] Timeout — overgeslagen")
 
-        try:
-            rws_geojson["features"].extend(fut_cdip.result())
-        except Exception as e:
-            print(f"[CDIP] Fout: {e}")
-
-    # SOCIB uit achtergrond-cache toevoegen (nooit blokkerend)
+    # CDIP en SOCIB uit achtergrond-cache (nooit blokkerend)
+    rws_geojson["features"].extend(_cdip_bg)
     rws_geojson["features"].extend(_socib_wave_bg)
 
     rws_geojson["aantalStations"] = len(rws_geojson["features"])
@@ -2761,43 +2776,49 @@ if __name__ == "__main__":
 
     # Prewarm + achtergrond-refresh in aparte thread — blokkeert de server niet
     def _background_loop():
-        # Fase 1: waves snel ophalen zodat de server meteen reageert
-        print("[CACHE] Fase 1: waves ophalen…")
+        # Fase 1: waves snel laden (RWS + BSH + CEFAS + LaBouée + NDBC + FMI, max 35s)
+        # CDIP en SOCIB zitten in achtergrond-caches en worden hierna gevuld.
+        print("[CACHE] Fase 1: waves ophalen (snel, zonder CDIP/SOCIB)…")
         try:
             _refresh_waves()
             print("[CACHE] Waves klaar.\n")
         except Exception as e:
             print(f"[CACHE] Waves fout: {e}\n")
-        # Fase 2: SOCIB + temp + wind parallel (traag, niet blokkerend voor golven)
-        print("[CACHE] Fase 2: SOCIB + temp + wind + KNMI ophalen…")
+
+        # Fase 2: CDIP + SOCIB + temp + wind parallel (traag, blokkeert golven niet)
+        print("[CACHE] Fase 2: CDIP + SOCIB + temp + wind ophalen…")
         try:
-            _refresh_socib_bg()   # SOCIB golven + wind in achtergrond cache laden
-            with ThreadPoolExecutor(max_workers=3) as ex:
-                ft    = ex.submit(get_temp_data)
-                fwnd  = ex.submit(get_wind_data)
-                fknmi = ex.submit(get_knmi_data)
-                ft.result(); fwnd.result()
-                try: fknmi.result()
-                except Exception as e: print(f"[KNMI] Prewarm mislukt: {e}")
-            # Na SOCIB + wind/temp: waves opnieuw cachen met SOCIB-data
+            from concurrent.futures import wait as _wait2
+            ex2 = ThreadPoolExecutor(max_workers=4)
+            fcdip  = ex2.submit(_refresh_cdip_bg)
+            fsocib = ex2.submit(_refresh_socib_bg)
+            ft     = ex2.submit(get_temp_data)
+            fwnd   = ex2.submit(get_wind_data)
+            _wait2([fcdip, fsocib, ft, fwnd], timeout=120)
+            ex2.shutdown(wait=False)
+            try: get_knmi_data()
+            except Exception as e: print(f"[KNMI] Prewarm mislukt: {e}")
+            # Waves opnieuw cachen nu CDIP + SOCIB gevuld zijn
             _refresh_waves()
             print("[CACHE] Alles klaar.\n")
         except Exception as e:
             print(f"[CACHE] Fout bij vooraf laden: {e}\n")
+
         # Daarna elke 9 minuten herhalen
         while True:
             time.sleep(9 * 60)
             print("[CACHE] Achtergrond-refresh gestart…")
             try:
-                with ThreadPoolExecutor(max_workers=4) as ex:
-                    fsocib = ex.submit(_refresh_socib_bg)
-                    ft     = ex.submit(get_temp_data)
-                    fwnd   = ex.submit(get_wind_data)
-                    fknmi  = ex.submit(get_knmi_data)
-                    fsocib.result(); fw_done = ex.submit(_refresh_waves)
-                    ft.result(); fwnd.result(); fw_done.result()
-                    try: fknmi.result()
-                    except Exception as e: print(f"[KNMI] Achtergrond-refresh mislukt: {e}")
+                from concurrent.futures import wait as _wait3
+                ex3 = ThreadPoolExecutor(max_workers=5)
+                fcdip  = ex3.submit(_refresh_cdip_bg)
+                fsocib = ex3.submit(_refresh_socib_bg)
+                ft     = ex3.submit(get_temp_data)
+                fwnd   = ex3.submit(get_wind_data)
+                fknmi  = ex3.submit(get_knmi_data)
+                _wait3([fcdip, fsocib, ft, fwnd, fknmi], timeout=120)
+                ex3.shutdown(wait=False)
+                _refresh_waves()
             except Exception as e:
                 print(f"[CACHE] Achtergrond-refresh mislukt: {e}")
 
