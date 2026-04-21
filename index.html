@@ -1054,6 +1054,11 @@ async function fetchWaveData() {
     const resp = await fetchWithTimeout(wavesUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
+    // Server is nog aan het opstarten — probeer opnieuw over 5 seconden
+    if (geojson.laden) {
+      setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
+      return;
+    }
     renderMarkers(geojson);
     const opgehaald = geojson.opgehaald
       ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })

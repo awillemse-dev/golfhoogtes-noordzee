@@ -1626,19 +1626,36 @@ def _do_refresh():
     print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée + NDBC + FMI + CDIP + SOCIB)")
 
 
+_EMPTY_WAVES = {
+    "type": "FeatureCollection",
+    "features": [],
+    "aantalStations": 0,
+    "opgehaald": "",
+    "laden": True,
+}
+
 def get_data():
     global _cache, _cache_time
 
     if _cache and (time.time() - _cache_time) < CACHE_S:
         return _cache
 
-    # Voorkom dat meerdere requests tegelijk verversen
-    with _refresh_lock:
+    # Probeer lock te krijgen zonder te blokkeren (max 2 seconden).
+    # Als de achtergrond-thread al aan het verversen is, geef meteen terug
+    # zodat Render de verbinding niet verbreekt.
+    acquired = _refresh_lock.acquire(timeout=2)
+    if not acquired:
+        # Refresh loopt al — geef verouderde cache of lege GeoJSON terug
+        return _cache if _cache else _EMPTY_WAVES
+
+    try:
         if _cache and (time.time() - _cache_time) < CACHE_S:
             return _cache
         _do_refresh()
+    finally:
+        _refresh_lock.release()
 
-    return _cache
+    return _cache if _cache else _EMPTY_WAVES
 
 
 def get_temp_data():
@@ -2375,8 +2392,30 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
 
+        # ── /api/status ─────────────────────────────────────────────────────
+        if path == "/api/status":
+            lock_free = _refresh_lock.acquire(blocking=False)
+            if lock_free:
+                _refresh_lock.release()
+            status = {
+                "cache_stations": _cache["aantalStations"] if _cache else 0,
+                "cache_age_s":    round(time.time() - _cache_time) if _cache_time else None,
+                "refresh_running": not lock_free,
+                "socib_wave_bg":  len(_socib_wave_bg),
+                "socib_wind_bg":  len(_socib_wind_bg),
+                "wind_stations":  _wind_cache["aantalStations"] if _wind_cache else 0,
+                "temp_stations":  _temp_cache["aantalStations"] if _temp_cache else 0,
+            }
+            body = json.dumps(status).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type",   "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_cors()
+            self.end_headers()
+            self.wfile.write(body)
+
         # ── /api/waves ──────────────────────────────────────────────────────
-        if path == "/api/waves":
+        elif path == "/api/waves":
             try:
                 data = get_data()
                 body = json.dumps(data, ensure_ascii=False).encode("utf-8")
