@@ -2390,6 +2390,23 @@ def get_knmi_data():
 
 # ── HTTP-handler ─────────────────────────────────────────────────────────────
 
+import math as _math
+
+def _sanitize(obj):
+    """Vervang NaN/Infinity diep in een dict/list door None (geldige JSON)."""
+    if isinstance(obj, float):
+        return None if not _math.isfinite(obj) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    return obj
+
+def _safe_json(obj):
+    """json.dumps die NaN/Infinity vervangt door null."""
+    return json.dumps(_sanitize(obj), ensure_ascii=False)
+
+
 class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
@@ -2435,7 +2452,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/waves":
             try:
                 data = get_data()
-                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type",   "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -2456,7 +2473,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/temp":
             try:
                 data = get_temp_data()
-                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type",   "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -2477,7 +2494,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/wind":
             try:
                 data = get_wind_data()
-                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type",   "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -2534,7 +2551,7 @@ class Handler(BaseHTTPRequestHandler):
                             rws_code = feat["properties"].get("rws_code", rws_code)
                             break
                     data = fetch_wind_history(rws_code, naam)
-                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type",   "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -2555,7 +2572,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/knmi":
             try:
                 data = get_knmi_data()
-                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type",   "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -2576,7 +2593,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/nl-border":
             data = get_nl_border()
             if data:
-                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type",   "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -2638,7 +2655,7 @@ class Handler(BaseHTTPRequestHandler):
                     data = fetch_ndbc_history(station_id)
                 else:
                     data = fetch_history(code)
-                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type",   "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -2683,7 +2700,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     # RWS: in-memory ring buffer (groeit elke 10 min)
                     data = get_rws_temp_history(code)
-                body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type",   "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
