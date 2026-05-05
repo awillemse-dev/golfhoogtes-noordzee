@@ -2563,12 +2563,14 @@ def fetch_knmi_data():
         vv     = round(vv_m / 1000, 2) if vv_m is not None else None
         rh     = fval("rainFallLastHour")
 
+        sid = str(s.get("stationid", ""))
         features.append({
             "type":     "Feature",
             "geometry": {"type": "Point", "coordinates": [lon, lat]},
             "properties": {
+                "code":       f"knmi.vis.{sid}",
                 "naam":       naam,
-                "station_id": str(s.get("stationid", "")),
+                "station_id": sid,
                 "bron":       "Buienradar/KNMI",
                 "tijdstip":   ts,
                 "ta":   temp,
@@ -2772,7 +2774,7 @@ class Handler(BaseHTTPRequestHandler):
                 # Open-Meteo uurlijkse zicht voor afgelopen 24 uur
                 url = (f"https://api.open-meteo.com/v1/forecast"
                        f"?latitude={lat}&longitude={lon}"
-                       f"&hourly=visibility&past_days=1&forecast_days=0"
+                       f"&hourly=visibility&past_days=1&forecast_days=1"
                        f"&timezone=UTC")
                 req = urllib.request.Request(
                     url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
