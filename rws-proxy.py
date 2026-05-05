@@ -2031,190 +2031,229 @@ def _thin_by_grid(features, deg=4.0):
     return list(seen.values())
 
 
+_TEMP_INLAND = [
+    "ijsselmeer", "markermeer", "markerwaard", "markerwadden", "slotermeer",
+    "woudsend", "waddenzee", "grevelingen", "veerse", "volkerak", "haringvliet",
+    "hollands diep", "lek", "waal", "rijn", "maas", "ijssel", "zwarte meer",
+    "randmeer", "veluwemeer", "eemmeer", "gooimeer", "almere", "strand",
+    "zwembad", "badstrand", "recreatie", "triathlon", "bosbaan",
+]
+
+def _fetch_rws_temp():
+    """RWS zeewatertemperatuur (Noordzee-stations). Eén catalogusverzoek + parallelle batches."""
+    now      = datetime.now(timezone.utc)
+    features = []
+    catalog  = rws_post("/METADATASERVICES/OphalenCatalogus", {"CatalogusFilter": {
+        "Grootheden": True, "Eenheden": True,
+        "Compartimenten": True, "ProcesTypes": True, "Groeperingen": True,
+    }})
+    meta      = catalog.get("AquoMetadataLijst", [])
+    locs      = catalog.get("LocatieLijst", [])
+    meta_locs = catalog.get("AquoMetadataLocatieLijst", [])
+
+    temp_meta_ids = {m["AquoMetadata_MessageID"] for m in meta
+                     if m.get("Grootheid", {}).get("Code") == "T"
+                     and m.get("Compartiment", {}).get("Code") == "OW"}
+    temp_loc_ids  = {r["Locatie_MessageID"] for r in meta_locs
+                     if r.get("AquoMetaData_MessageID") in temp_meta_ids}
+
+    stations = [l for l in locs
+                if l.get("Locatie_MessageID") in temp_loc_ids
+                and l.get("Lat") and l.get("Lon")
+                and 2.0 < l["Lon"] < 9.5 and 51.0 < l["Lat"] < 56.5
+                and not any(kw in l.get("Code","").lower() or kw in l.get("Naam","").lower()
+                            for kw in _TEMP_INLAND)]
+
+    BATCH = 20
+    station_map  = {s["Code"]: s for s in stations}
+    batches      = [stations[i:i + BATCH] for i in range(0, len(stations), BATCH)]
+
+    def fetch_batch(batch):
+        return rws_post("/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen", {
+            "AquoPlusWaarnemingMetadataLijst": [{"AquoMetadata": {
+                "Compartiment": {"Code": "OW"},
+                "Eenheid":      {"Code": "oC"},
+                "Grootheid":    {"Code": "T"},
+            }}],
+            "LocatieLijst": [{"Code": s["Code"]} for s in batch],
+        })
+
+    from concurrent.futures import wait as _wt
+    ex_rws  = ThreadPoolExecutor(max_workers=len(batches) or 1)
+    futs    = [ex_rws.submit(fetch_batch, b) for b in batches]
+    _wt(futs, timeout=20)
+    ex_rws.shutdown(wait=False)
+
+    for fut in futs:
+        if not fut.done():
+            continue
+        try:
+            resp = fut.result()
+        except Exception:
+            continue
+        best = {}
+        for w in resp.get("WaarnemingenLijst", []):
+            loc_code = (w.get("Locatie") or {}).get("Code")
+            if not loc_code:
+                continue
+            metingen = w.get("MetingenLijst") or []
+            tijdstip = metingen[0].get("Tijdstip") if metingen else None
+            if loc_code not in best or (tijdstip or "") > (
+                ((best[loc_code].get("MetingenLijst") or [{}])[0]).get("Tijdstip") or ""
+            ):
+                best[loc_code] = w
+
+        for loc_code, w in best.items():
+            station  = station_map.get(loc_code) or w.get("Locatie") or {}
+            lat = station.get("Lat") or (w.get("Locatie") or {}).get("Lat")
+            lon = station.get("Lon") or (w.get("Locatie") or {}).get("Lon")
+            if lat is None or lon is None:
+                continue
+            naam     = (w.get("Locatie") or {}).get("Naam") or station.get("Naam") or loc_code
+            metingen = w.get("MetingenLijst") or []
+            meting   = metingen[0] if metingen else {}
+            waarde   = (meting.get("Meetwaarde") or {}).get("Waarde_Numeriek")
+            temp_c   = round(waarde, 1) if waarde is not None else None
+            tijdstip = meting.get("Tijdstip")
+            if tijdstip:
+                try:
+                    dt = datetime.fromisoformat(tijdstip)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if (now - dt).total_seconds() > 48 * 3600:
+                        continue
+                except Exception:
+                    pass
+            if temp_c is not None and not (-2 < temp_c < 35):
+                continue
+            rws_code = f"rws.temp.{loc_code.lower()}"
+            _record_rws_temp(rws_code, tijdstip, temp_c)
+            features.append({"type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {"code": rws_code,
+                    "naam": naam, "temp_c": temp_c, "tijdstip": tijdstip, "bron": "RWS"},
+            })
+    return features
+
+
+def _fetch_cefas_temp_list():
+    """CEFAS zeewatertemperatuur voor NW-Europese stations."""
+    now      = datetime.now(timezone.utc)
+    features = []
+    req = urllib.request.Request(
+        CEFAS_URL,
+        headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0",
+                 "Origin": "https://wavenet.cefas.co.uk", "Referer": "https://wavenet.cefas.co.uk/"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        cefas_data = json.loads(r.read().decode("utf-8"))
+    for f in cefas_data.get("features", []):
+        props  = f.get("properties", {})
+        coords = f.get("geometry", {}).get("coordinates", [])
+        if len(coords) < 2:
+            continue
+        lon, lat = coords[0], coords[1]
+        if lon < -10 or lat < 49:
+            continue
+        station_id = props.get("id", "")
+        naam       = props.get("title", station_id)
+        source     = props.get("source", "INT")
+        tijdstip_s = props.get("timestamp", "")
+        if not tijdstip_s:
+            continue
+        try:
+            ts_dt = datetime.fromisoformat(tijdstip_s)
+            if ts_dt.tzinfo is None:
+                ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+            if (now - ts_dt).total_seconds() > 48 * 3600:
+                continue
+        except Exception:
+            continue
+        temp_vals = props.get("results", {}).get("TEMP", {}).get("values", [])
+        try:
+            temp_c = round(float(temp_vals[0]), 1) if temp_vals and temp_vals[0] else None
+        except (ValueError, IndexError):
+            temp_c = None
+        if temp_c is None:
+            continue
+        features.append({"type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {"code": f"cefas.temp.{station_id.lower()}",
+                "naam": naam, "temp_c": temp_c, "tijdstip": tijdstip_s, "bron": "CEFAS",
+                "cefas_id": station_id, "cefas_source": source},
+        })
+    return features
+
+
+def fetch_ocean_sst():
+    """Zeewatertemperatuur (SST) voor ~70 oceaanpunten via Open-Meteo Marine API (1 verzoek)."""
+    lats = ",".join(str(lat) for _, lat, _ in OCEAN_GRID)
+    lons = ",".join(str(lon) for _, _, lon in OCEAN_GRID)
+    url  = (f"https://marine-api.open-meteo.com/v1/marine"
+            f"?latitude={lats}&longitude={lons}"
+            f"&current=sea_surface_temperature&timezone=UTC")
+    req  = urllib.request.Request(url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        resp = json.loads(r.read().decode())
+    if isinstance(resp, dict):
+        resp = [resp]
+    features = []
+    ts_now = datetime.now(timezone.utc).isoformat()
+    for i, station_resp in enumerate(resp):
+        naam, lat, lon = OCEAN_GRID[i]
+        cur  = station_resp.get("current") or {}
+        sst  = cur.get("sea_surface_temperature")
+        if sst is None:
+            continue
+        sst = round(float(sst), 1)
+        if not (-2 < sst < 35):
+            continue
+        ts = cur.get("time", ts_now)
+        features.append({"type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {"code": f"openmeteo.sst.{i}", "naam": naam,
+                           "temp_c": sst, "tijdstip": ts, "bron": "Open-Meteo Marine"}})
+    return features
+
+
 def _refresh_temp_bg():
-    """Vul _temp_bg met zeewatertemperatuur van alle bronnen (24u TTL, blokkeert NIET)."""
+    """Vul _temp_bg parallel vanuit alle bronnen (24u TTL)."""
     global _temp_bg, _temp_bg_time
     if _temp_bg is not None and (time.time() - _temp_bg_time) < TEMP_CACHE_S:
         return  # Nog vers
 
-    now      = datetime.now(timezone.utc)
-    features = []
+    now = datetime.now(timezone.utc)
 
-    # ── RWS temperatuur ──────────────────────────────────────────────
-    TEMP_INLAND = [
-        "ijsselmeer", "markermeer", "markerwaard", "markerwadden", "slotermeer",
-        "woudsend", "waddenzee", "grevelingen", "veerse", "volkerak", "haringvliet",
-        "hollands diep", "lek", "waal", "rijn", "maas", "ijssel", "zwarte meer",
-        "randmeer", "veluwemeer", "eemmeer", "gooimeer", "almere", "strand",
-        "zwembad", "badstrand", "recreatie", "triathlon", "bosbaan",
-    ]
-    try:
-        catalog = rws_post("/METADATASERVICES/OphalenCatalogus", {"CatalogusFilter": {
-            "Grootheden": True, "Eenheden": True,
-            "Compartimenten": True, "ProcesTypes": True, "Groeperingen": True,
-        }})
-        meta      = catalog.get("AquoMetadataLijst", [])
-        locs      = catalog.get("LocatieLijst", [])
-        meta_locs = catalog.get("AquoMetadataLocatieLijst", [])
-
-        temp_meta_ids = {m["AquoMetadata_MessageID"] for m in meta
-                         if m.get("Grootheid", {}).get("Code") == "T"
-                         and m.get("Compartiment", {}).get("Code") == "OW"}
-        temp_loc_ids  = {r["Locatie_MessageID"] for r in meta_locs
-                         if r.get("AquoMetaData_MessageID") in temp_meta_ids}
-
-        stations = [l for l in locs
-                    if l.get("Locatie_MessageID") in temp_loc_ids
-                    and l.get("Lat") and l.get("Lon")
-                    and 2.0 < l["Lon"] < 9.5 and 51.0 < l["Lat"] < 56.5
-                    and not any(kw in l.get("Code","").lower() or kw in l.get("Naam","").lower()
-                                for kw in TEMP_INLAND)]
-
-        BATCH = 20
-        station_map = {s["Code"]: s for s in stations}
-        for i in range(0, len(stations), BATCH):
-            batch = stations[i:i + BATCH]
-            try:
-                resp = rws_post("/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen", {
-                    "AquoPlusWaarnemingMetadataLijst": [{"AquoMetadata": {
-                        "Compartiment": {"Code": "OW"},
-                        "Eenheid":      {"Code": "oC"},
-                        "Grootheid":    {"Code": "T"},
-                    }}],
-                    "LocatieLijst": [{"Code": s["Code"]} for s in batch],
-                })
-            except Exception:
-                continue
-
-            best = {}
-            for w in resp.get("WaarnemingenLijst", []):
-                loc_code = (w.get("Locatie") or {}).get("Code")
-                if not loc_code:
-                    continue
-                metingen = w.get("MetingenLijst") or []
-                tijdstip = metingen[0].get("Tijdstip") if metingen else None
-                if loc_code not in best or (tijdstip or "") > (
-                    ((best[loc_code].get("MetingenLijst") or [{}])[0]).get("Tijdstip") or ""
-                ):
-                    best[loc_code] = w
-
-            for loc_code, w in best.items():
-                station  = station_map.get(loc_code) or w.get("Locatie") or {}
-                lat = station.get("Lat") or (w.get("Locatie") or {}).get("Lat")
-                lon = station.get("Lon") or (w.get("Locatie") or {}).get("Lon")
-                if lat is None or lon is None:
-                    continue
-                naam     = (w.get("Locatie") or {}).get("Naam") or station.get("Naam") or loc_code
-                metingen = w.get("MetingenLijst") or []
-                meting   = metingen[0] if metingen else {}
-                waarde   = (meting.get("Meetwaarde") or {}).get("Waarde_Numeriek")
-                temp_c   = round(waarde, 1) if waarde is not None else None
-                tijdstip = meting.get("Tijdstip")
-                if tijdstip:
-                    try:
-                        dt = datetime.fromisoformat(tijdstip)
-                        if dt.tzinfo is None:
-                            dt = dt.replace(tzinfo=timezone.utc)
-                        if (now - dt).total_seconds() > 48 * 3600:
-                            continue
-                    except Exception:
-                        pass
-                if temp_c is not None and not (-2 < temp_c < 35):
-                    continue
-                rws_code = f"rws.temp.{loc_code.lower()}"
-                _record_rws_temp(rws_code, tijdstip, temp_c)
-                features.append({"type": "Feature",
-                    "geometry": {"type": "Point", "coordinates": [lon, lat]},
-                    "properties": {"code": rws_code,
-                        "naam": naam, "temp_c": temp_c, "tijdstip": tijdstip, "bron": "RWS"},
-                })
-        print(f"[RWS temp bg] {sum(1 for f in features if f['properties']['bron']=='RWS')} stations")
-    except Exception as e:
-        print(f"[RWS temp bg] Fout: {e}")
-
-    # ── CEFAS temperatuur ─────────────────────────────────────────────
-    try:
-        req = urllib.request.Request(
-            CEFAS_URL,
-            headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0",
-                     "Origin": "https://wavenet.cefas.co.uk", "Referer": "https://wavenet.cefas.co.uk/"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            cefas_data = json.loads(r.read().decode("utf-8"))
-
-        for f in cefas_data.get("features", []):
-            props  = f.get("properties", {})
-            coords = f.get("geometry", {}).get("coordinates", [])
-            if len(coords) < 2:
-                continue
-            lon, lat = coords[0], coords[1]
-            if lon < -10 or lat < 49:
-                continue
-            station_id = props.get("id", "")
-            naam       = props.get("title", station_id)
-            source     = props.get("source", "INT")
-            tijdstip_s = props.get("timestamp", "")
-            if not tijdstip_s:
-                continue
-            try:
-                ts_dt = datetime.fromisoformat(tijdstip_s)
-                if ts_dt.tzinfo is None:
-                    ts_dt = ts_dt.replace(tzinfo=timezone.utc)
-                if (now - ts_dt).total_seconds() > 48 * 3600:
-                    continue
-            except Exception:
-                continue
-            temp_vals = props.get("results", {}).get("TEMP", {}).get("values", [])
-            try:
-                temp_c = round(float(temp_vals[0]), 1) if temp_vals and temp_vals[0] else None
-            except (ValueError, IndexError):
-                temp_c = None
-            if temp_c is None:
-                continue
-            features.append({"type": "Feature",
-                "geometry": {"type": "Point", "coordinates": [lon, lat]},
-                "properties": {"code": f"cefas.temp.{station_id.lower()}",
-                    "naam": naam, "temp_c": temp_c, "tijdstip": tijdstip_s, "bron": "CEFAS",
-                    "cefas_id": station_id, "cefas_source": source},
-            })
-        print(f"[CEFAS temp bg] {sum(1 for f in features if f['properties']['bron']=='CEFAS')} stations")
-    except Exception as e:
-        print(f"[CEFAS temp bg] Fout: {e}")
-
-    # ── IMI + LaBouée parallel ophalen ───────────────────────────────
     from concurrent.futures import wait as _wait_t
-    ex_t = ThreadPoolExecutor(max_workers=3)
-    fut_imi  = ex_t.submit(_fetch_imi_temp)
-    fut_lb   = ex_t.submit(_fetch_labouee_temp)
-    _wait_t([fut_imi, fut_lb], timeout=30)
-    ex_t.shutdown(wait=False)
-    for label, fut in [("IMI temp bg", fut_imi), ("LaBouée temp bg", fut_lb)]:
-        if fut.done():
-            try:
-                res = fut.result()
-                features.extend(res)
-                print(f"[{label}] {len(res)} stations")
-            except Exception as e:
-                print(f"[{label}] Fout: {e}")
-        else:
+    ex = ThreadPoolExecutor(max_workers=6)
+    fut_rws   = ex.submit(_fetch_rws_temp)
+    fut_cefas = ex.submit(_fetch_cefas_temp_list)
+    fut_ndbc  = ex.submit(_fetch_ndbc_temp)
+    fut_imi   = ex.submit(_fetch_imi_temp)
+    fut_lb    = ex.submit(_fetch_labouee_temp)
+    fut_sst   = ex.submit(fetch_ocean_sst)
+    _wait_t([fut_rws, fut_cefas, fut_ndbc, fut_imi, fut_lb, fut_sst], timeout=45)
+    ex.shutdown(wait=False)
+
+    features = []
+    for label, fut, thin in [
+        ("RWS temp",          fut_rws,   False),
+        ("CEFAS temp",        fut_cefas, False),
+        ("NDBC temp",         fut_ndbc,  True),
+        ("IMI temp",          fut_imi,   False),
+        ("LaBouée temp",      fut_lb,    False),
+        ("Ocean SST",         fut_sst,   False),
+    ]:
+        if not fut.done():
             print(f"[{label}] Timeout — overgeslagen")
-
-    # ── NDBC temperatuur ophalen en uitdunnen ──────────────────────────
-    try:
-        ndbc_raw = _fetch_ndbc_temp()
-        ndbc_thinned = _thin_by_grid(ndbc_raw, deg=4.0)
-        features.extend(ndbc_thinned)
-        print(f"[NDBC temp bg] {len(ndbc_raw)} → {len(ndbc_thinned)} stations na uitdunnen")
-    except Exception as e:
-        print(f"[NDBC temp bg] Fout: {e}")
-
-    # ── CDIP temperatuur ophalen en uitdunnen ──────────────────────────
-    try:
-        cdip_raw = _fetch_cdip_temp()
-        cdip_thinned = _thin_by_grid(cdip_raw, deg=4.0)
-        features.extend(cdip_thinned)
-        print(f"[CDIP temp bg] {len(cdip_raw)} → {len(cdip_thinned)} stations na uitdunnen")
-    except Exception as e:
-        print(f"[CDIP temp bg] Fout: {e}")
+            continue
+        try:
+            res = fut.result()
+            if thin:
+                res = _thin_by_grid(res, deg=4.0)
+            features.extend(res)
+            print(f"[{label}] {len(res)} stations")
+        except Exception as e:
+            print(f"[{label}] Fout: {e}")
 
     _temp_bg = {"type": "FeatureCollection", "features": features,
                 "opgehaald": now.isoformat(), "aantalStations": len(features)}
