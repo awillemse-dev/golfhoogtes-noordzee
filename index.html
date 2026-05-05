@@ -422,6 +422,14 @@
       </svg>
       Windsnelheid
     </button>
+    <button class="nav-btn" id="nav-zicht" onclick="selectLayer('zicht')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+        <circle cx="12" cy="12" r="3"/>
+      </svg>
+      Zicht
+    </button>
   </nav>
 
   <div id="status" class="loading">
@@ -543,6 +551,15 @@ const LEGEND_CONTENT = {
     <div class="legend-row"><div class="legend-dot" style="background:#ef4444"></div>10,8 – 13,9 m/s &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 8</span></div>
     <div class="legend-row"><div class="legend-dot" style="background:#7f1d1d"></div>&gt; 13,9 m/s &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 9+</span></div>
     <div class="legend-sub">Bron: RWS</div>`,
+  zicht: `
+    <h4>Zicht (km)</h4>
+    <div class="legend-row"><div class="legend-dot" style="background:#7f1d1d"></div>&lt; 1 km &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Mist</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ef4444"></div>1 – 4 km &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Slecht</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#f97316"></div>4 – 10 km &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Matig</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#eab308"></div>10 – 20 km &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Redelijk</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#84cc16"></div>20 – 40 km &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Goed</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#22c55e"></div>&gt; 40 km &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Uitstekend</span></div>
+    <div class="legend-sub">Bron: KNMI</div>`,
 };
 
 let legendEl = null;
@@ -797,6 +814,79 @@ async function fetchWindData() {
   }
 }
 
+// ── Zicht ─────────────────────────────────────────────────────────────────────
+function zichtColor(v) {   // v in km
+  if (v === null || isNaN(v)) return '#3d5167';
+  if (v < 1)   return '#7f1d1d';
+  if (v < 4)   return '#ef4444';
+  if (v < 10)  return '#f97316';
+  if (v < 20)  return '#eab308';
+  if (v < 40)  return '#84cc16';
+  return '#22c55e';
+}
+
+function makeZichtIcon(v) {
+  const sc    = iconScale();
+  const color = zichtColor(v);
+  const size  = Math.round(46 * sc);
+  const ht    = Math.round(size * 0.58);
+  const fs    = Math.max(7, Math.round(10 * sc));
+  const r     = Math.max(2, Math.round(5 * sc));
+  const label = v !== null ? (v >= 10 ? Math.round(v) + ' km' : v.toFixed(1) + ' km') : '–';
+  return L.divIcon({
+    className: '',
+    iconSize:    [size, ht],
+    iconAnchor:  [size / 2, ht / 2],
+    popupAnchor: [0, -(ht / 2 + 6)],
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${ht}">
+      <rect x="1" y="1" width="${size-2}" height="${ht-2}" rx="${r}"
+        fill="${color}" fill-opacity="0.88"/>
+      <rect x="1" y="1" width="${size-2}" height="${ht-2}" rx="${r}"
+        fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>
+      <text x="${size/2}" y="${ht/2+3.8}" text-anchor="middle"
+        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fs}"
+        font-weight="600" fill="#fff" paint-order="stroke"
+        stroke="#0004" stroke-width="2">${label}</text>
+    </svg>`,
+  });
+}
+
+let zichtMarkers = [];
+function clearZichtMarkers() { zichtMarkers.forEach(m => map.removeLayer(m)); zichtMarkers = []; }
+
+function renderZichtMarkers(geojson) {
+  _lastZichtGeoJSON = geojson;
+  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers();
+  (geojson.features || []).forEach(f => {
+    const [lon, lat] = f.geometry.coordinates;
+    const v = f.properties.vv;   // km
+    const marker = L.marker([lat, lon], { icon: makeZichtIcon(v) });
+    marker.bindTooltip(f.properties.stationname || f.properties.naam || '', { direction: 'top', offset: [0, -4] });
+    marker.addTo(map);
+    zichtMarkers.push(marker);
+  });
+}
+
+function zichtUrl() { return `${PROXY_URL}/api/visibility`; }
+
+async function fetchZichtData() {
+  setStatus('loading', 'laden…');
+  try {
+    const resp = await fetchWithTimeout(zichtUrl());
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const geojson = await resp.json();
+    renderZichtMarkers(geojson);
+    const opgehaald = geojson.opgehaald
+      ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+      : new Date().toLocaleTimeString('nl-NL');
+    setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+  } catch (err) {
+    console.error(err);
+    setStatus('error', 'Opnieuw laden…');
+    setTimeout(() => { if (activeLayer === 'zicht') fetchZichtData().then(startCountdown); }, 5000);
+  }
+}
+
 async function openWindChart(code, naam, huidigWind, tijdstip) {
   panel.classList.add('open');
   setTimeout(() => map.invalidateSize({ pan: false }), 320);
@@ -949,7 +1039,7 @@ function selectSection(section) {
     mapEl.style.display      = 'none';
     comingSoon.style.display = 'flex';
     document.getElementById('coming-soon-label').textContent = 'Verwachtingen';
-    clearMarkers(); clearTempMarkers(); clearWindMarkers();
+    clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers();
     setStatus('', '–');
     document.getElementById('status').className = '';
     document.getElementById('countdown').textContent = '';
@@ -981,6 +1071,10 @@ function selectLayer(layer) {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
     fetchWindData().then(startCountdown);
+  } else if (layer === 'zicht') {
+    mapEl.style.display      = '';
+    comingSoon.style.display = 'none';
+    fetchZichtData().then(startCountdown);
   } else {
     mapEl.style.display      = 'none';
     comingSoon.style.display = 'flex';
@@ -999,13 +1093,14 @@ function wavesUrl()       { return `${PROXY_URL}/api/waves`; }
 function historyUrl(code) { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
 
 let markers = [];
-let _lastWaveGeoJSON = null, _lastTempGeoJSON = null, _lastWindGeoJSON = null;
+let _lastWaveGeoJSON = null, _lastTempGeoJSON = null, _lastWindGeoJSON = null, _lastZichtGeoJSON = null;
 
 // Herlaad markers bij zoomwijziging (aanpassen icongrootte)
 map.on('zoomend', () => {
   if (_lastWaveGeoJSON && activeLayer === 'golf') renderMarkers(_lastWaveGeoJSON);
   else if (_lastTempGeoJSON && activeLayer === 'temp') renderTempMarkers(_lastTempGeoJSON);
   else if (_lastWindGeoJSON && activeLayer === 'wind') renderWindMarkers(_lastWindGeoJSON);
+  else if (_lastZichtGeoJSON && activeLayer === 'zicht') renderZichtMarkers(_lastZichtGeoJSON);
 });
 
 function clearMarkers() {
