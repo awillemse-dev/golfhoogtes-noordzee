@@ -431,6 +431,104 @@ LABOUEE_BASE = "https://labouee.app/data/buoys"
 
 NDBC_URL = "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
 
+# ── Open-Meteo oceaangrid: modelzicht op vaste zeepunten wereldwijd ───────────
+# Één API-call per batch van max 100 locaties (comma-separated lat/lon).
+# Eenheid: meters → km. Bron: ERA5/ECMWF-model, elke 15 min bijgewerkt.
+OCEAN_GRID = [
+    # Europese zeeën
+    ("Noordzee Zuid",      52.0,   3.5), ("Noordzee Midden",   56.0,   4.0),
+    ("Noordzee Noord",     58.5,   2.0), ("Engelse Kanaal",    50.0,  -1.5),
+    ("Ierse Zee",          53.5,  -5.0), ("Keltische Zee",     50.5,  -8.0),
+    ("Noorse Zee",         67.0,   1.0), ("Barentszzee West",  73.0,  20.0),
+    ("Barentszzee Oost",   73.0,  42.0), ("Witte Zee",         66.0,  33.0),
+    ("Baltische Zee",      57.0,  18.0), ("Finse Golf",        60.0,  26.0),
+    ("Botnische Golf",     63.5,  21.0), ("Skagerrak",         57.8,   9.0),
+    ("Biskaje",            45.5,  -5.5), ("Golf van Biscaje",  47.0,  -8.0),
+    # Middellandse en aangrenzende zeeën
+    ("Liguriëzee",         43.5,   8.5), ("Adriatische Zee",   43.0,  14.5),
+    ("Ionische Zee",       38.0,  19.0), ("Egeïsche Zee",      38.5,  24.5),
+    ("West-Med",           38.0,   5.0), ("Oost-Med",          34.5,  30.0),
+    ("Tyrrheense Zee",     40.5,  12.5), ("Zwarte Zee",        43.0,  32.0),
+    ("Golf van Tunis",     37.0,  11.0), ("Alboran",           35.8,  -3.5),
+    # Atlantisch
+    ("Noord-Atlantisch",   50.0, -25.0), ("Mid-Atlantisch",    40.0, -35.0),
+    ("Azoren-gebied",      38.5, -28.0), ("Tropisch N-Atl.",   20.0, -30.0),
+    ("Golf van Mexico",    24.0, -90.0), ("Caraïben Oost",     15.0, -63.0),
+    ("Caraïben West",      17.0, -83.0), ("Bermuda-gebied",    32.0, -65.0),
+    ("Labrador Zee",       56.0, -53.0), ("Groenland Zee",     70.0, -12.0),
+    ("IJszee",             78.0,  -5.0), ("Equatoriaal Atl.",   2.0, -15.0),
+    ("Zuid-Atl. Noord",   -15.0, -15.0), ("Zuid-Atl. Midden",  -30.0, -20.0),
+    ("Falkland Zee",      -50.0, -60.0), ("Scotia Zee",        -56.0, -45.0),
+    # Indische Oceaan
+    ("Arabische Zee",      15.0,  65.0), ("Golf van Aden",     12.0,  48.0),
+    ("Indische Oceaan N",   8.0,  75.0), ("Indische Oceaan Mid",-10.0,  75.0),
+    ("Indische Oceaan Z",  -30.0,  80.0), ("Bengaalse Golf",    12.0,  88.0),
+    ("Mozambiquekanaal",  -18.0,  42.0), ("Madagaskar",        -25.0,  53.0),
+    # Stille Oceaan
+    ("N-Pacific West",     38.0, 155.0), ("N-Pacific Midden",  40.0,-165.0),
+    ("N-Pacific Oost",     40.0,-135.0), ("Japan Zee",         40.0, 135.0),
+    ("Filipijnenzee",      18.0, 130.0), ("Tropisch Pacific",  10.0, 165.0),
+    ("Equatoriaal Pac.",    0.0,-140.0), ("Z-Pacific West",   -20.0, 170.0),
+    ("Z-Pacific Midden",  -30.0,-120.0), ("Z-Pacific Oost",   -40.0, -90.0),
+    ("Tasmanische Zee",   -38.0, 160.0), ("Koraalzee",        -18.0, 155.0),
+    ("Timorzee",          -11.0, 127.0), ("Arafurazee",       -10.0, 136.0),
+    # Zuidelijke Oceaan
+    ("Z-Oceaan Atl.",     -55.0,  -5.0), ("Z-Oceaan Indisch",  -55.0,  85.0),
+    ("Z-Oceaan Pacific",  -55.0,-140.0), ("Drake Passage",     -58.0, -65.0),
+    # Extra Arctisch / Noord-Pacific
+    ("Beringzee",          58.0,-175.0), ("Ochotskzee",        52.0, 147.0),
+    ("Golf van Alaska",    55.0,-150.0), ("Hudson Bay",        60.0, -85.0),
+]
+
+_ocean_vis_cache = None
+_ocean_vis_time  = 0
+
+def fetch_ocean_visibility():
+    """Haalt modelzicht op voor ~70 vaste oceaanpunten via Open-Meteo (1 verzoek)."""
+    global _ocean_vis_cache, _ocean_vis_time
+    now = time.time()
+    if _ocean_vis_cache is not None and (now - _ocean_vis_time) < 1800:
+        return _ocean_vis_cache
+
+    lats = ",".join(str(lat) for _, lat, _ in OCEAN_GRID)
+    lons = ",".join(str(lon) for _, _, lon in OCEAN_GRID)
+    url  = (f"https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lats}&longitude={lons}"
+            f"&current=visibility&timezone=UTC&forecast_days=1")
+    req = urllib.request.Request(url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        resp = json.loads(r.read().decode())
+
+    # resp is een lijst als meerdere locaties, anders een dict
+    if isinstance(resp, dict):
+        resp = [resp]
+
+    features = []
+    for i, station_resp in enumerate(resp):
+        naam, lat, lon = OCEAN_GRID[i]
+        vis_m = (station_resp.get("current") or {}).get("visibility")
+        if vis_m is None:
+            continue
+        vis_km = round(vis_m / 1000, 1)
+        ts = (station_resp.get("current") or {}).get("time", "")
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {
+                "code":        f"openmeteo.vis.{i}",
+                "naam":        naam,
+                "stationname": naam,
+                "vv":          vis_km,
+                "tijdstip":    ts,
+                "bron":        "Open-Meteo (model)",
+            },
+        })
+
+    print(f"[Ocean VIS] {len(features)} oceaanpunten geladen")
+    _ocean_vis_cache = features
+    _ocean_vis_time  = now
+    return features
+
 def fetch_ndbc_history(station_id):
     """Haal 24-uursgeschiedenis op voor een NDBC-station via realtime2 tekstbestand."""
     url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id.upper()}.txt"
@@ -514,6 +612,8 @@ def fetch_ndbc_wind_history(station_id):
 
 
 _ndbc_wind_features = []   # gevuld door fetch_ndbc_data(), gebruikt door get_wind_data()
+_ndbc_vis_features  = []   # gevuld door fetch_ndbc_data(), gebruikt door /api/visibility
+_ocean_vis_features = []   # gevuld door _refresh_ocean_vis_bg(), gebruikt door /api/visibility
 
 def fetch_ndbc_data():
     req = urllib.request.Request(
@@ -523,10 +623,11 @@ def fetch_ndbc_data():
     with urllib.request.urlopen(req, timeout=20) as r:
         lines = r.read().decode("utf-8", errors="replace").splitlines()
 
-    global _ndbc_wind_features
+    global _ndbc_wind_features, _ndbc_vis_features
     now           = datetime.now(timezone.utc)
     wave_features = []
     wind_features = []
+    vis_features  = []
 
     for line in lines:
         if line.startswith("#") or not line.strip():
@@ -568,6 +669,13 @@ def fetch_ndbc_data():
             wind_ms  = None
             wind_dir = None
 
+        # Zicht (VIS, kolom 20, in zeemijlen → km)
+        try:
+            vis_km = None if len(cols) <= 20 or cols[20] == "MM" \
+                     else round(float(cols[20]) * 1.852, 1)
+        except (ValueError, IndexError):
+            vis_km = None
+
         code = f"ndbc.{station_id.lower()}"
         naam = f"NDBC {station_id}"
         geom = {"type": "Point", "coordinates": [lon, lat]}
@@ -599,8 +707,23 @@ def fetch_ndbc_data():
                 },
             })
 
+        if vis_km is not None:
+            vis_features.append({
+                "type": "Feature",
+                "geometry": geom,
+                "properties": {
+                    "code":        f"ndbc.vis.{station_id.lower()}",
+                    "naam":        naam,
+                    "stationname": naam,
+                    "vv":          vis_km,
+                    "tijdstip":    tijdstip,
+                    "bron":        "NDBC/NOAA",
+                },
+            })
+
     _ndbc_wind_features = wind_features
-    print(f"[NDBC] {len(wave_features)} golfstations, {len(wind_features)} windstations geladen")
+    _ndbc_vis_features  = vis_features
+    print(f"[NDBC] {len(wave_features)} golfstations, {len(wind_features)} windstations, {len(vis_features)} zichtstations geladen")
     return wave_features
 
 def fetch_labouee_data():
@@ -1358,6 +1481,17 @@ def _refresh_socib_bg():
         print(f"[SOCIB bg] {len(wind)} windstations geladen")
     except Exception as e:
         print(f"[SOCIB bg wind] Fout: {e}")
+
+
+def _refresh_ocean_vis_bg():
+    """Vul _ocean_vis_features vanuit Open-Meteo (modelzicht voor oceaanpunten)."""
+    global _ocean_vis_features
+    try:
+        features = fetch_ocean_visibility()
+        _ocean_vis_features = features
+        print(f"[Ocean VIS bg] {len(features)} oceaanpunten geladen")
+    except Exception as e:
+        print(f"[Ocean VIS bg] Fout: {e}")
 
 
 def fetch_socib_wave_history(nc_path, naam, code):
@@ -2494,15 +2628,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/visibility":
             try:
                 knmi = get_knmi_data()
-                features = [
-                    f for f in knmi.get("features", [])
-                    if f["properties"].get("vv") is not None
-                ]
+                knmi_vis = [f for f in knmi.get("features", [])
+                            if f["properties"].get("vv") is not None]
+                features = knmi_vis + _ndbc_vis_features + _ocean_vis_features
                 data = {
                     "type": "FeatureCollection",
                     "features": features,
                     "aantalStations": len(features),
-                    "opgehaald": knmi.get("opgehaald", ""),
+                    "opgehaald": datetime.now(timezone.utc).isoformat(),
                 }
                 body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
@@ -2835,16 +2968,17 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"[CACHE] Waves fout: {e}\n")
 
-        # Fase 2: CDIP + SOCIB + temp + wind parallel (traag, blokkeert golven niet)
-        print("[CACHE] Fase 2: CDIP + SOCIB + temp + wind ophalen…")
+        # Fase 2: CDIP + SOCIB + temp + wind + oceaanzicht parallel (traag, blokkeert golven niet)
+        print("[CACHE] Fase 2: CDIP + SOCIB + temp + wind + oceaanzicht ophalen…")
         try:
             from concurrent.futures import wait as _wait2
-            ex2 = ThreadPoolExecutor(max_workers=4)
+            ex2 = ThreadPoolExecutor(max_workers=5)
             fcdip  = ex2.submit(_refresh_cdip_bg)
             fsocib = ex2.submit(_refresh_socib_bg)
             ft     = ex2.submit(get_temp_data)
             fwnd   = ex2.submit(get_wind_data)
-            _wait2([fcdip, fsocib, ft, fwnd], timeout=120)
+            focvis = ex2.submit(_refresh_ocean_vis_bg)
+            _wait2([fcdip, fsocib, ft, fwnd, focvis], timeout=120)
             ex2.shutdown(wait=False)
             try: get_knmi_data()
             except Exception as e: print(f"[KNMI] Prewarm mislukt: {e}")
@@ -2860,13 +2994,14 @@ if __name__ == "__main__":
             print("[CACHE] Achtergrond-refresh gestart…")
             try:
                 from concurrent.futures import wait as _wait3
-                ex3 = ThreadPoolExecutor(max_workers=5)
+                ex3 = ThreadPoolExecutor(max_workers=6)
                 fcdip  = ex3.submit(_refresh_cdip_bg)
                 fsocib = ex3.submit(_refresh_socib_bg)
                 ft     = ex3.submit(get_temp_data)
                 fwnd   = ex3.submit(get_wind_data)
                 fknmi  = ex3.submit(get_knmi_data)
-                _wait3([fcdip, fsocib, ft, fwnd, fknmi], timeout=120)
+                focvis = ex3.submit(_refresh_ocean_vis_bg)
+                _wait3([fcdip, fsocib, ft, fwnd, fknmi, focvis], timeout=120)
                 ex3.shutdown(wait=False)
                 _refresh_waves()
             except Exception as e:
