@@ -2708,6 +2708,73 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
 
+        # ── /api/visibility-history?code=... ────────────────────────────
+        elif path == "/api/visibility-history":
+            params = parse_qs(urlparse(self.path).query)
+            code   = (params.get("code") or [None])[0]
+            try:
+                if not code:
+                    raise ValueError("code parameter verplicht")
+
+                # Zoek lat/lon op in alle zicht-caches
+                knmi_vis = [f for f in get_knmi_data().get("features", [])
+                            if f["properties"].get("vv") is not None]
+                all_vis  = knmi_vis + _ndbc_vis_features + _ocean_vis_features
+                lat = lon = None
+                for f in all_vis:
+                    if f["properties"].get("code") == code:
+                        coords = f["geometry"]["coordinates"]
+                        lon, lat = coords[0], coords[1]
+                        break
+
+                if lat is None:
+                    raise ValueError(f"Station '{code}' niet gevonden")
+
+                # Open-Meteo uurlijkse zicht voor afgelopen 24 uur
+                url = (f"https://api.open-meteo.com/v1/forecast"
+                       f"?latitude={lat}&longitude={lon}"
+                       f"&hourly=visibility&past_days=1&forecast_days=0"
+                       f"&timezone=UTC")
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    om = json.loads(r.read().decode())
+
+                now_utc = datetime.now(timezone.utc)
+                cutoff  = now_utc - timedelta(hours=24)
+                times   = om.get("hourly", {}).get("time", [])
+                vis_raw = om.get("hourly", {}).get("visibility", [])
+
+                data_pts = []
+                for t_str, v_m in zip(times, vis_raw):
+                    if v_m is None:
+                        continue
+                    try:
+                        dt = datetime.fromisoformat(t_str).replace(tzinfo=timezone.utc)
+                    except Exception:
+                        continue
+                    if dt < cutoff or dt > now_utc:
+                        continue
+                    data_pts.append({"t": dt.isoformat(), "v": round(v_m / 1000, 1)})
+
+                data = {"code": code, "data": data_pts}
+                body = _safe_json(data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type",   "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                print(f"[FOUT visibility-history] {exc}")
+                body = json.dumps({"error": str(exc)}).encode()
+                self.send_response(500 if "niet gevonden" not in str(exc) else 404)
+                self.send_header("Content-Type",   "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+
         # ── /api/wind ────────────────────────────────────────────────────
         elif path == "/api/wind":
             try:
