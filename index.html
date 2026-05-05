@@ -1001,6 +1001,11 @@ async function fetchTempData() {
     const resp = await fetchWithTimeout(tempUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
+    if (geojson.laden) {
+      setStatus('loading', 'temperatuurdata wordt geladen…');
+      setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
+      return;
+    }
     renderTempMarkers(geojson);
     const opgehaald = geojson.opgehaald
       ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
