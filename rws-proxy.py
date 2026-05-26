@@ -2814,7 +2814,10 @@ class Handler(BaseHTTPRequestHandler):
                 "socib_wave_bg":  len(_socib_wave_bg),
                 "socib_wind_bg":  len(_socib_wind_bg),
                 "wind_stations":  _wind_cache["aantalStations"] if _wind_cache else 0,
-                "temp_stations":  _temp_cache["aantalStations"] if _temp_cache else 0,
+                "temp_bg_stations": _temp_bg["aantalStations"] if _temp_bg else 0,
+                "metar_stations": _metar_cache["aantalStations"] if _metar_cache else 0,
+                "coastal_stations_loaded": _coastal_stations is not None,
+                "version": "2026-05-26-metar",
             }
             body = json.dumps(status).encode("utf-8")
             self.send_response(200)
