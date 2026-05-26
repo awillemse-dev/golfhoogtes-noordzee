@@ -830,6 +830,7 @@ async function fetchWindData() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     renderWindMarkers(geojson);
+    _markFetched('wind');
     const opgehaald = geojson.opgehaald
       ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
       : new Date().toLocaleTimeString('nl-NL');
@@ -1019,6 +1020,7 @@ async function fetchMetarData() {
       return;
     }
     renderMetarMarkers(geojson);
+    _markFetched('metar');
     const opgehaald = geojson.opgehaald
       ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
       : new Date().toLocaleTimeString('nl-NL');
@@ -1105,6 +1107,7 @@ async function fetchZichtData() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     renderZichtMarkers(geojson);
+    _markFetched('zicht');
     const opgehaald = geojson.opgehaald
       ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
       : new Date().toLocaleTimeString('nl-NL');
@@ -1237,6 +1240,7 @@ async function fetchTempData() {
       return;
     }
     renderTempMarkers(geojson);
+    _markFetched('temp');
     const opgehaald = geojson.opgehaald
       ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
       : new Date().toLocaleTimeString('nl-NL');
@@ -1297,23 +1301,28 @@ function selectLayer(layer) {
   if (layer === 'golf') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    fetchWaveData().then(startCountdown);
+    if (_lastWaveGeoJSON && _isFresh('golf')) { renderMarkers(_lastWaveGeoJSON); startCountdown(); }
+    else fetchWaveData().then(startCountdown);
   } else if (layer === 'temp') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    fetchTempData().then(startCountdown);
+    if (_lastTempGeoJSON && _isFresh('temp')) { renderTempMarkers(_lastTempGeoJSON); startCountdown(); }
+    else fetchTempData().then(startCountdown);
   } else if (layer === 'wind') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    fetchWindData().then(startCountdown);
+    if (_lastWindGeoJSON && _isFresh('wind')) { renderWindMarkers(_lastWindGeoJSON); startCountdown(); }
+    else fetchWindData().then(startCountdown);
   } else if (layer === 'zicht') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    fetchZichtData().then(startCountdown);
+    if (_lastZichtGeoJSON && _isFresh('zicht')) { renderZichtMarkers(_lastZichtGeoJSON); startCountdown(); }
+    else fetchZichtData().then(startCountdown);
   } else if (layer === 'metar') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    fetchMetarData().then(startCountdown);
+    if (_lastMetarGeoJSON && _isFresh('metar')) { renderMetarMarkers(_lastMetarGeoJSON); startCountdown(); }
+    else fetchMetarData().then(startCountdown);
   } else {
     mapEl.style.display      = 'none';
     comingSoon.style.display = 'flex';
@@ -1395,6 +1404,7 @@ async function fetchWaveData() {
       return;
     }
     renderMarkers(geojson);
+    _markFetched('golf');
     const opgehaald = geojson.opgehaald
       ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
       : new Date().toLocaleTimeString('nl-NL');
@@ -1601,6 +1611,23 @@ const UPDATE_SEC = 10 * 60;
 let secondsLeft  = 0;
 let _countdownTid = null;
 
+// ── Tab-datacache: sla fetchtijd op per laag ──────────────────────────────────
+const _layerFetchedAt = {};
+const _CACHE_FRESH_MS = 5 * 60 * 1000; // 5 minuten
+
+function _isFresh(layer) {
+  return (_layerFetchedAt[layer] || 0) + _CACHE_FRESH_MS > Date.now();
+}
+
+function _markFetched(layer) {
+  _layerFetchedAt[layer] = Date.now();
+}
+
+// ── Keep-alive ping (voorkomt slaapstand op Render free tier) ─────────────────
+if (!LOCAL) {
+  setInterval(() => fetch(`${PROXY_URL}/api/ping`, { cache: 'no-store' }).catch(() => {}), 9 * 60 * 1000);
+}
+
 function stopCountdown() {
   if (_countdownTid) { clearInterval(_countdownTid); _countdownTid = null; }
   document.getElementById('countdown').textContent = '';
@@ -1614,8 +1641,10 @@ function startCountdown() {
     secondsLeft--;
     if (secondsLeft <= 0) {
       stopCountdown();
-      const fetchFn = activeLayer === 'temp' ? fetchTempData
-                    : activeLayer === 'wind' ? fetchWindData
+      const fetchFn = activeLayer === 'temp'  ? fetchTempData
+                    : activeLayer === 'wind'  ? fetchWindData
+                    : activeLayer === 'zicht' ? fetchZichtData
+                    : activeLayer === 'metar' ? fetchMetarData
                     : fetchWaveData;
       fetchFn().then(startCountdown);
     } else {

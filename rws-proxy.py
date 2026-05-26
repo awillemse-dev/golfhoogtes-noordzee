@@ -14,6 +14,7 @@ import json
 import time
 import os
 import threading
+import gzip as _gzip
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -2794,6 +2795,25 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
+    def _accepts_gzip(self):
+        return "gzip" in self.headers.get("Accept-Encoding", "")
+
+    def _send_json(self, data_bytes, max_age=0):
+        """Stuur JSON met optionele gzip-compressie en cache-headers."""
+        if self._accepts_gzip() and len(data_bytes) > 500:
+            body = _gzip.compress(data_bytes, compresslevel=6)
+            self.send_header("Content-Encoding", "gzip")
+        else:
+            body = data_bytes
+        ct = max_age if isinstance(max_age, str) else (
+            f"public, max-age={max_age}" if max_age > 0 else "no-cache, no-store")
+        self.send_header("Content-Type",   "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control",  ct)
+        self.send_cors()
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_cors()
@@ -2801,6 +2821,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+
+        # ── /api/ping ─────────────────────────────────────────────────────
+        if path == "/api/ping":
+            body = b'{"ok":true}'
+            self.send_response(200)
+            self.send_header("Content-Type",   "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control",  "no-store")
+            self.send_cors()
+            self.end_headers()
+            self.wfile.write(body)
+            return
 
         # ── /api/status ─────────────────────────────────────────────────────
         if path == "/api/status":
@@ -2831,13 +2863,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/waves":
             try:
                 data = get_data()
-                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type",   "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_cors()
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 print(f"[FOUT] {exc}")
                 body = json.dumps({"error": str(exc)}).encode("utf-8")
@@ -2852,13 +2879,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/temp":
             try:
                 data = get_temp_data()
-                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type",   "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_cors()
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 print(f"[FOUT temp] {exc}")
                 body = json.dumps({"error": str(exc)}).encode("utf-8")
@@ -2882,13 +2904,8 @@ class Handler(BaseHTTPRequestHandler):
                     "aantalStations": len(features),
                     "opgehaald": datetime.now(timezone.utc).isoformat(),
                 }
-                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type",   "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_cors()
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 body = json.dumps({"error": str(exc)}).encode("utf-8")
                 self.send_response(500)
@@ -2948,13 +2965,8 @@ class Handler(BaseHTTPRequestHandler):
                     data_pts.append({"t": dt.isoformat(), "v": round(v_m / 1000, 1)})
 
                 data = {"code": code, "data": data_pts}
-                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type",   "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_cors()
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 print(f"[FOUT visibility-history] {exc}")
                 body = json.dumps({"error": str(exc)}).encode()
@@ -2969,13 +2981,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/wind":
             try:
                 data = get_wind_data()
-                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type",   "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_cors()
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 body = json.dumps({"error": str(exc)}).encode("utf-8")
                 self.send_response(500)
@@ -3026,13 +3033,8 @@ class Handler(BaseHTTPRequestHandler):
                             rws_code = feat["properties"].get("rws_code", rws_code)
                             break
                     data = fetch_wind_history(rws_code, naam)
-                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type",   "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_cors()
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 print(f"[FOUT wind-history] {exc}")
                 body = json.dumps({"error": str(exc)}).encode()
@@ -3047,13 +3049,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/knmi":
             try:
                 data = get_knmi_data()
-                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type",   "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_cors()
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 print(f"[FOUT knmi] {exc}")
                 body = json.dumps({"error": str(exc)}).encode("utf-8")
@@ -3130,13 +3127,8 @@ class Handler(BaseHTTPRequestHandler):
                     data = fetch_ndbc_history(station_id)
                 else:
                     data = fetch_history(code)
-                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type",   "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_cors()
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 print(f"[FOUT history] {exc}")
                 body = json.dumps({"error": str(exc)}).encode()
@@ -3152,13 +3144,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/metar":
             try:
                 data = get_metar_data()
-                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type",   "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_cors()
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 print(f"[FOUT metar] {exc}")
                 body = json.dumps({"error": str(exc)}).encode()
@@ -3221,13 +3208,8 @@ class Handler(BaseHTTPRequestHandler):
                                 "fc":  m.get("flightCategory", "")} for m in metars_sorted],
                     "taf":    taf_raw,
                 }
-                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type",   "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_cors()
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 print(f"[FOUT metar-detail] {exc}")
                 body = json.dumps({"error": str(exc)}).encode()
@@ -3265,13 +3247,8 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     # RWS: in-memory ring buffer (groeit elke 10 min)
                     data = get_rws_temp_history(code)
-                body = _safe_json(data).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type",   "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_cors()
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 print(f"[FOUT temp-history] {exc}")
                 body = json.dumps({"error": str(exc)}).encode()
