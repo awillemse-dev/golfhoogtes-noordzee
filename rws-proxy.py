@@ -34,6 +34,7 @@ METAR_CACHE_S   = 30 * 60   # 30 minuten cache
 _metar_cache       = None
 _metar_time        = 0
 _coastal_stations  = None   # dict icao → (naam, lat, lon, elev_m) voor kust-luchthavens
+_EMPTY_METAR       = {"type": "FeatureCollection", "features": [], "aantalStations": 0, "opgehaald": "", "laden": True}
 
 # ── Hulpfunctie: POST naar RWS API ──────────────────────────────────────────
 
@@ -2586,73 +2587,75 @@ def _parse_metar_fc(raw):
     return 'VFR'
 
 
-def get_metar_data():
-    """Haalt METARs op van NOAA text-feed, filtert op kust-ICAO (elev ≤ 10m)."""
+def _do_fetch_metar():
+    """Laad METARs van NOAA text-feed, sla op in _metar_cache. Mag blokkeren."""
     global _metar_cache, _metar_time
-    if _metar_cache and (time.time() - _metar_time) < METAR_CACHE_S:
-        return _metar_cache
+    # Stap 1: kust-stations lijst (gecacht na eerste keer)
+    coastal = _load_coastal_stations()
+
+    # Stap 2: NOAA actuele METAR text-feed (~300 KB, alle ~5000 stations)
+    hour = datetime.now(timezone.utc).strftime("%H")
+    url  = f"https://tgftp.nws.noaa.gov/data/observations/metar/cycles/{hour}Z.TXT"
+    req  = urllib.request.Request(url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        text = r.read().decode("utf-8", errors="replace")
+
+    # Stap 3: parseer blokken → bewaar meest recente METAR per kust-ICAO
+    import re as _re
+    blocks = _re.split(r'\n(?=\d{4}/\d{2}/\d{2} \d{2}:\d{2})', text.strip())
+    seen   = {}
+    for block in blocks:
+        lines = block.strip().splitlines()
+        if len(lines) < 2:
+            continue
+        ts_line  = lines[0].strip()
+        raw_line = lines[1].strip()
+        m = _re.match(r'^([A-Z][A-Z0-9]{3}) \d{6}Z', raw_line)
+        if not m:
+            continue
+        icao = m.group(1)
+        if icao not in coastal:
+            continue
+        if icao not in seen or ts_line > seen[icao][1]:
+            seen[icao] = (raw_line, ts_line)
+
+    now_iso  = datetime.now(timezone.utc).isoformat()
+    features = []
+    for icao, (raw, ts) in seen.items():
+        naam, lat, lon, elev_m = coastal[icao]
+        fc = _parse_metar_fc(raw)
+        features.append({"type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {
+                "code":     f"metar.{icao.lower()}",
+                "icao":     icao,
+                "naam":     naam,
+                "raw":      raw,
+                "tijdstip": ts,
+                "fc":       fc,
+                "elev":     elev_m,
+                "bron":     "NOAA/NWS",
+            }})
+
+    _metar_cache = {"type": "FeatureCollection", "features": features,
+                    "aantalStations": len(features), "opgehaald": now_iso}
+    _metar_time  = time.time()
+    print(f"[METAR] {len(features)} kuststations geladen")
+
+
+def _refresh_metar_bg():
+    """Vul/ververs _metar_cache in de achtergrond (blokkeert request-thread NIET)."""
     try:
-        # Stap 1: kust-stations lijst
-        coastal = _load_coastal_stations()
-
-        # Stap 2: NOAA actuele METAR text-feed (alle ~5000 stations, ~300 KB)
-        hour = datetime.now(timezone.utc).strftime("%H")
-        url  = f"https://tgftp.nws.noaa.gov/data/observations/metar/cycles/{hour}Z.TXT"
-        req  = urllib.request.Request(url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            text = r.read().decode("utf-8", errors="replace")
-
-        # Stap 3: parseer blokken (tijdstip + METAR-regel)
-        import re as _re
-        # Elke sectie: "YYYY/MM/DD HH:MM\nRAW_METAR\n"
-        blocks = _re.split(r'\n(?=\d{4}/\d{2}/\d{2} \d{2}:\d{2})', text.strip())
-        seen   = {}   # icao → (raw, tijdstip)  — bewaar meest recent
-        for block in blocks:
-            lines = block.strip().splitlines()
-            if len(lines) < 2:
-                continue
-            ts_line  = lines[0].strip()
-            raw_line = lines[1].strip()
-            # METAR begint met ICAO-code (4 letters/cijfers) gevolgd door dag/tijd
-            m = _re.match(r'^([A-Z][A-Z0-9]{3}) \d{6}Z', raw_line)
-            if not m:
-                continue
-            icao = m.group(1)
-            if icao not in coastal:
-                continue
-            # Bewaar meest recente
-            if icao not in seen or ts_line > seen[icao][1]:
-                seen[icao] = (raw_line, ts_line)
-
-        now_iso = datetime.now(timezone.utc).isoformat()
-        features = []
-        for icao, (raw, ts) in seen.items():
-            naam, lat, lon, elev_m = coastal[icao]
-            fc = _parse_metar_fc(raw)
-            features.append({"type": "Feature",
-                "geometry": {"type": "Point", "coordinates": [lon, lat]},
-                "properties": {
-                    "code":     f"metar.{icao.lower()}",
-                    "icao":     icao,
-                    "naam":     naam,
-                    "raw":      raw,
-                    "tijdstip": ts,
-                    "fc":       fc,
-                    "elev":     elev_m,
-                    "bron":     "NOAA/NWS",
-                }})
-
-        _metar_cache = {"type": "FeatureCollection", "features": features,
-                        "aantalStations": len(features),
-                        "opgehaald": now_iso}
-        _metar_time  = time.time()
-        print(f"[METAR] {len(features)} kuststations geladen")
+        if _metar_cache and (time.time() - _metar_time) < METAR_CACHE_S:
+            return
+        _do_fetch_metar()
     except Exception as e:
-        print(f"[METAR] Fout: {e}")
-        if _metar_cache:
-            return _metar_cache
-        raise
-    return _metar_cache
+        print(f"[METAR bg] Fout: {e}")
+
+
+def get_metar_data():
+    """Geeft de achtergrond-cache terug. Geeft laden:True als cache nog leeg is."""
+    return _metar_cache or _EMPTY_METAR
 
 
 def fetch_knmi_data():
@@ -3369,18 +3372,16 @@ if __name__ == "__main__":
         print("[CACHE] Fase 2: CDIP + SOCIB + temp + wind + oceaanzicht ophalen…")
         try:
             from concurrent.futures import wait as _wait2
-            ex2 = ThreadPoolExecutor(max_workers=5)
+            ex2 = ThreadPoolExecutor(max_workers=7)
             fcdip  = ex2.submit(_refresh_cdip_bg)
             fsocib = ex2.submit(_refresh_socib_bg)
             ft     = ex2.submit(_refresh_temp_bg)
             fwnd   = ex2.submit(get_wind_data)
             focvis = ex2.submit(_refresh_ocean_vis_bg)
-            _wait2([fcdip, fsocib, ft, fwnd, focvis], timeout=180)
+            fknmi  = ex2.submit(get_knmi_data)
+            fmetar = ex2.submit(_refresh_metar_bg)
+            _wait2([fcdip, fsocib, ft, fwnd, focvis, fknmi, fmetar], timeout=180)
             ex2.shutdown(wait=False)
-            try: get_knmi_data()
-            except Exception as e: print(f"[KNMI] Prewarm mislukt: {e}")
-            try: get_metar_data()
-            except Exception as e: print(f"[METAR] Prewarm mislukt: {e}")
             # Waves opnieuw cachen nu CDIP + SOCIB gevuld zijn
             _refresh_waves()
             print("[CACHE] Alles klaar.\n")
@@ -3393,14 +3394,15 @@ if __name__ == "__main__":
             print("[CACHE] Achtergrond-refresh gestart…")
             try:
                 from concurrent.futures import wait as _wait3
-                ex3 = ThreadPoolExecutor(max_workers=6)
+                ex3 = ThreadPoolExecutor(max_workers=7)
                 fcdip  = ex3.submit(_refresh_cdip_bg)
                 fsocib = ex3.submit(_refresh_socib_bg)
                 ft     = ex3.submit(_refresh_temp_bg)
                 fwnd   = ex3.submit(get_wind_data)
                 fknmi  = ex3.submit(get_knmi_data)
                 focvis = ex3.submit(_refresh_ocean_vis_bg)
-                _wait3([fcdip, fsocib, ft, fwnd, fknmi, focvis], timeout=180)
+                fmetar = ex3.submit(_refresh_metar_bg)
+                _wait3([fcdip, fsocib, ft, fwnd, fknmi, focvis, fmetar], timeout=180)
                 ex3.shutdown(wait=False)
                 _refresh_waves()
             except Exception as e:

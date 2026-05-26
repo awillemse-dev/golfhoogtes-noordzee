@@ -1013,6 +1013,11 @@ async function fetchMetarData() {
     const resp = await fetchWithTimeout(metarUrl(), 60000);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
+    if (geojson.laden) {
+      setStatus('loading', 'METAR data wordt geladen…');
+      setTimeout(() => { if (activeLayer === 'metar') fetchMetarData().then(startCountdown); }, 5000);
+      return;
+    }
     renderMetarMarkers(geojson);
     const opgehaald = geojson.opgehaald
       ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
