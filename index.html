@@ -1327,7 +1327,7 @@ function wavesUrl()       { return `${PROXY_URL}/api/waves`; }
 function historyUrl(code) { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
 
 let markers = [];
-let _lastWaveGeoJSON = null, _lastTempGeoJSON = null, _lastWindGeoJSON = null, _lastZichtGeoJSON = null, _lastMetarGeoJSON = null;
+let _lastWaveGeoJSON = null, _lastTempGeoJSON = null, _lastWindGeoJSON = null, _lastZichtGeoJSON = null;
 
 // Herlaad markers bij zoomwijziging (aanpassen icongrootte)
 map.on('zoomend', () => {
