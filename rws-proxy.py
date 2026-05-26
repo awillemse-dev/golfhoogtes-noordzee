@@ -28,7 +28,12 @@ CEFAS_URL = "https://wavenet-api.cefas.co.uk/api/Map/Current"
 CACHE_S      = 10 * 60       # 10 minuten cache
 TEMP_CACHE_S = 24 * 60 * 60  # 24 uur cache voor zeewatertemperatuur
 
-BUIENRADAR_URL = "https://data.buienradar.nl/2.0/feed/json"
+BUIENRADAR_URL  = "https://data.buienradar.nl/2.0/feed/json"
+METAR_ALL_URL   = "https://aviationweather.gov/api/data/metar?format=json&hours=2"
+METAR_CACHE_S   = 30 * 60   # 30 minuten cache
+
+_metar_cache = None
+_metar_time  = 0
 
 # ── Hulpfunctie: POST naar RWS API ──────────────────────────────────────────
 
@@ -2512,6 +2517,63 @@ def get_nl_border():
 _knmi_cache = None
 _knmi_time  = 0
 
+def get_metar_data():
+    """Haalt alle actuele METARs op van aviationweather.gov, filtert op kuststations (elev ≤ 10m)."""
+    global _metar_cache, _metar_time
+    if _metar_cache and (time.time() - _metar_time) < METAR_CACHE_S:
+        return _metar_cache
+    try:
+        req = urllib.request.Request(
+            METAR_ALL_URL,
+            headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0", "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read().decode("utf-8"))
+
+        features = []
+        for obs in (data if isinstance(data, list) else []):
+            try:
+                lat  = obs.get("lat")
+                lon  = obs.get("lon")
+                elev = obs.get("elev")
+                if lat is None or lon is None or elev is None:
+                    continue
+                if float(elev) > 10:
+                    continue
+                icao     = obs.get("icaoId") or obs.get("stationId") or ""
+                if not icao:
+                    continue
+                naam     = obs.get("name", icao)
+                raw      = obs.get("rawOb", "")
+                tijdstip = obs.get("reportTime", "")
+                fc       = obs.get("flightCategory", "")
+                features.append({"type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [float(lon), float(lat)]},
+                    "properties": {
+                        "code":     f"metar.{icao.lower()}",
+                        "icao":     icao,
+                        "naam":     naam,
+                        "raw":      raw,
+                        "tijdstip": tijdstip,
+                        "fc":       fc,
+                        "elev":     float(elev),
+                        "bron":     "aviationweather.gov",
+                    }})
+            except Exception:
+                continue
+
+        _metar_cache = {"type": "FeatureCollection", "features": features,
+                        "aantalStations": len(features),
+                        "opgehaald": datetime.now(timezone.utc).isoformat()}
+        _metar_time  = time.time()
+        print(f"[METAR] {len(features)} kuststations (elev ≤ 10m) geladen")
+    except Exception as e:
+        print(f"[METAR] Fout: {e}")
+        if _metar_cache:
+            return _metar_cache
+        raise
+    return _metar_cache
+
+
 def fetch_knmi_data():
     """Haalt actuele waarnemingen op van Buienradar (elke 10 min, geen API key)."""
     req = urllib.request.Request(
@@ -2999,6 +3061,96 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
 
         # ── /api/temp-history?code=... ──────────────────────────────────
+        # ── /api/metar ───────────────────────────────────────────────────
+        elif path == "/api/metar":
+            try:
+                data = get_metar_data()
+                body = _safe_json(data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type",   "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                print(f"[FOUT metar] {exc}")
+                body = json.dumps({"error": str(exc)}).encode()
+                self.send_response(500)
+                self.send_header("Content-Type",   "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+
+        # ── /api/metar-detail?id=ICAO ────────────────────────────────────
+        elif path == "/api/metar-detail":
+            params = parse_qs(urlparse(self.path).query)
+            icao   = (params.get("id") or [None])[0]
+            try:
+                if not icao:
+                    raise ValueError("id parameter verplicht")
+                icao = icao.upper()
+
+                from concurrent.futures import wait as _wait_m
+                ex_m = ThreadPoolExecutor(max_workers=2)
+
+                def _fetch_metar_raw():
+                    url = (f"https://aviationweather.gov/api/data/metar"
+                           f"?ids={icao}&format=json&hours=24")
+                    req = urllib.request.Request(
+                        url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        return json.loads(r.read().decode("utf-8"))
+
+                def _fetch_taf_raw():
+                    url = (f"https://aviationweather.gov/api/data/taf"
+                           f"?ids={icao}&format=json")
+                    req = urllib.request.Request(
+                        url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        return json.loads(r.read().decode("utf-8"))
+
+                fm = ex_m.submit(_fetch_metar_raw)
+                ft = ex_m.submit(_fetch_taf_raw)
+                _wait_m([fm, ft], timeout=20)
+                ex_m.shutdown(wait=False)
+
+                metars = fm.result() if fm.done() else []
+                tafs   = ft.result() if ft.done() else []
+
+                # Meest recente METAR eerst
+                metars_sorted = sorted(
+                    [m for m in (metars if isinstance(metars, list) else []) if m.get("rawOb")],
+                    key=lambda m: m.get("reportTime", ""), reverse=True)
+                taf_raw = ""
+                for t in (tafs if isinstance(tafs, list) else []):
+                    taf_raw = t.get("rawTAF") or t.get("tafText") or ""
+                    if taf_raw:
+                        break
+
+                data = {
+                    "icao":   icao,
+                    "metars": [{"raw": m.get("rawOb", ""), "time": m.get("reportTime", ""),
+                                "fc":  m.get("flightCategory", "")} for m in metars_sorted],
+                    "taf":    taf_raw,
+                }
+                body = _safe_json(data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type",   "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                print(f"[FOUT metar-detail] {exc}")
+                body = json.dumps({"error": str(exc)}).encode()
+                self.send_response(500)
+                self.send_header("Content-Type",   "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+
         elif path == "/api/temp-history":
             params = parse_qs(urlparse(self.path).query)
             code   = (params.get("code") or [None])[0]
@@ -3145,6 +3297,8 @@ if __name__ == "__main__":
             ex2.shutdown(wait=False)
             try: get_knmi_data()
             except Exception as e: print(f"[KNMI] Prewarm mislukt: {e}")
+            try: get_metar_data()
+            except Exception as e: print(f"[METAR] Prewarm mislukt: {e}")
             # Waves opnieuw cachen nu CDIP + SOCIB gevuld zijn
             _refresh_waves()
             print("[CACHE] Alles klaar.\n")
