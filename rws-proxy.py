@@ -29,11 +29,11 @@ CACHE_S      = 10 * 60       # 10 minuten cache
 TEMP_CACHE_S = 24 * 60 * 60  # 24 uur cache voor zeewatertemperatuur
 
 BUIENRADAR_URL  = "https://data.buienradar.nl/2.0/feed/json"
-METAR_ALL_URL   = "https://aviationweather.gov/api/data/metar?format=json&hours=2"
 METAR_CACHE_S   = 30 * 60   # 30 minuten cache
 
-_metar_cache = None
-_metar_time  = 0
+_metar_cache       = None
+_metar_time        = 0
+_coastal_stations  = None   # dict icao → (naam, lat, lon, elev_m) voor kust-luchthavens
 
 # ── Hulpfunctie: POST naar RWS API ──────────────────────────────────────────
 
@@ -2517,55 +2517,136 @@ def get_nl_border():
 _knmi_cache = None
 _knmi_time  = 0
 
+def _load_coastal_stations():
+    """Bouw eenmalig een dict van kust-ICAO codes vanuit OurAirports CSV (elev ≤ 10m / 33ft)."""
+    global _coastal_stations
+    if _coastal_stations is not None:
+        return _coastal_stations
+    import csv as _csv, io as _io
+    url = "https://davidmegginson.github.io/ourairports-data/airports.csv"
+    req = urllib.request.Request(url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        text = r.read().decode("utf-8")
+    reader = _csv.DictReader(_io.StringIO(text))
+    result = {}
+    for row in reader:
+        icao = (row.get("icao_code") or row.get("gps_code") or "").strip()
+        if len(icao) != 4:
+            continue
+        try:
+            elev_ft = float(row["elevation_ft"]) if row.get("elevation_ft") else None
+        except ValueError:
+            continue
+        if elev_ft is None or elev_ft > 33:   # 33 ft ≈ 10 m
+            continue
+        try:
+            lat = float(row["latitude_deg"])
+            lon = float(row["longitude_deg"])
+        except (ValueError, KeyError):
+            continue
+        naam = row.get("name", icao)
+        result[icao] = (naam, lat, lon, round(elev_ft * 0.3048, 1))
+    _coastal_stations = result
+    print(f"[METAR] {len(result)} kust-ICAO codes geladen (OurAirports)")
+    return result
+
+
+def _parse_metar_fc(raw):
+    """Bepaal flight category uit METAR-tekst (eenvoudige heuristiek)."""
+    import re as _re
+    vis_m = None
+    ceiling_ft = None
+    # Zichtbaarheid (SM of meters)
+    m = _re.search(r' (\d+)SM ', raw)
+    if m:
+        vis_m = float(m.group(1)) * 1609.34
+    else:
+        m = _re.search(r' (\d{4}) ', raw)
+        if m:
+            v = int(m.group(1))
+            if v <= 9999:
+                vis_m = float(v)
+    if '9999' in raw or 'CAVOK' in raw:
+        vis_m = 10000.0
+    # Wolkenbasis
+    for cloud in _re.finditer(r'(?:BKN|OVC)(\d{3})', raw):
+        ft = int(cloud.group(1)) * 100
+        if ceiling_ft is None or ft < ceiling_ft:
+            ceiling_ft = ft
+    if vis_m is None and ceiling_ft is None:
+        return ''
+    vis_sm = (vis_m / 1609.34) if vis_m is not None else 99
+    ceil   = ceiling_ft if ceiling_ft is not None else 99999
+    if vis_sm < 1 or ceil < 500:
+        return 'LIFR'
+    if vis_sm < 3 or ceil < 1000:
+        return 'IFR'
+    if vis_sm <= 5 or ceil <= 3000:
+        return 'MVFR'
+    return 'VFR'
+
+
 def get_metar_data():
-    """Haalt alle actuele METARs op van aviationweather.gov, filtert op kuststations (elev ≤ 10m)."""
+    """Haalt METARs op van NOAA text-feed, filtert op kust-ICAO (elev ≤ 10m)."""
     global _metar_cache, _metar_time
     if _metar_cache and (time.time() - _metar_time) < METAR_CACHE_S:
         return _metar_cache
     try:
-        req = urllib.request.Request(
-            METAR_ALL_URL,
-            headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0", "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = json.loads(r.read().decode("utf-8"))
+        # Stap 1: kust-stations lijst
+        coastal = _load_coastal_stations()
 
-        features = []
-        for obs in (data if isinstance(data, list) else []):
-            try:
-                lat  = obs.get("lat")
-                lon  = obs.get("lon")
-                elev = obs.get("elev")
-                if lat is None or lon is None or elev is None:
-                    continue
-                if float(elev) > 10:
-                    continue
-                icao     = obs.get("icaoId") or obs.get("stationId") or ""
-                if not icao:
-                    continue
-                naam     = obs.get("name", icao)
-                raw      = obs.get("rawOb", "")
-                tijdstip = obs.get("reportTime", "")
-                fc       = obs.get("flightCategory", "")
-                features.append({"type": "Feature",
-                    "geometry": {"type": "Point", "coordinates": [float(lon), float(lat)]},
-                    "properties": {
-                        "code":     f"metar.{icao.lower()}",
-                        "icao":     icao,
-                        "naam":     naam,
-                        "raw":      raw,
-                        "tijdstip": tijdstip,
-                        "fc":       fc,
-                        "elev":     float(elev),
-                        "bron":     "aviationweather.gov",
-                    }})
-            except Exception:
+        # Stap 2: NOAA actuele METAR text-feed (alle ~5000 stations, ~300 KB)
+        hour = datetime.now(timezone.utc).strftime("%H")
+        url  = f"https://tgftp.nws.noaa.gov/data/observations/metar/cycles/{hour}Z.TXT"
+        req  = urllib.request.Request(url, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            text = r.read().decode("utf-8", errors="replace")
+
+        # Stap 3: parseer blokken (tijdstip + METAR-regel)
+        import re as _re
+        # Elke sectie: "YYYY/MM/DD HH:MM\nRAW_METAR\n"
+        blocks = _re.split(r'\n(?=\d{4}/\d{2}/\d{2} \d{2}:\d{2})', text.strip())
+        seen   = {}   # icao → (raw, tijdstip)  — bewaar meest recent
+        for block in blocks:
+            lines = block.strip().splitlines()
+            if len(lines) < 2:
                 continue
+            ts_line  = lines[0].strip()
+            raw_line = lines[1].strip()
+            # METAR begint met ICAO-code (4 letters/cijfers) gevolgd door dag/tijd
+            m = _re.match(r'^([A-Z][A-Z0-9]{3}) \d{6}Z', raw_line)
+            if not m:
+                continue
+            icao = m.group(1)
+            if icao not in coastal:
+                continue
+            # Bewaar meest recente
+            if icao not in seen or ts_line > seen[icao][1]:
+                seen[icao] = (raw_line, ts_line)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        features = []
+        for icao, (raw, ts) in seen.items():
+            naam, lat, lon, elev_m = coastal[icao]
+            fc = _parse_metar_fc(raw)
+            features.append({"type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {
+                    "code":     f"metar.{icao.lower()}",
+                    "icao":     icao,
+                    "naam":     naam,
+                    "raw":      raw,
+                    "tijdstip": ts,
+                    "fc":       fc,
+                    "elev":     elev_m,
+                    "bron":     "NOAA/NWS",
+                }})
 
         _metar_cache = {"type": "FeatureCollection", "features": features,
                         "aantalStations": len(features),
-                        "opgehaald": datetime.now(timezone.utc).isoformat()}
+                        "opgehaald": now_iso}
         _metar_time  = time.time()
-        print(f"[METAR] {len(features)} kuststations (elev ≤ 10m) geladen")
+        print(f"[METAR] {len(features)} kuststations geladen")
     except Exception as e:
         print(f"[METAR] Fout: {e}")
         if _metar_cache:
