@@ -3196,30 +3196,31 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
 
         # ── / of /index.html ─────────────────────────────────────────────
-        # Altijd de nieuwste HTML van GitHub ophalen zodat updates meteen
-        # live zijn zonder Render-herdeployment.
         elif path in ("/", "/index.html"):
-            GITHUB_HTML = ("https://raw.githubusercontent.com/"
-                           "awillemse-dev/golfhoogtes-noordzee/main/index.html")
+            html_path = os.path.join(os.path.dirname(__file__), "index.html")
             body = None
+            # Lokaal bestand heeft altijd voorrang (geen GitHub CDN-cache issues)
             try:
-                req = urllib.request.Request(
-                    GITHUB_HTML, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
-                with urllib.request.urlopen(req, timeout=8) as r:
-                    body = r.read()
-            except Exception:
+                with open(html_path, "rb") as f:
+                    body = f.read()
+            except FileNotFoundError:
                 pass
+            # Fallback: GitHub (alleen als lokaal bestand ontbreekt, bijv. op Render zonder deploy)
             if body is None:
-                # Fallback: lokaal bestand
-                html_path = os.path.join(os.path.dirname(__file__), "index.html")
+                GITHUB_HTML = ("https://raw.githubusercontent.com/"
+                               "awillemse-dev/golfhoogtes-noordzee/main/index.html")
                 try:
-                    with open(html_path, "rb") as f:
-                        body = f.read()
-                except FileNotFoundError:
-                    self.send_response(404)
-                    self.end_headers()
-                    self.wfile.write(b"index.html niet gevonden")
-                    return
+                    req = urllib.request.Request(
+                        GITHUB_HTML, headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+                    with urllib.request.urlopen(req, timeout=8) as r:
+                        body = r.read()
+                except Exception:
+                    pass
+            if body is None:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"index.html niet gevonden")
+                return
             self.send_response(200)
             self.send_header("Content-Type",   "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
