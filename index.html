@@ -1140,7 +1140,15 @@ function _bliksemConnect() {
     if (activeLayer !== 'bliksem') return;
     let d;
     try { d = JSON.parse(evt.data); } catch { return; }
-    const tsMs = d.time ? Math.round(d.time / 1e6) : Date.now();
+    // Blitzortung stuurt nanoseconden (19 cijfers) — te groot voor JS Number.
+    // Lees de ruwe string uit vóórdat precisie verloren gaat.
+    let tsMs;
+    const tmatch = evt.data.match(/"time"\s*:\s*(\d+)/);
+    if (tmatch) {
+      tsMs = parseInt(tmatch[1].slice(0, 13), 10); // eerste 13 cijfers = milliseconden
+    } else {
+      tsMs = Date.now();
+    }
     if (d.lat !== undefined && d.lon !== undefined) {
       _bliksemAddStrike(d.lat, d.lon, tsMs);
     }
@@ -1162,6 +1170,8 @@ function _bliksemDisconnect() {
 }
 
 function startBliksem() {
+  // Ruim andere laag-markers op
+  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers();
   // Toon al bestaande strikes (buffer bleef bewaard)
   clearBliksemMarkers();
   const now = Date.now();
