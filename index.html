@@ -437,6 +437,13 @@
       </svg>
       METAR/TAF
     </button>
+    <button class="nav-btn" id="nav-bliksem" onclick="selectLayer('bliksem')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+      </svg>
+      Bliksem
+    </button>
   </nav>
 
   <div id="status" class="loading">
@@ -587,6 +594,13 @@ const LEGEND_CONTENT = {
     <div class="legend-row"><div class="legend-dot" style="background:#a855f7"></div>LIFR &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">&lt; 1,6 km / &lt; 500 ft</span></div>
     <div class="legend-row"><div class="legend-dot" style="background:#64748b"></div>Onbekend</div>
     <div class="legend-sub">Bron: aviationweather.gov · Kust (elev ≤ 10m)</div>`,
+  bliksem: `
+    <h4>Bliksem (realtime)</h4>
+    <div class="legend-row"><div class="legend-dot" style="background:#ff2222"></div>&lt; 1 min</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ff8800"></div>1 – 5 min</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ffdd00"></div>5 – 15 min</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#888888"></div>15 – 30 min</div>
+    <div class="legend-sub">Bron: Blitzortung.org · Wereldwijd</div>`,
 };
 
 let legendEl = null;
@@ -693,7 +707,7 @@ function clearTempMarkers() {
 
 function renderTempMarkers(geojson) {
   _lastTempGeoJSON = geojson;
-  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers();
+  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
@@ -808,7 +822,7 @@ function clearWindMarkers() {
 
 function renderWindMarkers(geojson) {
   _lastWindGeoJSON = geojson;
-  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers();
+  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
@@ -884,7 +898,7 @@ function clearZichtMarkers() { zichtMarkers.forEach(m => map.removeLayer(m)); zi
 
 function renderZichtMarkers(geojson) {
   _lastZichtGeoJSON = geojson;
-  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers();
+  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const v = f.properties.vv;   // km
@@ -922,7 +936,7 @@ function clearMetarMarkers() { metarMarkers.forEach(m => map.removeLayer(m)); me
 
 function renderMetarMarkers(geojson) {
   _lastMetarGeoJSON = geojson;
-  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers();
+  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p  = f.properties;
@@ -1030,6 +1044,150 @@ async function fetchMetarData() {
     setStatus('error', 'Opnieuw laden…');
     setTimeout(() => { if (activeLayer === 'metar') fetchMetarData().then(startCountdown); }, 5000);
   }
+}
+
+// ── Bliksem (Blitzortung WebSocket) ──────────────────────────────────────────
+const BLIKSEM_MAX_AGE_MS  = 30 * 60 * 1000;  // 30 minuten bewaren
+const BLIKSEM_MAX_STRIKES = 6000;
+
+let _bliksemStrikes  = [];   // [{lat, lon, tsMs}]
+let _bliksemLayers   = [];   // L.circleMarker per strike
+let _bliksemWs       = null;
+let _bliksemRefreshT = null; // setInterval voor kleur-refresh
+let _bliksemCount    = 0;
+
+const _bliksemRenderer = L.canvas({ padding: 0.5 });
+
+function _bliksemColor(ageMs) {
+  if (ageMs <    60000) return '#ff2222';   // < 1 min — knalrood
+  if (ageMs <   300000) return '#ff8800';   // < 5 min — oranje
+  if (ageMs <   900000) return '#ffdd00';   // < 15 min — geel
+  return '#666666';                          // < 30 min — grijs
+}
+
+function _bliksemRadius(ageMs) {
+  if (ageMs <  60000) return 5;
+  if (ageMs < 300000) return 4;
+  return 3;
+}
+
+function _bliksemOpacity(ageMs) {
+  if (ageMs <  60000) return 0.95;
+  if (ageMs < 300000) return 0.75;
+  if (ageMs < 900000) return 0.55;
+  return 0.30;
+}
+
+function clearBliksemMarkers() {
+  _bliksemLayers.forEach(m => map.removeLayer(m));
+  _bliksemLayers = [];
+}
+
+function _bliksemAddStrike(lat, lon, tsMs) {
+  _bliksemStrikes.push({ lat, lon, tsMs });
+  if (_bliksemStrikes.length > BLIKSEM_MAX_STRIKES) _bliksemStrikes.shift();
+
+  const ageMs = Date.now() - tsMs;
+  const m = L.circleMarker([lat, lon], {
+    renderer:    _bliksemRenderer,
+    radius:      _bliksemRadius(ageMs),
+    color:       _bliksemColor(ageMs),
+    fillColor:   _bliksemColor(ageMs),
+    fillOpacity: _bliksemOpacity(ageMs),
+    weight:      0,
+    _tsMs:       tsMs,
+  }).addTo(map);
+  _bliksemLayers.push(m);
+  _bliksemCount++;
+}
+
+function _bliksemRefreshColors() {
+  const now  = Date.now();
+  const cutoff = now - BLIKSEM_MAX_AGE_MS;
+
+  // Verwijder verouderde strikes
+  const toRemove = _bliksemLayers.filter(m => m.options._tsMs < cutoff);
+  toRemove.forEach(m => { map.removeLayer(m); });
+  _bliksemLayers  = _bliksemLayers.filter(m => m.options._tsMs >= cutoff);
+  _bliksemStrikes = _bliksemStrikes.filter(s => s.tsMs >= cutoff);
+
+  // Update kleuren op basis van nieuwe leeftijd
+  _bliksemLayers.forEach(m => {
+    const age = now - m.options._tsMs;
+    const c   = _bliksemColor(age);
+    m.setStyle({ color: c, fillColor: c, fillOpacity: _bliksemOpacity(age), radius: _bliksemRadius(age) });
+  });
+
+  if (activeLayer === 'bliksem') {
+    setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 30 min`);
+  }
+}
+
+function _bliksemConnect() {
+  if (_bliksemWs && _bliksemWs.readyState <= 1) return; // al verbonden of verbinding bezig
+
+  // Blitzortung rotates between servers ws1..ws8
+  const server = Math.floor(Math.random() * 8) + 1;
+  const ws = new WebSocket(`wss://ws${server}.blitzortung.org/`);
+  _bliksemWs = ws;
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ west: -180, east: 180, north: 90, south: -90 }));
+    setStatus('ok', `${_bliksemLayers.length} bliksems · verbonden`);
+  };
+
+  ws.onmessage = (evt) => {
+    if (activeLayer !== 'bliksem') return;
+    let d;
+    try { d = JSON.parse(evt.data); } catch { return; }
+    const tsMs = d.time ? Math.round(d.time / 1e6) : Date.now();
+    if (d.lat !== undefined && d.lon !== undefined) {
+      _bliksemAddStrike(d.lat, d.lon, tsMs);
+    }
+  };
+
+  ws.onerror = () => {};
+
+  ws.onclose = () => {
+    if (activeLayer === 'bliksem') {
+      // Reconnect na 3s
+      setTimeout(() => { if (activeLayer === 'bliksem') _bliksemConnect(); }, 3000);
+    }
+  };
+}
+
+function _bliksemDisconnect() {
+  if (_bliksemWs) { _bliksemWs.onclose = null; _bliksemWs.close(); _bliksemWs = null; }
+  if (_bliksemRefreshT) { clearInterval(_bliksemRefreshT); _bliksemRefreshT = null; }
+}
+
+function startBliksem() {
+  // Toon al bestaande strikes (buffer bleef bewaard)
+  clearBliksemMarkers();
+  const now = Date.now();
+  _bliksemStrikes = _bliksemStrikes.filter(s => now - s.tsMs < BLIKSEM_MAX_AGE_MS);
+  _bliksemStrikes.forEach(s => {
+    const ageMs = now - s.tsMs;
+    const m = L.circleMarker([s.lat, s.lon], {
+      renderer:    _bliksemRenderer,
+      radius:      _bliksemRadius(ageMs),
+      color:       _bliksemColor(ageMs),
+      fillColor:   _bliksemColor(ageMs),
+      fillOpacity: _bliksemOpacity(ageMs),
+      weight:      0,
+      _tsMs:       s.tsMs,
+    }).addTo(map);
+    _bliksemLayers.push(m);
+  });
+
+  _bliksemConnect();
+  _bliksemRefreshT = setInterval(_bliksemRefreshColors, 15000);
+  setStatus('loading', 'Verbinden met bliksemnetwerk…');
+}
+
+function stopBliksem() {
+  _bliksemDisconnect();
+  clearBliksemMarkers();
 }
 
 function zichtUrl()            { return `${PROXY_URL}/api/visibility`; }
@@ -1278,7 +1436,7 @@ function selectSection(section) {
     mapEl.style.display      = 'none';
     comingSoon.style.display = 'flex';
     document.getElementById('coming-soon-label').textContent = 'Verwachtingen';
-    clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers();
+    clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
     setStatus('', '–');
     document.getElementById('status').className = '';
     document.getElementById('countdown').textContent = '';
@@ -1323,6 +1481,10 @@ function selectLayer(layer) {
     comingSoon.style.display = 'none';
     if (_lastMetarGeoJSON && _isFresh('metar')) { renderMetarMarkers(_lastMetarGeoJSON); startCountdown(); }
     else fetchMetarData().then(startCountdown);
+  } else if (layer === 'bliksem') {
+    mapEl.style.display      = '';
+    comingSoon.style.display = 'none';
+    startBliksem();
   } else {
     mapEl.style.display      = 'none';
     comingSoon.style.display = 'flex';
@@ -1350,6 +1512,7 @@ map.on('zoomend', () => {
   else if (_lastWindGeoJSON && activeLayer === 'wind') renderWindMarkers(_lastWindGeoJSON);
   else if (_lastZichtGeoJSON && activeLayer === 'zicht') renderZichtMarkers(_lastZichtGeoJSON);
   else if (_lastMetarGeoJSON && activeLayer === 'metar') renderMetarMarkers(_lastMetarGeoJSON);
+  // bliksem: canvas renderer herschaalt automatisch
 });
 
 function clearMarkers() {
@@ -1368,7 +1531,7 @@ function formatTijdstip(iso) {
 
 function renderMarkers(geojson) {
   _lastWaveGeoJSON = geojson;
-  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers();
+  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
