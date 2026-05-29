@@ -1046,157 +1046,105 @@ async function fetchMetarData() {
   }
 }
 
-// ── Bliksem (Blitzortung WebSocket) ──────────────────────────────────────────
-const BLIKSEM_MAX_AGE_MS  = 30 * 60 * 1000;  // 30 minuten bewaren
-const BLIKSEM_MAX_STRIKES = 6000;
+// ── Bliksem (proxy-relay van Blitzortung, polling) ───────────────────────────
+const BLIKSEM_MAX_AGE_MS = 30 * 60 * 1000;
 
-let _bliksemStrikes  = [];   // [{lat, lon, tsMs}]
-let _bliksemLayers   = [];   // L.circleMarker per strike
-let _bliksemWs       = null;
-let _bliksemRefreshT = null; // setInterval voor kleur-refresh
-let _bliksemCount    = 0;
+let _bliksemLayers   = [];
+let _bliksemPollT    = null;
+let _bliksemColorT   = null;
+let _bliksemKnownTs  = new Set(); // al getekende strikes (voorkomen dubbelen)
 
 const _bliksemRenderer = L.canvas({ padding: 0.5 });
 
 function _bliksemColor(ageMs) {
-  if (ageMs <    60000) return '#ff2222';   // < 1 min — knalrood
-  if (ageMs <   300000) return '#ff8800';   // < 5 min — oranje
-  if (ageMs <   900000) return '#ffdd00';   // < 15 min — geel
-  return '#666666';                          // < 30 min — grijs
+  if (ageMs <   60000) return '#ff2222';
+  if (ageMs <  300000) return '#ff8800';
+  if (ageMs <  900000) return '#ffdd00';
+  return '#666666';
 }
-
 function _bliksemRadius(ageMs) {
-  if (ageMs <  60000) return 5;
-  if (ageMs < 300000) return 4;
+  if (ageMs <   60000) return 6;
+  if (ageMs <  300000) return 4;
   return 3;
 }
-
 function _bliksemOpacity(ageMs) {
-  if (ageMs <  60000) return 0.95;
-  if (ageMs < 300000) return 0.75;
-  if (ageMs < 900000) return 0.55;
+  if (ageMs <   60000) return 0.95;
+  if (ageMs <  300000) return 0.80;
+  if (ageMs <  900000) return 0.55;
   return 0.30;
 }
 
 function clearBliksemMarkers() {
   _bliksemLayers.forEach(m => map.removeLayer(m));
   _bliksemLayers = [];
-}
-
-function _bliksemAddStrike(lat, lon, tsMs) {
-  _bliksemStrikes.push({ lat, lon, tsMs });
-  if (_bliksemStrikes.length > BLIKSEM_MAX_STRIKES) _bliksemStrikes.shift();
-
-  const ageMs = Date.now() - tsMs;
-  const m = L.circleMarker([lat, lon], {
-    renderer:    _bliksemRenderer,
-    radius:      _bliksemRadius(ageMs),
-    color:       _bliksemColor(ageMs),
-    fillColor:   _bliksemColor(ageMs),
-    fillOpacity: _bliksemOpacity(ageMs),
-    weight:      0,
-    _tsMs:       tsMs,
-  }).addTo(map);
-  _bliksemLayers.push(m);
-  _bliksemCount++;
+  _bliksemKnownTs.clear();
 }
 
 function _bliksemRefreshColors() {
-  const now  = Date.now();
+  if (activeLayer !== 'bliksem') return;
+  const now    = Date.now();
   const cutoff = now - BLIKSEM_MAX_AGE_MS;
 
-  // Verwijder verouderde strikes
-  const toRemove = _bliksemLayers.filter(m => m.options._tsMs < cutoff);
-  toRemove.forEach(m => { map.removeLayer(m); });
-  _bliksemLayers  = _bliksemLayers.filter(m => m.options._tsMs >= cutoff);
-  _bliksemStrikes = _bliksemStrikes.filter(s => s.tsMs >= cutoff);
+  const old = _bliksemLayers.filter(m => m.options._tsMs < cutoff);
+  old.forEach(m => { map.removeLayer(m); _bliksemKnownTs.delete(m.options._tsMs); });
+  _bliksemLayers = _bliksemLayers.filter(m => m.options._tsMs >= cutoff);
 
-  // Update kleuren op basis van nieuwe leeftijd
   _bliksemLayers.forEach(m => {
     const age = now - m.options._tsMs;
     const c   = _bliksemColor(age);
     m.setStyle({ color: c, fillColor: c, fillOpacity: _bliksemOpacity(age), radius: _bliksemRadius(age) });
   });
 
-  if (activeLayer === 'bliksem') {
+  setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 30 min`);
+}
+
+async function _bliksemPoll() {
+  if (activeLayer !== 'bliksem') return;
+  try {
+    const resp = await fetch(`${PROXY_URL}/api/bliksem`, { cache: 'no-store' });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const now  = Date.now();
+
+    for (const f of (data.features || [])) {
+      const tsMs = Math.round(f.properties.ts * 1000);
+      if (_bliksemKnownTs.has(tsMs)) continue;
+      _bliksemKnownTs.add(tsMs);
+
+      const [lon, lat] = f.geometry.coordinates;
+      const ageMs = now - tsMs;
+      if (ageMs > BLIKSEM_MAX_AGE_MS || ageMs < 0) continue;
+
+      const m = L.circleMarker([lat, lon], {
+        renderer:    _bliksemRenderer,
+        radius:      _bliksemRadius(ageMs),
+        color:       _bliksemColor(ageMs),
+        fillColor:   _bliksemColor(ageMs),
+        fillOpacity: _bliksemOpacity(ageMs),
+        weight:      0,
+        _tsMs:       tsMs,
+      }).addTo(map);
+      _bliksemLayers.push(m);
+    }
+
     setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 30 min`);
+  } catch (e) {
+    console.warn('[bliksem poll]', e);
   }
 }
 
-function _bliksemConnect() {
-  if (_bliksemWs && _bliksemWs.readyState <= 1) return; // al verbonden of verbinding bezig
-
-  // Blitzortung rotates between servers ws1..ws8
-  const server = Math.floor(Math.random() * 8) + 1;
-  const ws = new WebSocket(`wss://ws${server}.blitzortung.org/`);
-  _bliksemWs = ws;
-
-  ws.onopen = () => {
-    ws.send(JSON.stringify({ west: -180, east: 180, north: 90, south: -90 }));
-    setStatus('ok', `${_bliksemLayers.length} bliksems · verbonden`);
-  };
-
-  ws.onmessage = (evt) => {
-    if (activeLayer !== 'bliksem') return;
-    let d;
-    try { d = JSON.parse(evt.data); } catch { return; }
-    // Blitzortung stuurt nanoseconden (19 cijfers) — te groot voor JS Number.
-    // Lees de ruwe string uit vóórdat precisie verloren gaat.
-    let tsMs;
-    const tmatch = evt.data.match(/"time"\s*:\s*(\d+)/);
-    if (tmatch) {
-      tsMs = parseInt(tmatch[1].slice(0, 13), 10); // eerste 13 cijfers = milliseconden
-    } else {
-      tsMs = Date.now();
-    }
-    if (d.lat !== undefined && d.lon !== undefined) {
-      _bliksemAddStrike(d.lat, d.lon, tsMs);
-    }
-  };
-
-  ws.onerror = () => {};
-
-  ws.onclose = () => {
-    if (activeLayer === 'bliksem') {
-      // Reconnect na 3s
-      setTimeout(() => { if (activeLayer === 'bliksem') _bliksemConnect(); }, 3000);
-    }
-  };
-}
-
-function _bliksemDisconnect() {
-  if (_bliksemWs) { _bliksemWs.onclose = null; _bliksemWs.close(); _bliksemWs = null; }
-  if (_bliksemRefreshT) { clearInterval(_bliksemRefreshT); _bliksemRefreshT = null; }
-}
-
 function startBliksem() {
-  // Ruim andere laag-markers op
   clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers();
-  // Toon al bestaande strikes (buffer bleef bewaard)
   clearBliksemMarkers();
-  const now = Date.now();
-  _bliksemStrikes = _bliksemStrikes.filter(s => now - s.tsMs < BLIKSEM_MAX_AGE_MS);
-  _bliksemStrikes.forEach(s => {
-    const ageMs = now - s.tsMs;
-    const m = L.circleMarker([s.lat, s.lon], {
-      renderer:    _bliksemRenderer,
-      radius:      _bliksemRadius(ageMs),
-      color:       _bliksemColor(ageMs),
-      fillColor:   _bliksemColor(ageMs),
-      fillOpacity: _bliksemOpacity(ageMs),
-      weight:      0,
-      _tsMs:       s.tsMs,
-    }).addTo(map);
-    _bliksemLayers.push(m);
-  });
-
-  _bliksemConnect();
-  _bliksemRefreshT = setInterval(_bliksemRefreshColors, 15000);
-  setStatus('loading', 'Verbinden met bliksemnetwerk…');
+  setStatus('loading', 'Bliksemdata ophalen…');
+  _bliksemPoll();
+  _bliksemPollT  = setInterval(_bliksemPoll, 5000);
+  _bliksemColorT = setInterval(_bliksemRefreshColors, 15000);
 }
 
 function stopBliksem() {
-  _bliksemDisconnect();
+  if (_bliksemPollT)  { clearInterval(_bliksemPollT);  _bliksemPollT  = null; }
+  if (_bliksemColorT) { clearInterval(_bliksemColorT); _bliksemColorT = null; }
   clearBliksemMarkers();
 }
 

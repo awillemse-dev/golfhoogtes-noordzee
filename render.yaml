@@ -2,7 +2,7 @@ services:
   - type: web
     name: noordzee-proxy
     runtime: python
-    buildCommand: pip install --upgrade pip
+    buildCommand: pip install --upgrade pip && pip install websocket-client
     startCommand: python3 rws-proxy.py
     autoDeploy: true
     envVars:

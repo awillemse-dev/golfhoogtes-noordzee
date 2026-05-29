@@ -14,6 +14,8 @@ import json
 import time
 import os
 import threading
+import random as _random
+import collections
 import gzip as _gzip
 import urllib.request
 import urllib.error
@@ -22,6 +24,13 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
+
+try:
+    import websocket as _ws_lib
+    _WS_OK = True
+except ImportError:
+    _WS_OK = False
+    print("[BLIKSEM] websocket-client niet geïnstalleerd — bliksemdata uitgeschakeld")
 
 PORT      = int(os.environ.get("PORT", 3001))
 RWS_BASE  = "https://ddapi20-waterwebservices.rijkswaterstaat.nl"
@@ -36,6 +45,69 @@ _metar_cache       = None
 _metar_time        = 0
 _coastal_stations  = None   # dict icao → (naam, lat, lon, elev_m) voor kust-luchthavens
 _EMPTY_METAR       = {"type": "FeatureCollection", "features": [], "aantalStations": 0, "opgehaald": "", "laden": True}
+
+# ── Bliksem (Blitzortung WebSocket — server-side relay) ──────────────────────
+_BLIKSEM_MAX      = 15000   # max strikes in buffer
+_bliksem_deque    = collections.deque(maxlen=_BLIKSEM_MAX)
+_bliksem_lock     = threading.Lock()
+_BLIKSEM_MAX_AGE  = 30 * 60  # seconden
+
+def _bliksem_on_message(ws, raw):
+    try:
+        d = json.loads(raw)
+    except Exception:
+        return
+    lat = d.get("lat")
+    lon = d.get("lon")
+    if lat is None or lon is None:
+        return
+    # Blitzortung stuurt nanoseconden als integer — Python int bewaart precisie
+    ts_ns = d.get("time")
+    ts_s  = ts_ns / 1e9 if ts_ns else time.time()
+    with _bliksem_lock:
+        _bliksem_deque.append((round(ts_s, 3), lat, lon))
+
+def _bliksem_bg():
+    """Verbindt met Blitzortung WebSocket (create_connection) en buffert strikes."""
+    if not _WS_OK:
+        return
+    import ssl as _ssl
+    while True:
+        ws = None
+        try:
+            server_n = _random.randint(1, 4)  # ws1..ws4 hebben geldig cert
+            url = f"wss://ws{server_n}.blitzortung.org/"
+            print(f"[BLIKSEM] Verbinden met {url}")
+            ws = _ws_lib.create_connection(
+                url,
+                header={
+                    "Origin":     "https://www.lightningmaps.org",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                  "Chrome/124.0.0.0 Safari/537.36",
+                },
+                sslopt={"cert_reqs": _ssl.CERT_NONE},
+                timeout=10,
+            )
+            ws.send('{"west":-180,"east":180,"north":90,"south":-90}')
+            print("[BLIKSEM] Verbonden en geabonneerd")
+            ws.settimeout(5)
+            while True:
+                try:
+                    raw = ws.recv()
+                    _bliksem_on_message(None, raw)
+                except _ws_lib.WebSocketTimeoutException:
+                    continue   # gewoon wachten op volgende data
+                except Exception:
+                    break
+        except Exception as e:
+            print(f"[BLIKSEM] Verbindingsfout: {e}")
+        finally:
+            try:
+                if ws: ws.close()
+            except Exception:
+                pass
+        time.sleep(5)
 
 # ── Hulpfunctie: POST naar RWS API ──────────────────────────────────────────
 
@@ -3156,6 +3228,27 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
 
+        # ── /api/bliksem ─────────────────────────────────────────────────
+        elif path == "/api/bliksem":
+            cutoff = time.time() - _BLIKSEM_MAX_AGE
+            with _bliksem_lock:
+                recent = [(ts, lat, lon) for ts, lat, lon in _bliksem_deque if ts >= cutoff]
+            features = [
+                {"type": "Feature",
+                 "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                 "properties": {"ts": ts}}
+                for ts, lat, lon in recent
+            ]
+            data = {
+                "type":         "FeatureCollection",
+                "features":     features,
+                "aantalStrikes": len(features),
+                "serverTs":     time.time(),
+                "wsOk":         _WS_OK,
+            }
+            self.send_response(200)
+            self._send_json(_safe_json(data).encode("utf-8"), max_age=0)
+
         # ── /api/metar-detail?id=ICAO ────────────────────────────────────
         elif path == "/api/metar-detail":
             params = parse_qs(urlparse(self.path).query)
@@ -3389,6 +3482,7 @@ if __name__ == "__main__":
                 print(f"[CACHE] Achtergrond-refresh mislukt: {e}")
 
     threading.Thread(target=_background_loop, daemon=True).start()
+    threading.Thread(target=_bliksem_bg, daemon=True).start()
 
     try:
         server.serve_forever()
