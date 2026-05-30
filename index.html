@@ -1157,10 +1157,28 @@ function _bliksemRefreshColors() {
   setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 60 min`);
 }
 
+let _bliksemRetryT = null;
+
 function startBliksem() {
   clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers();
   clearBliksemMarkers();
+  if (_bliksemRetryT) { clearTimeout(_bliksemRetryT); _bliksemRetryT = null; }
+  if (_bliksemColorT) { clearInterval(_bliksemColorT); _bliksemColorT = null; }
+
   setStatus('loading', 'Verbinden met bliksemstream…');
+
+  // Ping de proxy eerst — Render free tier kan slapend zijn (koud opstarten ~30s)
+  fetch(`${PROXY_URL}/api/ping`, { cache: 'no-store' })
+    .then(() => { if (activeLayer === 'bliksem') _bliksemOpenSse(); })
+    .catch(() => {
+      if (activeLayer !== 'bliksem') return;
+      setStatus('loading', 'Proxy wekken · opnieuw proberen…');
+      _bliksemRetryT = setTimeout(startBliksem, 8000);
+    });
+}
+
+function _bliksemOpenSse() {
+  if (_bliksemSse) { _bliksemSse.close(); _bliksemSse = null; }
 
   _bliksemSse = new EventSource(`${PROXY_URL}/api/bliksem-stream`);
 
@@ -1183,14 +1201,18 @@ function startBliksem() {
   };
 
   _bliksemSse.onerror = () => {
-    console.warn('[bliksem] SSE fout');
-    setStatus('error', 'Verbinding verbroken…');
+    if (activeLayer !== 'bliksem') return;
+    console.warn('[bliksem] SSE fout — opnieuw verbinden over 6s');
+    setStatus('loading', 'Verbinding verbroken · opnieuw verbinden…');
+    _bliksemSse.close(); _bliksemSse = null;
+    _bliksemRetryT = setTimeout(startBliksem, 6000);
   };
 
-  _bliksemColorT = setInterval(_bliksemRefreshColors, 15000);
+  if (!_bliksemColorT) _bliksemColorT = setInterval(_bliksemRefreshColors, 15000);
 }
 
 function stopBliksem() {
+  if (_bliksemRetryT) { clearTimeout(_bliksemRetryT); _bliksemRetryT = null; }
   if (_bliksemColorT) { clearInterval(_bliksemColorT); _bliksemColorT = null; }
   if (_bliksemSse)    { _bliksemSse.close(); _bliksemSse = null; }
   clearBliksemMarkers();
