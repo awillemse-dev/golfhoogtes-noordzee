@@ -48,10 +48,10 @@ _coastal_stations  = None   # dict icao → (naam, lat, lon, elev_m) voor kust-l
 _EMPTY_METAR       = {"type": "FeatureCollection", "features": [], "aantalStations": 0, "opgehaald": "", "laden": True}
 
 # ── Bliksem (Blitzortung WebSocket — server-side relay) ──────────────────────
-_BLIKSEM_MAX      = 15000   # max strikes in buffer
+_BLIKSEM_MAX      = 30000   # max strikes in buffer (60 min wereldwijd ~20k strikes)
 _bliksem_deque    = collections.deque(maxlen=_BLIKSEM_MAX)
 _bliksem_lock     = threading.Lock()
-_BLIKSEM_MAX_AGE  = 30 * 60  # seconden
+_BLIKSEM_MAX_AGE  = 60 * 60  # seconden — bewaar 60 min zodat reload direct het uur toont
 
 # SSE broadcast: set van queues, één per verbonden browser client
 _bliksem_clients      = set()
@@ -3324,7 +3324,7 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
 
         # ── /api/bliksem-stream  (SSE — live push) ───────────────────────
         elif path == "/api/bliksem-stream":
-            # Stuur eerst alle strikes uit de laatste 30 minuten als batch
+            # Stuur eerst alle strikes uit het laatste uur als batch
             cutoff = time.time() - _BLIKSEM_MAX_AGE
             with _bliksem_lock:
                 history = [(ts, lat, lon) for ts, lat, lon in _bliksem_deque if ts >= cutoff]
