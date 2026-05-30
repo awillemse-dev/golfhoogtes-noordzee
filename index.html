@@ -1116,38 +1116,45 @@ function _bliksemRefreshColors() {
   setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 30 min`);
 }
 
+// Blitzortung servers: ws1+ws2 hebben geldige SSL certs, rest niet
+const _BLITZ_SERVERS = ['ws1.blitzortung.org', 'ws2.blitzortung.org'];
+let _bliksemServerIdx = 0;
+
 function _bliksemConnect() {
   if (_bliksemWs && _bliksemWs.readyState <= 1) return;
-  const n = Math.floor(Math.random() * 8) + 1;
-  // Gebruik subprotocol 'lmaps' zoals lightningmaps.org dat doet
+  const host = _BLITZ_SERVERS[_bliksemServerIdx % _BLITZ_SERVERS.length];
+  // GEEN subprotocol — Blitzortung accepteert alleen plain WebSocket
   try {
-    const ws = new WebSocket(`wss://ws${n}.blitzortung.org/`, ['lmaps']);
+    const ws = new WebSocket(`wss://${host}`);
     _bliksemWs = ws;
 
     ws.onopen = () => {
-      console.log(`[bliksem] verbonden ws${n}`);
+      console.log(`[bliksem] verbonden ${host}, subprotocol="${ws.protocol}"`);
+      // Stuur subscriptie voor wereldwijd bereik
       ws.send(JSON.stringify({ west: -180, east: 180, north: 90, south: -90 }));
       setStatus('ok', 'Verbonden · wacht op bliksems…');
     };
 
     ws.onmessage = (evt) => {
       const raw = typeof evt.data === 'string' ? evt.data : null;
-      if (!raw) return;
+      if (!raw || raw[0] !== '{') return;
       let d;
       try { d = JSON.parse(raw); } catch { return; }
       if (d.lat === undefined || d.lon === undefined) return;
 
-      // Timestamp: Blitzortung stuurt nanoseconden — lees als string om precisie te bewaren
-      const m = raw.match(/"time"\s*:\s*(\d+)/);
-      const tsMs = m ? parseInt(m[1].slice(0, 13), 10) : Date.now();
+      // Timestamp is nanoseconden (19 cijfers) — regex op raw string bewaard precisie
+      const tm = raw.match(/"time"\s*:\s*(\d{13,19})/);
+      const tsMs = tm ? parseInt(tm[1].slice(0, 13), 10) : Date.now();
       _bliksemAddStrike(d.lat, d.lon, tsMs);
     };
 
-    ws.onerror = (e) => console.warn(`[bliksem] ws${n} fout`, e);
+    ws.onerror = () => console.warn(`[bliksem] ${host} verbindingsfout`);
 
     ws.onclose = (e) => {
-      console.log(`[bliksem] ws${n} gesloten (${e.code})`);
+      console.log(`[bliksem] ${host} gesloten (code ${e.code})`);
       _bliksemWs = null;
+      // Roteer naar volgende server bij herverbinden
+      _bliksemServerIdx++;
       if (activeLayer === 'bliksem') {
         _bliksemReconT = setTimeout(_bliksemConnect, 3000);
       }
