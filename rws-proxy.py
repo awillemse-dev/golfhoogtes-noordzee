@@ -3600,6 +3600,19 @@ if __name__ == "__main__":
     threading.Thread(target=_background_loop, daemon=True).start()
     threading.Thread(target=_bliksem_bg, daemon=True).start()
 
+    def _self_ping():
+        """Ping zichzelf elke 14 min zodat Render free tier niet slaap valt."""
+        import urllib.request as _ur
+        while True:
+            time.sleep(14 * 60)
+            try:
+                _ur.urlopen(f"http://localhost:{PORT}/api/ping", timeout=10)
+            except Exception:
+                pass
+
+    if os.environ.get("RENDER"):
+        threading.Thread(target=_self_ping, daemon=True).start()
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
