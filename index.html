@@ -1046,13 +1046,14 @@ async function fetchMetarData() {
   }
 }
 
-// ── Bliksem (proxy-relay van Blitzortung, polling) ───────────────────────────
+// ── Bliksem (directe browser WebSocket naar Blitzortung) ─────────────────────
 const BLIKSEM_MAX_AGE_MS = 30 * 60 * 1000;
 
-let _bliksemLayers   = [];
-let _bliksemPollT    = null;
-let _bliksemColorT   = null;
-let _bliksemKnownTs  = new Set(); // al getekende strikes (voorkomen dubbelen)
+let _bliksemLayers  = [];
+let _bliksemWs      = null;
+let _bliksemColorT  = null;
+let _bliksemReconT  = null;
+let _bliksemKnownTs = new Set();
 
 const _bliksemRenderer = L.canvas({ padding: 0.5 });
 
@@ -1063,14 +1064,14 @@ function _bliksemColor(ageMs) {
   return '#666666';
 }
 function _bliksemRadius(ageMs) {
-  if (ageMs <   60000) return 6;
-  if (ageMs <  300000) return 4;
+  if (ageMs <  60000) return 6;
+  if (ageMs < 300000) return 4;
   return 3;
 }
 function _bliksemOpacity(ageMs) {
-  if (ageMs <   60000) return 0.95;
-  if (ageMs <  300000) return 0.80;
-  if (ageMs <  900000) return 0.55;
+  if (ageMs <  60000) return 0.95;
+  if (ageMs < 300000) return 0.80;
+  if (ageMs < 900000) return 0.55;
   return 0.30;
 }
 
@@ -1080,71 +1081,94 @@ function clearBliksemMarkers() {
   _bliksemKnownTs.clear();
 }
 
+function _bliksemAddStrike(lat, lon, tsMs) {
+  if (_bliksemKnownTs.has(tsMs)) return;
+  _bliksemKnownTs.add(tsMs);
+  const ageMs = Date.now() - tsMs;
+  if (ageMs > BLIKSEM_MAX_AGE_MS || ageMs < -5000) return;
+  const m = L.circleMarker([lat, lon], {
+    renderer:    _bliksemRenderer,
+    radius:      _bliksemRadius(ageMs),
+    color:       _bliksemColor(ageMs),
+    fillColor:   _bliksemColor(ageMs),
+    fillOpacity: _bliksemOpacity(ageMs),
+    weight:      0,
+    _tsMs:       tsMs,
+  }).addTo(map);
+  _bliksemLayers.push(m);
+  if (activeLayer === 'bliksem') {
+    setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 30 min`);
+  }
+}
+
 function _bliksemRefreshColors() {
   if (activeLayer !== 'bliksem') return;
   const now    = Date.now();
   const cutoff = now - BLIKSEM_MAX_AGE_MS;
-
   const old = _bliksemLayers.filter(m => m.options._tsMs < cutoff);
   old.forEach(m => { map.removeLayer(m); _bliksemKnownTs.delete(m.options._tsMs); });
   _bliksemLayers = _bliksemLayers.filter(m => m.options._tsMs >= cutoff);
-
   _bliksemLayers.forEach(m => {
     const age = now - m.options._tsMs;
     const c   = _bliksemColor(age);
     m.setStyle({ color: c, fillColor: c, fillOpacity: _bliksemOpacity(age), radius: _bliksemRadius(age) });
   });
-
   setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 30 min`);
 }
 
-async function _bliksemPoll() {
-  if (activeLayer !== 'bliksem') return;
+function _bliksemConnect() {
+  if (_bliksemWs && _bliksemWs.readyState <= 1) return;
+  const n = Math.floor(Math.random() * 8) + 1;
+  // Gebruik subprotocol 'lmaps' zoals lightningmaps.org dat doet
   try {
-    const resp = await fetch(`${PROXY_URL}/api/bliksem`, { cache: 'no-store' });
-    if (!resp.ok) return;
-    const data = await resp.json();
-    const now  = Date.now();
+    const ws = new WebSocket(`wss://ws${n}.blitzortung.org/`, ['lmaps']);
+    _bliksemWs = ws;
 
-    for (const f of (data.features || [])) {
-      const tsMs = Math.round(f.properties.ts * 1000);
-      if (_bliksemKnownTs.has(tsMs)) continue;
-      _bliksemKnownTs.add(tsMs);
+    ws.onopen = () => {
+      console.log(`[bliksem] verbonden ws${n}`);
+      ws.send(JSON.stringify({ west: -180, east: 180, north: 90, south: -90 }));
+      setStatus('ok', 'Verbonden · wacht op bliksems…');
+    };
 
-      const [lon, lat] = f.geometry.coordinates;
-      const ageMs = now - tsMs;
-      if (ageMs > BLIKSEM_MAX_AGE_MS || ageMs < 0) continue;
+    ws.onmessage = (evt) => {
+      const raw = typeof evt.data === 'string' ? evt.data : null;
+      if (!raw) return;
+      let d;
+      try { d = JSON.parse(raw); } catch { return; }
+      if (d.lat === undefined || d.lon === undefined) return;
 
-      const m = L.circleMarker([lat, lon], {
-        renderer:    _bliksemRenderer,
-        radius:      _bliksemRadius(ageMs),
-        color:       _bliksemColor(ageMs),
-        fillColor:   _bliksemColor(ageMs),
-        fillOpacity: _bliksemOpacity(ageMs),
-        weight:      0,
-        _tsMs:       tsMs,
-      }).addTo(map);
-      _bliksemLayers.push(m);
-    }
+      // Timestamp: Blitzortung stuurt nanoseconden — lees als string om precisie te bewaren
+      const m = raw.match(/"time"\s*:\s*(\d+)/);
+      const tsMs = m ? parseInt(m[1].slice(0, 13), 10) : Date.now();
+      _bliksemAddStrike(d.lat, d.lon, tsMs);
+    };
 
-    setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 30 min`);
+    ws.onerror = (e) => console.warn(`[bliksem] ws${n} fout`, e);
+
+    ws.onclose = (e) => {
+      console.log(`[bliksem] ws${n} gesloten (${e.code})`);
+      _bliksemWs = null;
+      if (activeLayer === 'bliksem') {
+        _bliksemReconT = setTimeout(_bliksemConnect, 3000);
+      }
+    };
   } catch (e) {
-    console.warn('[bliksem poll]', e);
+    console.warn('[bliksem] WS aanmaken mislukt:', e);
   }
 }
 
 function startBliksem() {
   clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers();
   clearBliksemMarkers();
-  setStatus('loading', 'Bliksemdata ophalen…');
-  _bliksemPoll();
-  _bliksemPollT  = setInterval(_bliksemPoll, 5000);
+  setStatus('loading', 'Verbinden met bliksemnetwerk…');
+  _bliksemConnect();
   _bliksemColorT = setInterval(_bliksemRefreshColors, 15000);
 }
 
 function stopBliksem() {
-  if (_bliksemPollT)  { clearInterval(_bliksemPollT);  _bliksemPollT  = null; }
   if (_bliksemColorT) { clearInterval(_bliksemColorT); _bliksemColorT = null; }
+  if (_bliksemReconT) { clearTimeout(_bliksemReconT);  _bliksemReconT = null; }
+  if (_bliksemWs) { _bliksemWs.onclose = null; _bliksemWs.close(); _bliksemWs = null; }
   clearBliksemMarkers();
 }
 
