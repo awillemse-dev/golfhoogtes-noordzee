@@ -336,16 +336,17 @@
 
     /* Bliksem flash — eenmalige puls bij nieuw strike */
     @keyframes bliksem-flash {
-      0%   { transform: scale(0.3); opacity: 1; }
-      100% { transform: scale(2.8); opacity: 0; }
+      0%   { transform: scale(0.5); opacity: 1;   box-shadow: 0 0 6px 3px rgba(255,255,255,0.8); }
+      40%  { transform: scale(1.4); opacity: 0.9; box-shadow: 0 0 4px 2px rgba(255,221,0,0.5); }
+      100% { transform: scale(4.0); opacity: 0;   box-shadow: none; }
     }
     .bliksem-flash {
-      width:  14px;
-      height: 14px;
+      width:  22px;
+      height: 22px;
       border-radius: 50%;
-      border: 2px solid #ffdd00;
-      background: transparent;
-      animation: bliksem-flash 0.6s ease-out forwards;
+      border: 3px solid #ffffff;
+      background: rgba(255,221,0,0.25);
+      animation: bliksem-flash 1.0s ease-out forwards;
       pointer-events: none;
     }
     .legend-row {
@@ -1131,9 +1132,9 @@ function _bliksemAddStrike(lat, lon, tsS) {
 function _bliksemFlash(lat, lon) {
   const el = document.createElement('div');
   el.className = 'bliksem-flash';
-  const icon = L.divIcon({ className: '', html: el, iconSize: [14, 14], iconAnchor: [7, 7] });
+  const icon = L.divIcon({ className: '', html: el, iconSize: [22, 22], iconAnchor: [11, 11] });
   const m = L.marker([lat, lon], { icon, interactive: false, zIndexOffset: 1000 }).addTo(map);
-  setTimeout(() => map.removeLayer(m), 700);
+  setTimeout(() => map.removeLayer(m), 1100);
 }
 
 
