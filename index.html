@@ -611,10 +611,10 @@ const LEGEND_CONTENT = {
     <div class="legend-sub">Bron: aviationweather.gov · Kust (elev ≤ 10m)</div>`,
   bliksem: `
     <h4>Bliksem (realtime)</h4>
-    <div class="legend-row"><div class="legend-dot" style="background:#ff2222"></div>&lt; 1 min</div>
-    <div class="legend-row"><div class="legend-dot" style="background:#ff8800"></div>1 – 5 min</div>
-    <div class="legend-row"><div class="legend-dot" style="background:#ffdd00"></div>5 – 15 min</div>
-    <div class="legend-row"><div class="legend-dot" style="background:#888888"></div>15 – 30 min</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ffdd00"></div>&lt; 5 min</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ff8800"></div>5 – 15 min</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ef4444"></div>15 – 30 min</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#666666"></div>30 – 60 min</div>
     <div class="legend-sub">Bron: Blitzortung.org · Wereldwijd</div>`,
 };
 
@@ -1062,7 +1062,7 @@ async function fetchMetarData() {
 }
 
 // ── Bliksem (SSE-relay via proxy → geen CORS/origin issues) ──────────────────
-const BLIKSEM_MAX_AGE_MS = 30 * 60 * 1000;
+const BLIKSEM_MAX_AGE_MS = 60 * 60 * 1000;
 
 let _bliksemLayers  = [];
 let _bliksemSse     = null;
@@ -1072,21 +1072,22 @@ let _bliksemKnownTs = new Set();
 const _bliksemRenderer = L.canvas({ padding: 0.5 });
 
 function _bliksemColor(ageMs) {
-  if (ageMs <   60000) return '#ff2222';
-  if (ageMs <  300000) return '#ff8800';
-  if (ageMs <  900000) return '#ffdd00';
-  return '#666666';
+  if (ageMs <   5 * 60000) return '#ffdd00';   // < 5 min  — geel
+  if (ageMs <  15 * 60000) return '#ff8800';   // < 15 min — oranje
+  if (ageMs <  30 * 60000) return '#ef4444';   // < 30 min — rood
+  return '#666666';                             // < 60 min — grijs
 }
 function _bliksemRadius(ageMs) {
-  if (ageMs <  60000) return 6;
-  if (ageMs < 300000) return 4;
-  return 3;
+  if (ageMs <  5 * 60000) return 5;
+  if (ageMs < 15 * 60000) return 4;
+  if (ageMs < 30 * 60000) return 3;
+  return 2;
 }
 function _bliksemOpacity(ageMs) {
-  if (ageMs <  60000) return 0.95;
-  if (ageMs < 300000) return 0.80;
-  if (ageMs < 900000) return 0.55;
-  return 0.30;
+  if (ageMs <  5 * 60000) return 0.95;
+  if (ageMs < 15 * 60000) return 0.80;
+  if (ageMs < 30 * 60000) return 0.60;
+  return 0.35;
 }
 
 function clearBliksemMarkers() {
