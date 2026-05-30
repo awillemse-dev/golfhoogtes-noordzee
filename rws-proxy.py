@@ -56,13 +56,18 @@ _BLIKSEM_MAX_AGE  = 60 * 60  # seconden — bewaar 60 min zodat reload direct he
 # SSE broadcast: set van queues, één per verbonden browser client
 _bliksem_clients      = set()
 _bliksem_clients_lock = threading.Lock()
+_bliksem_last_ts      = 0   # timestamp laatste ontvangen strike (voor diagnostiek)
+_bliksem_total        = 0   # totaal ontvangen strikes (voor diagnostiek)
 
 def _bliksem_push(lat, lon, ts_ms):
     """Sla op in buffer en push naar alle SSE-clients."""
+    global _bliksem_last_ts, _bliksem_total
     ts_s = ts_ms / 1000.0
     entry = (round(ts_s, 3), lat, lon)
     with _bliksem_lock:
         _bliksem_deque.append(entry)
+    _bliksem_last_ts = ts_ms
+    _bliksem_total  += 1
     sse_msg = json.dumps({"ts": round(ts_s, 3), "lat": lat, "lon": lon}).encode() + b"\n"
     with _bliksem_clients_lock:
         for q in list(_bliksem_clients):
@@ -2931,6 +2936,30 @@ class Handler(BaseHTTPRequestHandler):
         # ── /api/ping ─────────────────────────────────────────────────────
         if path == "/api/ping":
             body = b'{"ok":true}'
+            self.send_response(200)
+            self.send_header("Content-Type",   "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control",  "no-store")
+            self.send_cors()
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        # ── /api/bliksem-status  (diagnostiek) ───────────────────────────
+        elif path == "/api/bliksem-status":
+            with _bliksem_lock:
+                buf_size = len(_bliksem_deque)
+            with _bliksem_clients_lock:
+                sse_clients = len(_bliksem_clients)
+            info = {
+                "ws_ok":       _WS_OK,
+                "buf_size":    buf_size,
+                "sse_clients": sse_clients,
+                "last_strike": _bliksem_last_ts,
+                "total_recv":  _bliksem_total,
+                "server_ts":   time.time(),
+            }
+            body = json.dumps(info).encode()
             self.send_response(200)
             self.send_header("Content-Type",   "application/json")
             self.send_header("Content-Length", str(len(body)))

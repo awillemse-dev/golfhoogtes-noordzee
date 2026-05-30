@@ -1157,24 +1157,49 @@ function _bliksemRefreshColors() {
   setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 60 min`);
 }
 
-let _bliksemRetryT = null;
+let _bliksemRetryT  = null;
+let _bliksemPollT   = null;   // polling interval als SSE fallback
 
 function startBliksem() {
   clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers();
   clearBliksemMarkers();
-  if (_bliksemRetryT) { clearTimeout(_bliksemRetryT); _bliksemRetryT = null; }
-  if (_bliksemColorT) { clearInterval(_bliksemColorT); _bliksemColorT = null; }
+  if (_bliksemRetryT) { clearTimeout(_bliksemRetryT);   _bliksemRetryT = null; }
+  if (_bliksemPollT)  { clearInterval(_bliksemPollT);   _bliksemPollT  = null; }
+  if (_bliksemColorT) { clearInterval(_bliksemColorT);  _bliksemColorT = null; }
 
-  setStatus('loading', 'Verbinden met bliksemstream…');
+  setStatus('loading', 'Bliksemdata ophalen…');
 
-  // Ping de proxy eerst — Render free tier kan slapend zijn (koud opstarten ~30s)
-  fetch(`${PROXY_URL}/api/ping`, { cache: 'no-store' })
-    .then(() => { if (activeLayer === 'bliksem') _bliksemOpenSse(); })
-    .catch(() => {
-      if (activeLayer !== 'bliksem') return;
-      setStatus('loading', 'Proxy wekken · opnieuw proberen…');
-      _bliksemRetryT = setTimeout(startBliksem, 8000);
-    });
+  // Stap 1: haal direct de volledige buffer op via polling (werkt altijd)
+  _bliksemPoll().then(() => {
+    if (activeLayer !== 'bliksem') return;
+    // Stap 2: probeer ook SSE voor echte real-time updates
+    _bliksemOpenSse();
+    // Stap 3: poll elke 20s als fallback/aanvulling
+    _bliksemPollT = setInterval(() => {
+      if (activeLayer === 'bliksem') _bliksemPoll();
+    }, 20000);
+    if (!_bliksemColorT) _bliksemColorT = setInterval(_bliksemRefreshColors, 15000);
+  }).catch(() => {
+    if (activeLayer !== 'bliksem') return;
+    setStatus('loading', 'Proxy wekken · opnieuw proberen…');
+    _bliksemRetryT = setTimeout(startBliksem, 8000);
+  });
+}
+
+async function _bliksemPoll() {
+  const r   = await fetch(`${PROXY_URL}/api/bliksem`, { cache: 'no-store' });
+  const geo = await r.json();
+  if (activeLayer !== 'bliksem') return;
+  let n = 0;
+  for (const f of (geo.features || [])) {
+    const { ts } = f.properties;
+    const [lon, lat] = f.geometry.coordinates;
+    const before = _bliksemKnownTs.size;
+    _bliksemAddStrike(lat, lon, ts);
+    if (_bliksemKnownTs.size > before) n++;
+  }
+  console.log(`[bliksem] poll: ${geo.features?.length ?? 0} totaal, ${n} nieuw`);
+  setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 60 min`);
 }
 
 function _bliksemOpenSse() {
@@ -1182,39 +1207,32 @@ function _bliksemOpenSse() {
 
   _bliksemSse = new EventSource(`${PROXY_URL}/api/bliksem-stream`);
 
-  _bliksemSse.onopen = () => {
-    console.log('[bliksem] SSE verbonden');
-    setStatus('ok', 'Verbonden · wacht op bliksems…');
-  };
+  _bliksemSse.onopen = () => console.log('[bliksem] SSE verbonden');
 
   _bliksemSse.onmessage = (evt) => {
     if (activeLayer !== 'bliksem') return;
     let d;
     try { d = JSON.parse(evt.data); } catch { return; }
-    // Batch (historische buffer bij verbinden)
     if (d.batch) {
       for (const s of d.batch) _bliksemAddStrike(s.lat, s.lon, s.ts);
       return;
     }
-    // Enkele strike
     if (d.lat !== undefined) _bliksemAddStrike(d.lat, d.lon, d.ts);
   };
 
   _bliksemSse.onerror = () => {
-    if (activeLayer !== 'bliksem') return;
-    console.warn('[bliksem] SSE fout — opnieuw verbinden over 6s');
-    setStatus('loading', 'Verbinding verbroken · opnieuw verbinden…');
-    _bliksemSse.close(); _bliksemSse = null;
-    _bliksemRetryT = setTimeout(startBliksem, 6000);
+    console.warn('[bliksem] SSE fout — polling dekt dit af');
+    if (_bliksemSse) { _bliksemSse.close(); _bliksemSse = null; }
+    // Probeer SSE opnieuw na 30s; polling loopt intussen gewoon door
+    _bliksemRetryT = setTimeout(_bliksemOpenSse, 30000);
   };
-
-  if (!_bliksemColorT) _bliksemColorT = setInterval(_bliksemRefreshColors, 15000);
 }
 
 function stopBliksem() {
-  if (_bliksemRetryT) { clearTimeout(_bliksemRetryT); _bliksemRetryT = null; }
-  if (_bliksemColorT) { clearInterval(_bliksemColorT); _bliksemColorT = null; }
-  if (_bliksemSse)    { _bliksemSse.close(); _bliksemSse = null; }
+  if (_bliksemRetryT) { clearTimeout(_bliksemRetryT);   _bliksemRetryT = null; }
+  if (_bliksemPollT)  { clearInterval(_bliksemPollT);   _bliksemPollT  = null; }
+  if (_bliksemColorT) { clearInterval(_bliksemColorT);  _bliksemColorT = null; }
+  if (_bliksemSse)    { _bliksemSse.close();            _bliksemSse    = null; }
   clearBliksemMarkers();
 }
 
