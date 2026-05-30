@@ -21,6 +21,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Render proxy wakker houden
+        run: curl -sf --max-time 30 "https://noordzee-proxy.onrender.com/api/ping" || true
+
       - name: Golfhoogte data ophalen
         run: python3 scripts/fetch_waves.py
 

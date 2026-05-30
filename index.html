@@ -1229,10 +1229,10 @@ function _bliksemOpenSse() {
   };
 
   _bliksemSse.onerror = () => {
-    console.warn('[bliksem] SSE fout — polling dekt dit af');
+    console.warn('[bliksem] SSE fout — herverbinden over 5s');
     if (_bliksemSse) { _bliksemSse.close(); _bliksemSse = null; }
-    // Probeer SSE opnieuw na 30s; polling loopt intussen gewoon door
-    _bliksemRetryT = setTimeout(_bliksemOpenSse, 30000);
+    if (_bliksemRetryT) clearTimeout(_bliksemRetryT);
+    _bliksemRetryT = setTimeout(_bliksemOpenSse, 5000);
   };
 }
 
@@ -1844,6 +1844,18 @@ function _markFetched(layer) {
 if (!LOCAL) {
   setInterval(() => fetch(`${PROXY_URL}/api/ping`, { cache: 'no-store' }).catch(() => {}), 9 * 60 * 1000);
 }
+
+// ── Hervat bliksem feed als tab weer zichtbaar wordt ─────────────────────────
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || activeLayer !== 'bliksem') return;
+  // Poll direct voor gemiste strikes
+  _bliksemPoll().catch(() => {});
+  // Heropen SSE als die weg is
+  if (!_bliksemSse || _bliksemSse.readyState === EventSource.CLOSED) {
+    if (_bliksemRetryT) { clearTimeout(_bliksemRetryT); _bliksemRetryT = null; }
+    _bliksemOpenSse();
+  }
+});
 
 function stopCountdown() {
   if (_countdownTid) { clearInterval(_countdownTid); _countdownTid = null; }
