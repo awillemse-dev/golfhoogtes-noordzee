@@ -333,6 +333,21 @@
       padding-top: 8px;
       border-top: 1px solid var(--border);
     }
+
+    /* Bliksem flash-ring animatie */
+    @keyframes bliksem-ring {
+      0%   { transform: scale(0.3); opacity: 1; }
+      100% { transform: scale(2.2); opacity: 0; }
+    }
+    .bliksem-flash {
+      width:  30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 2.5px solid #ffffff;
+      background: transparent;
+      animation: bliksem-ring 0.75s ease-out forwards;
+      pointer-events: none;
+    }
     .legend-row {
       display: flex;
       align-items: center;
@@ -1096,9 +1111,28 @@ function _bliksemAddStrike(lat, lon, tsS) {
     _tsMs:       tsMs,
   }).addTo(map);
   _bliksemLayers.push(m);
+
+  // Flash-ring animatie voor verse strikes (< 5s oud)
+  if (ageMs < 5000) {
+    _bliksemFlash(lat, lon);
+  }
+
   if (activeLayer === 'bliksem') {
     setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 30 min`);
   }
+}
+
+function _bliksemFlash(lat, lon) {
+  // Maak een div-marker met CSS puls-animatie
+  const icon = L.divIcon({
+    className: '',
+    html: '<div class="bliksem-flash"></div>',
+    iconSize:   [30, 30],
+    iconAnchor: [15, 15],
+  });
+  const flash = L.marker([lat, lon], { icon, interactive: false, zIndexOffset: 1000 }).addTo(map);
+  // Verwijder na animatie (750ms)
+  setTimeout(() => map.removeLayer(flash), 750);
 }
 
 function _bliksemRefreshColors() {
