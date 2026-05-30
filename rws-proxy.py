@@ -3713,13 +3713,16 @@ if __name__ == "__main__":
 
     def _self_ping():
         """Ping zichzelf elke 14 min zodat Render free tier niet slaap valt."""
-        import urllib.request as _ur
+        render_url = os.environ.get("RENDER_EXTERNAL_URL", "")
+        time.sleep(60)  # wacht tot server klaar is
         while True:
+            if render_url:
+                try:
+                    urllib.request.urlopen(f"{render_url}/api/ping", timeout=10)
+                    print("[PING] Render self-ping OK")
+                except Exception as e:
+                    print(f"[PING] Self-ping fout: {e}")
             time.sleep(14 * 60)
-            try:
-                _ur.urlopen(f"http://localhost:{PORT}/api/ping", timeout=10)
-            except Exception:
-                pass
 
     if os.environ.get("RENDER"):
         threading.Thread(target=_self_ping, daemon=True).start()

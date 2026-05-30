@@ -1170,15 +1170,22 @@ function startBliksem() {
   setStatus('loading', 'Bliksemdata ophalen…');
 
   // Stap 1: haal direct de volledige buffer op via polling (werkt altijd)
-  _bliksemPoll().then(() => {
+  _bliksemPoll().then((count) => {
     if (activeLayer !== 'bliksem') return;
-    // Stap 2: probeer ook SSE voor echte real-time updates
+    // Stap 2: SSE voor real-time updates
     _bliksemOpenSse();
-    // Stap 3: poll elke 20s als fallback/aanvulling
+    // Stap 3: poll elke 20s als aanvulling
     _bliksemPollT = setInterval(() => {
       if (activeLayer === 'bliksem') _bliksemPoll();
     }, 20000);
     if (!_bliksemColorT) _bliksemColorT = setInterval(_bliksemRefreshColors, 15000);
+    // Als proxy net opgestart was en buffer leeg, opnieuw pollen na 15s
+    if (count === 0) {
+      setStatus('loading', 'Proxy opgestart · data laden…');
+      _bliksemRetryT = setTimeout(() => {
+        if (activeLayer === 'bliksem') _bliksemPoll();
+      }, 15000);
+    }
   }).catch(() => {
     if (activeLayer !== 'bliksem') return;
     setStatus('loading', 'Proxy wekken · opnieuw proberen…');
@@ -1200,6 +1207,7 @@ async function _bliksemPoll() {
   }
   console.log(`[bliksem] poll: ${geo.features?.length ?? 0} totaal, ${n} nieuw`);
   setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 60 min`);
+  return n;
 }
 
 function _bliksemOpenSse() {
