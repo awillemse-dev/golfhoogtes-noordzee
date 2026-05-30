@@ -57,24 +57,12 @@ _BLIKSEM_MAX_AGE  = 30 * 60  # seconden
 _bliksem_clients      = set()
 _bliksem_clients_lock = threading.Lock()
 
-def _bliksem_on_message(ws, raw):
-    if not raw:
-        return
-    try:
-        d = json.loads(raw)
-    except Exception:
-        return
-    lat = d.get("lat")
-    lon = d.get("lon")
-    if lat is None or lon is None:
-        return
-    # Blitzortung stuurt nanoseconden als integer — Python int bewaart precisie
-    ts_ns = d.get("time")
-    ts_s  = ts_ns / 1e9 if ts_ns else time.time()
+def _bliksem_push(lat, lon, ts_ms):
+    """Sla op in buffer en push naar alle SSE-clients."""
+    ts_s = ts_ms / 1000.0
     entry = (round(ts_s, 3), lat, lon)
     with _bliksem_lock:
         _bliksem_deque.append(entry)
-    # Stuur naar alle SSE-clients
     sse_msg = json.dumps({"ts": round(ts_s, 3), "lat": lat, "lon": lon}).encode() + b"\n"
     with _bliksem_clients_lock:
         for q in list(_bliksem_clients):
@@ -83,46 +71,76 @@ def _bliksem_on_message(ws, raw):
             except _queue.Full:
                 pass
 
+_LMAPS_SERVERS = ["live.lightningmaps.org", "live2.lightningmaps.org"]
+_LMAPS_VERSION = 24
+
 def _bliksem_bg():
-    """Verbindt met Blitzortung WebSocket (create_connection) en buffert strikes."""
+    """Verbindt met lightningmaps.org WebSocket relay en buffert strikes."""
     if not _WS_OK:
         return
-    import ssl as _ssl
+    server_idx = 0
     while True:
         ws = None
+        server = _LMAPS_SERVERS[server_idx % len(_LMAPS_SERVERS)]
+        url = f"wss://{server}:443/"
         try:
-            server_n = _random.randint(1, 4)  # ws1..ws4 hebben geldig cert
-            url = f"wss://ws{server_n}.blitzortung.org/"
             print(f"[BLIKSEM] Verbinden met {url}")
             ws = _ws_lib.create_connection(
                 url,
                 header={
                     "Origin":     "https://www.lightningmaps.org",
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                  "Chrome/124.0.0.0 Safari/537.36",
+                                  "AppleWebKit/537.36 Chrome/124.0",
                 },
-                sslopt={"cert_reqs": _ssl.CERT_NONE},
-                timeout=10,
+                timeout=15,
             )
-            ws.send('{"west":-180,"east":180,"north":90,"south":-90}')
-            print("[BLIKSEM] Verbonden en geabonneerd")
-            ws.settimeout(5)
+            # Init-bericht exact zoals lightningmaps.org browser doet
+            init_msg = json.dumps({
+                "v": _LMAPS_VERSION, "i": {}, "s": False,
+                "x": 0, "w": 0, "tx": 0, "tw": 1,
+                "a": 4, "z": 3, "b": True, "h": "",
+                "l": 0, "t": 0, "from_lightningmaps_org": True,
+                "p": [90, 180, -90, -180],
+            })
+            ws.send(init_msg)
+            print("[BLIKSEM] Verbonden, wacht op strokes…")
+            ws.settimeout(30)
             while True:
                 try:
                     raw = ws.recv()
-                    _bliksem_on_message(None, raw)
+                    if not raw:
+                        continue
+                    d = json.loads(raw)
+                    # Challenge-response vereist
+                    if "k" in d:
+                        k_resp = json.dumps({"k": (d["k"] * 3604) % 7081 * int(time.time() * 1000) / 100})
+                        ws.send(k_resp)
+                    # Verwerk strokes
+                    strokes = d.get("strokes") or []
+                    for s in strokes:
+                        lat = s.get("lat")
+                        lon = s.get("lon")
+                        ts  = s.get("time")  # milliseconden
+                        if lat is not None and lon is not None and ts:
+                            _bliksem_push(float(lat), float(lon), int(ts))
                 except _ws_lib.WebSocketTimeoutException:
-                    continue   # gewoon wachten op volgende data
+                    # Stuur keep-alive
+                    try:
+                        ws.send(json.dumps({"v": _LMAPS_VERSION, "t": 0}))
+                    except Exception:
+                        break
+                    continue
                 except Exception:
                     break
         except Exception as e:
             print(f"[BLIKSEM] Verbindingsfout: {e}")
         finally:
             try:
-                if ws: ws.close()
+                if ws:
+                    ws.close()
             except Exception:
                 pass
+        server_idx += 1
         time.sleep(5)
 
 # ── Hulpfunctie: POST naar RWS API ──────────────────────────────────────────
