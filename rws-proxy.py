@@ -26,12 +26,109 @@ from socketserver import ThreadingMixIn
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
 
-try:
-    import websocket as _ws_lib
-    _WS_OK = True
-except ImportError:
-    _WS_OK = False
-    print("[BLIKSEM] websocket-client niet geïnstalleerd — bliksemdata uitgeschakeld")
+# ── Minimale WebSocket client (alleen stdlib — geen pip nodig) ────────────────
+import socket as _socket
+import ssl as _ssl
+import base64 as _base64
+import hashlib as _hashlib
+import struct as _struct
+
+class _WSError(Exception): pass
+
+class _WS:
+    """Minimale WebSocket client over TLS, genoeg voor lightningmaps.org."""
+    GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+    def __init__(self, host, port=443, path="/", origin=None, timeout=15):
+        raw = _socket.create_connection((host, port), timeout=timeout)
+        ctx = _ssl.create_default_context()
+        self._sock = ctx.wrap_socket(raw, server_hostname=host)
+        self._sock.settimeout(timeout)
+        key = _base64.b64encode(_random.randbytes(16)).decode()
+        req = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"Upgrade: websocket\r\n"
+            f"Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n"
+            + (f"Origin: {origin}\r\n" if origin else "")
+            + "User-Agent: Mozilla/5.0\r\n\r\n"
+        )
+        self._sock.sendall(req.encode())
+        resp = b""
+        while b"\r\n\r\n" not in resp:
+            chunk = self._sock.recv(4096)
+            if not chunk:
+                raise _WSError("Verbinding gesloten tijdens handshake")
+            resp += chunk
+        if b"101" not in resp.split(b"\r\n")[0]:
+            raise _WSError(f"Handshake mislukt: {resp[:200]}")
+        expected = _base64.b64encode(
+            _hashlib.sha1((key + self.GUID).encode()).digest()
+        ).decode()
+        if expected not in resp.decode(errors="ignore"):
+            raise _WSError("Sec-WebSocket-Accept ongeldig")
+        self._buf = b""
+
+    def settimeout(self, t):
+        self._sock.settimeout(t)
+
+    def recv(self):
+        """Geeft de payload terug van het volgende tekst-frame."""
+        while True:
+            while len(self._buf) < 2:
+                d = self._sock.recv(4096)
+                if not d:
+                    raise _WSError("Verbinding verbroken")
+                self._buf += d
+            b0, b1 = self._buf[0], self._buf[1]
+            opcode = b0 & 0x0F
+            masked = b1 & 0x80
+            length = b1 & 0x7F
+            hdr = 2
+            if length == 126:
+                while len(self._buf) < hdr + 2: self._buf += self._sock.recv(4096)
+                length = _struct.unpack_from(">H", self._buf, hdr)[0]; hdr += 2
+            elif length == 127:
+                while len(self._buf) < hdr + 8: self._buf += self._sock.recv(4096)
+                length = _struct.unpack_from(">Q", self._buf, hdr)[0]; hdr += 8
+            if masked:
+                while len(self._buf) < hdr + 4: self._buf += self._sock.recv(4096)
+                mask = self._buf[hdr:hdr+4]; hdr += 4
+            while len(self._buf) < hdr + length: self._buf += self._sock.recv(4096)
+            payload = self._buf[hdr:hdr+length]
+            self._buf = self._buf[hdr+length:]
+            if masked:
+                payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+            if opcode == 8:
+                raise _WSError("Server sloot verbinding (close frame)")
+            if opcode == 9:  # ping → pong
+                self.send_raw(b"", opcode=10); continue
+            if opcode in (1, 2):  # text of binary
+                return payload.decode("utf-8", errors="replace")
+            # continuation / pong / overig → negeren
+
+    def send(self, text):
+        self.send_raw(text.encode("utf-8"), opcode=1)
+
+    def send_raw(self, payload, opcode=1):
+        mask_key = _random.randbytes(4)
+        masked = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+        ln = len(payload)
+        if ln < 126:
+            hdr = bytes([0x80 | opcode, 0x80 | ln])
+        elif ln < 65536:
+            hdr = bytes([0x80 | opcode, 0xFE]) + _struct.pack(">H", ln)
+        else:
+            hdr = bytes([0x80 | opcode, 0xFF]) + _struct.pack(">Q", ln)
+        self._sock.sendall(hdr + mask_key + masked)
+
+    def close(self):
+        try: self._sock.close()
+        except Exception: pass
+
+_WS_OK = True  # altijd True, eigen implementatie
 
 PORT      = int(os.environ.get("PORT", 3001))
 RWS_BASE  = "https://ddapi20-waterwebservices.rijkswaterstaat.nl"
@@ -81,25 +178,17 @@ _LMAPS_VERSION = 24
 
 def _bliksem_bg():
     """Verbindt met lightningmaps.org WebSocket relay en buffert strikes."""
-    if not _WS_OK:
-        return
     server_idx = 0
     while True:
         ws = None
         server = _LMAPS_SERVERS[server_idx % len(_LMAPS_SERVERS)]
-        url = f"wss://{server}:443/"
         try:
-            print(f"[BLIKSEM] Verbinden met {url}")
-            ws = _ws_lib.create_connection(
-                url,
-                header={
-                    "Origin":     "https://www.lightningmaps.org",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                  "AppleWebKit/537.36 Chrome/124.0",
-                },
+            print(f"[BLIKSEM] Verbinden met {server}")
+            ws = _WS(
+                host=server, port=443, path="/",
+                origin="https://www.lightningmaps.org",
                 timeout=15,
             )
-            # Init-bericht exact zoals lightningmaps.org browser doet
             init_msg = json.dumps({
                 "v": _LMAPS_VERSION, "i": {}, "s": False,
                 "x": 0, "w": 0, "tx": 0, "tw": 1,
@@ -116,11 +205,9 @@ def _bliksem_bg():
                     if not raw:
                         continue
                     d = json.loads(raw)
-                    # Challenge-response vereist
                     if "k" in d:
                         k_resp = json.dumps({"k": (d["k"] * 3604) % 7081 * int(time.time() * 1000) / 100})
                         ws.send(k_resp)
-                    # Verwerk strokes
                     strokes = d.get("strokes") or []
                     for s in strokes:
                         lat = s.get("lat")
@@ -128,21 +215,16 @@ def _bliksem_bg():
                         ts  = s.get("time")  # milliseconden
                         if lat is not None and lon is not None and ts:
                             _bliksem_push(float(lat), float(lon), int(ts))
-                except _ws_lib.WebSocketTimeoutException:
-                    # Stuur keep-alive
-                    try:
-                        ws.send(json.dumps({"v": _LMAPS_VERSION, "t": 0}))
-                    except Exception:
-                        break
-                    continue
+                except TimeoutError:
+                    try: ws.send(json.dumps({"v": _LMAPS_VERSION, "t": 0}))
+                    except Exception: break
                 except Exception:
                     break
         except Exception as e:
             print(f"[BLIKSEM] Verbindingsfout: {e}")
         finally:
             try:
-                if ws:
-                    ws.close()
+                if ws: ws.close()
             except Exception:
                 pass
         server_idx += 1
