@@ -16,6 +16,7 @@ import os
 import threading
 import random as _random
 import collections
+import queue as _queue
 import gzip as _gzip
 import urllib.request
 import urllib.error
@@ -52,7 +53,13 @@ _bliksem_deque    = collections.deque(maxlen=_BLIKSEM_MAX)
 _bliksem_lock     = threading.Lock()
 _BLIKSEM_MAX_AGE  = 30 * 60  # seconden
 
+# SSE broadcast: set van queues, één per verbonden browser client
+_bliksem_clients      = set()
+_bliksem_clients_lock = threading.Lock()
+
 def _bliksem_on_message(ws, raw):
+    if not raw:
+        return
     try:
         d = json.loads(raw)
     except Exception:
@@ -64,8 +71,17 @@ def _bliksem_on_message(ws, raw):
     # Blitzortung stuurt nanoseconden als integer — Python int bewaart precisie
     ts_ns = d.get("time")
     ts_s  = ts_ns / 1e9 if ts_ns else time.time()
+    entry = (round(ts_s, 3), lat, lon)
     with _bliksem_lock:
-        _bliksem_deque.append((round(ts_s, 3), lat, lon))
+        _bliksem_deque.append(entry)
+    # Stuur naar alle SSE-clients
+    sse_msg = json.dumps({"ts": round(ts_s, 3), "lat": lat, "lon": lon}).encode() + b"\n"
+    with _bliksem_clients_lock:
+        for q in list(_bliksem_clients):
+            try:
+                q.put_nowait(sse_msg)
+            except _queue.Full:
+                pass
 
 def _bliksem_bg():
     """Verbindt met Blitzortung WebSocket (create_connection) en buffert strikes."""
@@ -2906,6 +2922,45 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        # ── /bliksem-debug ───────────────────────────────────────────────
+        if path == "/bliksem-debug":
+            body = b"""<!DOCTYPE html>
+<html><head><title>Bliksem WS Test</title></head>
+<body style="background:#111;color:#eee;font-family:monospace;padding:20px">
+<h2>Blitzortung WebSocket Test</h2>
+<div id="log"></div>
+<script>
+const log = document.getElementById('log');
+function add(msg, color) {
+  const d = document.createElement('div');
+  d.style.color = color || '#eee';
+  d.textContent = new Date().toISOString().slice(11,19) + ' ' + msg;
+  log.prepend(d);
+}
+let count = 0;
+for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
+  add('Probeer ' + host + '...', '#aaa');
+  const ws = new WebSocket('wss://' + host);
+  ws.onopen = () => {
+    add('OPEN ' + host + ' protocol="' + ws.protocol + '"', '#4f4');
+    ws.send(JSON.stringify({west:-180,east:180,north:90,south:-90}));
+    add('Subscriptie verstuurd', '#4af');
+  };
+  ws.onmessage = (e) => {
+    count++;
+    add('DATA #' + count + ': ' + String(e.data).slice(0,150), '#ff4');
+  };
+  ws.onerror = () => add('FOUT ' + host, '#f44');
+  ws.onclose = (e) => add('CLOSE ' + host + ' code=' + e.code, '#f84');
+}
+</script></body></html>"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         # ── /api/status ─────────────────────────────────────────────────────
         if path == "/api/status":
             lock_free = _refresh_lock.acquire(blocking=False)
@@ -3248,6 +3303,49 @@ class Handler(BaseHTTPRequestHandler):
             }
             self.send_response(200)
             self._send_json(_safe_json(data).encode("utf-8"), max_age=0)
+
+        # ── /api/bliksem-stream  (SSE — live push) ───────────────────────
+        elif path == "/api/bliksem-stream":
+            # Stuur eerst alle strikes uit de laatste 30 minuten als batch
+            cutoff = time.time() - _BLIKSEM_MAX_AGE
+            with _bliksem_lock:
+                history = [(ts, lat, lon) for ts, lat, lon in _bliksem_deque if ts >= cutoff]
+
+            self.send_response(200)
+            self.send_header("Content-Type",  "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_cors()
+            self.end_headers()
+
+            try:
+                # Schrijf historische buffer als eerste event
+                batch = [{"ts": ts, "lat": lat, "lon": lon} for ts, lat, lon in history]
+                line = ("data: " + json.dumps({"batch": batch}) + "\n\n").encode()
+                self.wfile.write(line)
+                self.wfile.flush()
+
+                # Registreer als SSE-client
+                q = _queue.Queue(maxsize=2000)
+                with _bliksem_clients_lock:
+                    _bliksem_clients.add(q)
+                try:
+                    while True:
+                        try:
+                            msg = q.get(timeout=20)
+                            self.wfile.write(b"data: " + msg + b"\n")
+                            self.wfile.flush()
+                        except _queue.Empty:
+                            # Keep-alive comment
+                            self.wfile.write(b": ka\n\n")
+                            self.wfile.flush()
+                except Exception:
+                    pass
+                finally:
+                    with _bliksem_clients_lock:
+                        _bliksem_clients.discard(q)
+            except Exception:
+                pass
 
         # ── /api/metar-detail?id=ICAO ────────────────────────────────────
         elif path == "/api/metar-detail":
