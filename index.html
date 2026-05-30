@@ -343,6 +343,20 @@
       background: transparent;
       pointer-events: none;
     }
+    /* Bliksem flash — eenmalige puls bij nieuw strike */
+    @keyframes bliksem-flash {
+      0%   { transform: scale(0.3); opacity: 1; }
+      100% { transform: scale(2.8); opacity: 0; }
+    }
+    .bliksem-flash {
+      width:  14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 2px solid #ffdd00;
+      background: transparent;
+      animation: bliksem-flash 0.6s ease-out forwards;
+      pointer-events: none;
+    }
     .legend-row {
       display: flex;
       align-items: center;
@@ -1085,6 +1099,10 @@ function _bliksemOpacity(ageMs) {
   if (ageMs < 30 * 60000) return 0.60;
   return 0.35;
 }
+function _bliksemStroke(ageMs) {
+  // Zwarte rand alleen om de gele bol (< 5 min)
+  return ageMs < 5 * 60000 ? { color: '#000000', weight: 1 } : { color: '#000000', weight: 0 };
+}
 
 function clearBliksemMarkers() {
   _bliksemLayers.forEach(m => map.removeLayer(m));
@@ -1100,25 +1118,35 @@ function _bliksemAddStrike(lat, lon, tsS) {
   _bliksemKnownTs.add(tsMs);
   const ageMs = Date.now() - tsMs;
   if (ageMs > BLIKSEM_MAX_AGE_MS || ageMs < -10000) return;
+  const stroke = _bliksemStroke(ageMs);
   const m = L.circleMarker([lat, lon], {
     renderer:    _bliksemRenderer,
     radius:      _bliksemRadius(ageMs),
-    color:       _bliksemColor(ageMs),
+    color:       stroke.color,
+    weight:      stroke.weight,
     fillColor:   _bliksemColor(ageMs),
     fillOpacity: _bliksemOpacity(ageMs),
-    weight:      0,
     _tsMs:       tsMs,
   }).addTo(map);
   _bliksemLayers.push(m);
 
-  // Rood rondje voor verse strikes (< 5s oud), vervaagt over 5 min
+  // Flash + persistent rood rondje voor verse strikes (< 5s oud)
   if (ageMs < 5000) {
+    _bliksemFlash(lat, lon);
     _bliksemAddRing(lat, lon, tsMs);
   }
 
   if (activeLayer === 'bliksem') {
     setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 30 min`);
   }
+}
+
+function _bliksemFlash(lat, lon) {
+  const el = document.createElement('div');
+  el.className = 'bliksem-flash';
+  const icon = L.divIcon({ className: '', html: el, iconSize: [14, 14], iconAnchor: [7, 7] });
+  const m = L.marker([lat, lon], { icon, interactive: false, zIndexOffset: 1000 }).addTo(map);
+  setTimeout(() => map.removeLayer(m), 700);
 }
 
 function _bliksemAddRing(lat, lon, tsMs) {
@@ -1145,9 +1173,10 @@ function _bliksemRefreshColors() {
     .forEach(m => { map.removeLayer(m); _bliksemKnownTs.delete(m.options._tsMs); });
   _bliksemLayers = _bliksemLayers.filter(m => m.options._tsMs >= cutoff);
   _bliksemLayers.forEach(m => {
-    const age = now - m.options._tsMs;
-    const c   = _bliksemColor(age);
-    m.setStyle({ color: c, fillColor: c, fillOpacity: _bliksemOpacity(age), radius: _bliksemRadius(age) });
+    const age    = now - m.options._tsMs;
+    const c      = _bliksemColor(age);
+    const stroke = _bliksemStroke(age);
+    m.setStyle({ color: stroke.color, weight: stroke.weight, fillColor: c, fillOpacity: _bliksemOpacity(age), radius: _bliksemRadius(age) });
   });
 
   // Verwijder rondes ouder dan 5 min, vervaa overige
