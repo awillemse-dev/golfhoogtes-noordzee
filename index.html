@@ -2178,37 +2178,131 @@ let _radarSource    = 'europe';
 // RainViewer state
 let _rvFrames       = [];   // {time, path} per frame (oud → nieuw)
 let _rvHost         = 'https://tilecache.rainviewer.com';
-let _rvLayers       = [];   // één tile-laag per frame, allemaal op de kaart
-let _rvCurrentIdx   = -1;
-const _rvDone       = new WeakSet(); // bijhouden welke tiles al verwerkt zijn
+let _rvCurrentIdx = -1;
+let _rvLayer      = null;   // één GridLayer (ipv 12 TileLayers)
 
-// Verwijder grijze pixels (lage saturatie) per tile via canvas
-function _rvStripGrey(img) {
-  if (_rvDone.has(img)) return;
-  _rvDone.add(img);
-  const w = img.naturalWidth, h = img.naturalHeight;
-  if (!w || !h) return;
-  const cv = document.createElement('canvas');
-  cv.width = w; cv.height = h;
-  const ctx = cv.getContext('2d');
-  ctx.drawImage(img, 0, 0);
+// Cache: verwerkte tiles opgeslagen als data-URL zodat grey-removal maar één keer gebeurt
+const _rvTileCache = new Map(); // key `${frameIdx}/${z}/${x}/${y}` → dataURL | null
+
+// Verwijder grijze pixels (lage saturatie) en geef data-URL terug; null bij CORS-fout.
+function _rvProcessImg(img) {
   try {
+    const w = img.naturalWidth, h = img.naturalHeight;
+    if (!w || !h) return null;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const ctx = cv.getContext('2d');
+    ctx.drawImage(img, 0, 0);
     const id = ctx.getImageData(0, 0, w, h);
     const d  = id.data;
     for (let i = 0; i < d.length; i += 4) {
       if (d[i+3] === 0) continue;
       const mx = Math.max(d[i], d[i+1], d[i+2]);
       const mn = Math.min(d[i], d[i+1], d[i+2]);
-      // saturatie < 0.25 → grijs → transparant
       if (mx === 0 || (mx - mn) / mx < 0.25) d[i+3] = 0;
     }
     ctx.putImageData(id, 0, 0);
-    img.src = cv.toDataURL('image/png');
-  } catch (_) { /* CORS-fout: gebruik origineel */ }
+    return cv.toDataURL('image/png');
+  } catch (_) { return null; }
 }
 
-// ── RainViewer (Europa) ───────────────────────────────────────────────────────
-// Haal frames op en bouw alle tile-lagen IN ÉÉN KEER — wisselen = alleen opacity
+// Haal één tile op, verwerk grey en sla op in cache. Retourneert gecachede waarde meteen.
+function _rvFetchTile(frameIdx, z, x, y) {
+  const key = `${frameIdx}/${z}/${x}/${y}`;
+  if (_rvTileCache.has(key)) return Promise.resolve(_rvTileCache.get(key));
+
+  const frame = _rvFrames[frameIdx];
+  if (!frame) { _rvTileCache.set(key, null); return Promise.resolve(null); }
+
+  const url = `${_rvHost}${frame.path}/512/${z}/${x}/${y}/4/1_0.png`;
+  return new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const processed = _rvProcessImg(img);
+      const result = processed ?? url; // fallback naar originele URL bij CORS-fout
+      _rvTileCache.set(key, result);
+      resolve(result);
+    };
+    img.onerror = () => { _rvTileCache.set(key, null); resolve(null); };
+    img.src = url;
+  });
+}
+
+// ── RainViewer (Europa) — één GridLayer ───────────────────────────────────────
+const _RVLayer = L.GridLayer.extend({
+  initialize(options) {
+    L.GridLayer.prototype.initialize.call(this, options);
+    this._frameIdx = options.frameIdx ?? 0;
+  },
+
+  createTile(coords, done) {
+    const img = document.createElement('img');
+    img.style.cssText = 'width:100%;height:100%;display:block';
+    _rvFetchTile(this._frameIdx, coords.z, coords.x, coords.y).then(dataUrl => {
+      if (dataUrl) img.src = dataUrl;
+      done(null, img);
+    });
+    return img;
+  },
+
+  // Wissel frame: update bestaande tile-imgs direct vanuit cache (geen DOM-reset)
+  setFrame(idx) {
+    if (idx === this._frameIdx) return;
+    this._frameIdx = idx;
+    const tiles = this._tiles;
+    if (!tiles) return;
+    Object.values(tiles).forEach(({el, coords}) => {
+      const {z, x, y} = coords;
+      const key = `${idx}/${z}/${x}/${y}`;
+      if (_rvTileCache.has(key)) {
+        const dataUrl = _rvTileCache.get(key);
+        if (dataUrl) el.src = dataUrl;
+      } else {
+        // Niet gecachet: haal op en update het img-element als het nog in DOM zit
+        _rvFetchTile(idx, z, x, y).then(dataUrl => {
+          if (dataUrl && el.isConnected && this._frameIdx === idx) el.src = dataUrl;
+        });
+      }
+    });
+  },
+});
+
+// Pre-fetch alle zichtbare tiles voor alle frames op de achtergrond
+function _rvPrefetchAll() {
+  if (!_radarMap || !_rvFrames.length) return;
+  const z = Math.min(Math.round(_radarMap.getZoom()), 7);
+  const bounds = _radarMap.getBounds();
+  const n = Math.pow(2, z);
+  const toTile = (lat, lng) => ({
+    x: Math.max(0, Math.min(n - 1, Math.floor(n * (lng + 180) / 360))),
+    y: Math.max(0, Math.min(n - 1, Math.floor(
+      n * (1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2
+    ))),
+  });
+  const nw = toTile(bounds.getNorth(), bounds.getWest());
+  const se = toTile(bounds.getSouth(), bounds.getEast());
+
+  // Huidig frame eerst, dan nieuwste-naar-oudste
+  const frameOrder = [_rvCurrentIdx,
+    ...[...Array(_rvFrames.length).keys()].filter(i => i !== _rvCurrentIdx).reverse()];
+  const queue = [];
+  for (const fi of frameOrder)
+    for (let x = Math.min(nw.x, se.x); x <= Math.max(nw.x, se.x); x++)
+      for (let y = Math.min(nw.y, se.y); y <= Math.max(nw.y, se.y); y++)
+        if (!_rvTileCache.has(`${fi}/${z}/${x}/${y}`)) queue.push([fi, z, x, y]);
+
+  let active = 0;
+  function next() {
+    while (active < 4 && queue.length) {
+      active++;
+      const [fi, z, x, y] = queue.shift();
+      _rvFetchTile(fi, z, x, y).then(() => { active--; next(); });
+    }
+  }
+  next();
+}
+
 async function _rvBuildLayers() {
   try {
     const resp = await fetch(RV_API);
@@ -2222,50 +2316,33 @@ async function _rvBuildLayers() {
     return;
   }
 
-  // Verwijder eventuele oude lagen
-  _rvLayers.forEach(l => _radarMap && _radarMap.removeLayer(l));
-  _rvLayers     = [];
-  _rvCurrentIdx = -1;
-
-  // Maak voor elk frame een tile-laag (verborgen) en voeg toe aan kaart
-  _rvFrames.forEach(frame => {
-    const url   = `${_rvHost}${frame.path}/512/{z}/{x}/{y}/4/1_0.png`;
-    const layer = L.tileLayer(url, {
-      opacity:           0,
-      zIndex:            10,
-      className:         'rv-radar-frame',
-      keepBuffer:        4,              // meer tiles in cache houden
-      updateWhenIdle:    false,
-      updateWhenZooming: false,          // geen tile-aanvragen tijdens zoom-animatie
-      crossOrigin:       'anonymous',
-      attribution:       '&copy; <a href="https://rainviewer.com">RainViewer</a>',
-      maxNativeZoom:     7,              // RainViewer tiles bestaan t/m zoom 7; daarboven opschalen
-      maxZoom:           18,
+  if (!_rvLayer) {
+    _rvLayer = new _RVLayer({
+      frameIdx: _rvFrames.length - 1,
+      opacity: 0, zIndex: 10,
+      tileSize: 512,
+      keepBuffer: 2,
+      updateWhenIdle: true,
+      updateWhenZooming: false,
+      maxNativeZoom: 7, maxZoom: 18,
+      className: 'rv-radar-frame',
+      attribution: '&copy; <a href="https://rainviewer.com">RainViewer</a>',
     });
-    // Bijhouden of alle tiles van dit frame in beeld geladen zijn
-    layer._rvLoaded = true;
-    layer.on('loading', () => { layer._rvLoaded = false; });
-    layer.on('load',    () => { layer._rvLoaded = true;  });
-    layer.on('tileload', e => _rvStripGrey(e.tile));
-    if (_radarMap) layer.addTo(_radarMap);
-    _rvLayers.push(layer);
-  });
+    if (_radarMap) _rvLayer.addTo(_radarMap);
+  } else {
+    _rvLayer._frameIdx = _rvFrames.length - 1;
+  }
+  _rvCurrentIdx = -1;
+  setTimeout(_rvPrefetchAll, 1500); // pre-fetch starten nadat huidig frame geladen is
 }
 
-// instant=true: meteen wisselen zonder wachten (voor slider-scrubbing)
-// instant=false: wacht op geladen tiles voor soepele overgang (voor auto-play)
 function _rvShowFrame(idx, instant = false) {
-  if (!_rvLayers.length || idx < 0 || idx >= _rvLayers.length) return;
-
-  const oldIdx   = _rvCurrentIdx;
-  const newLayer = _rvLayers[idx];
-
+  if (!_rvLayer || !_rvFrames.length || idx < 0 || idx >= _rvFrames.length) return;
   _rvCurrentIdx  = idx;
   _radarFrameIdx = idx;
+  _rvLayer.setFrame(idx);
+  _rvLayer.setOpacity(0.75);
 
-  newLayer.setOpacity(0.75);
-
-  // Update UI
   document.getElementById('radar-slider').value = idx;
   const d = new Date(_rvFrames[idx].time * 1000);
   document.getElementById('radar-time').textContent =
@@ -2274,37 +2351,10 @@ function _rvShowFrame(idx, instant = false) {
     const latest = new Date(_rvFrames[_rvFrames.length - 1].time * 1000);
     setStatus('ok', `Neerslag Europa · tot ${latest.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' })}`);
   }
-
-  if (oldIdx < 0 || oldIdx === idx || oldIdx >= _rvLayers.length) return;
-  const oldLayer = _rvLayers[oldIdx];
-
-  if (instant) {
-    // Bij scrubben: oud frame direct verbergen, geen wachten
-    oldLayer.setOpacity(0);
-    return;
-  }
-
-  // Bij auto-play: oud frame zichtbaar houden totdat nieuwe geladen is
-  if (newLayer._rvLoaded) {
-    setTimeout(() => {
-      if (_rvCurrentIdx !== oldIdx) oldLayer.setOpacity(0);
-    }, 220);
-  } else {
-    let resolved = false;
-    const hideOld = () => {
-      if (resolved) return;
-      resolved = true;
-      newLayer.off('load', hideOld);
-      if (_rvCurrentIdx !== oldIdx) oldLayer.setOpacity(0);
-    };
-    newLayer.on('load', hideOld);
-    setTimeout(hideOld, 8000);
-  }
 }
 
 function _rvRemoveLayer() {
-  _rvLayers.forEach(l => _radarMap && _radarMap.removeLayer(l));
-  _rvLayers     = [];
+  if (_rvLayer && _radarMap) { _radarMap.removeLayer(_rvLayer); _rvLayer = null; }
   _rvCurrentIdx = -1;
 }
 
@@ -2480,24 +2530,8 @@ function startRadar() {
     };
     radarLegend.addTo(_radarMap);
 
-    // Tijdens zoom alleen de actieve laag op de kaart houden —
-    // anders vragen alle 12 lagen tegelijk nieuwe tiles op → traag + lege blokken.
-    _radarMap.on('zoomstart', () => {
-      _rvLayers.forEach((l, i) => {
-        if (i !== _rvCurrentIdx && _radarMap.hasLayer(l)) {
-          _radarMap.removeLayer(l);
-          l._rvPaused = true;
-        }
-      });
-    });
-    _radarMap.on('zoomend', () => {
-      _rvLayers.forEach(l => {
-        if (l._rvPaused) {
-          l.addTo(_radarMap);
-          l._rvPaused = false;
-        }
-      });
-    });
+    // Na pannen/zoomen: pre-fetch nieuwe tiles voor alle frames op de achtergrond
+    _radarMap.on('moveend', () => { if (activeLayer === 'radar') _rvPrefetchAll(); });
 
     // Play/pause knop
     document.getElementById('radar-play').addEventListener('click', () => {
@@ -2528,18 +2562,18 @@ function startRadar() {
   // Alle frame-lagen bouwen (tiles laden parallel op de achtergrond)
   setStatus('loading', 'Radar laden…');
   _rvBuildLayers().then(() => {
-    if (!_rvLayers.length) { setStatus('error', 'Radar niet beschikbaar'); return; }
-    document.getElementById('radar-slider').max = _rvLayers.length - 1;
-    _rvShowFrame(_rvLayers.length - 1);
+    if (!_rvFrames.length) { setStatus('error', 'Radar niet beschikbaar'); return; }
+    document.getElementById('radar-slider').max = _rvFrames.length - 1;
+    _rvShowFrame(_rvFrames.length - 1);
     _radarStartAnim();
   });
 
-  // Elke 5 minuten lagen verversen
+  // Elke 5 minuten frames verversen
   if (_radarRefreshT) clearInterval(_radarRefreshT);
   _radarRefreshT = setInterval(() => {
     if (activeLayer !== 'radar') return;
     _rvBuildLayers().then(() => {
-      if (_rvLayers.length) _rvShowFrame(_rvLayers.length - 1);
+      if (_rvFrames.length) _rvShowFrame(_rvFrames.length - 1);
     });
   }, 5 * 60 * 1000);
 }
