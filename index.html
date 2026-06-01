@@ -934,7 +934,11 @@ function degToCompass(deg) {
 }
 
 function makeWindIcon(w, dir) {
-  const sc      = iconScale();
+  const zoomSc = iconScale();
+  // Windsnelheids-schaal: 0.70 bij windstil, 1.0 bij ≥15 m/s (= Bft 7)
+  const wVal   = (w !== null && !isNaN(w)) ? Math.min(w, 15) : 0;
+  const windSc = 0.70 + (wVal / 15) * 0.30;
+  const sc     = zoomSc * windSc;
   const color   = windColor(w);
   const kt      = msToKt(w);
   const bft     = msToBft(w);
