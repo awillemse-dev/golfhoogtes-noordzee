@@ -354,6 +354,46 @@
     #coming-soon-label { font-size: 0.9rem; font-weight: 600; color: var(--text-dim); }
     .coming-soon-sub   { font-size: 0.8rem; }
 
+    /* ── Stormenpaneel ───────────────────────────────────────────────────── */
+    #storm-panel {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      background: var(--bg);
+      overflow: hidden;
+      position: relative;
+    }
+    #storm-panel.active { display: flex; }
+    #storm-map { flex: 1; min-height: 0; }
+    #storm-info-bar {
+      flex-shrink: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 8px 16px;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    #storm-count { color: var(--text); font-weight: 600; }
+    .storm-legend { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .storm-legend-item { display: flex; align-items: center; gap: 4px; }
+    .storm-legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .storm-marker {
+      font-size: 0.62rem;
+      font-weight: 700;
+      color: #fff;
+      background: #666;
+      border-radius: 3px;
+      padding: 2px 4px;
+      white-space: nowrap;
+      border: 1.5px solid rgba(255,255,255,0.4);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+      text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+      cursor: pointer;
+    }
+
     /* ── Grafiekpaneel ────────────────────────────────────────────────────── */
     #chart-panel {
       width: 0;
@@ -610,6 +650,15 @@
       </svg>
       Radar Europa
     </button>
+    <button class="nav-btn" id="nav-stormen" onclick="selectLayer('stormen')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/>
+        <path d="M9.6 4.6A2 2 0 1 1 11 8H2"/>
+        <path d="M12.6 19.4A2 2 0 1 0 14 16H2"/>
+      </svg>
+      Stormen
+    </button>
   </nav>
 
   <div id="status" class="loading">
@@ -657,6 +706,22 @@
         <input id="radar-slider" type="range" min="0" max="11" value="11" step="1">
         <span id="radar-time">–:––</span>
         <span id="radar-source">Bron: RainViewer</span>
+      </div>
+    </div>
+
+    <!-- Stormenpaneel -->
+    <div id="storm-panel">
+      <div id="storm-map"></div>
+      <div id="storm-info-bar">
+        <span id="storm-count">Laden…</span>
+        <div class="storm-legend">
+          <div class="storm-legend-item"><div class="storm-legend-dot" style="background:#94a3b8"></div>TD</div>
+          <div class="storm-legend-item"><div class="storm-legend-dot" style="background:#38bdf8"></div>TS</div>
+          <div class="storm-legend-item"><div class="storm-legend-dot" style="background:#facc15"></div>Cat 1-2</div>
+          <div class="storm-legend-item"><div class="storm-legend-dot" style="background:#f97316"></div>Cat 3</div>
+          <div class="storm-legend-item"><div class="storm-legend-dot" style="background:#ef4444"></div>Cat 4-5</div>
+          <span style="margin-left:auto">Bron: NHC/JTWC via NOAA</span>
+        </div>
       </div>
     </div>
 
@@ -1721,13 +1786,12 @@ function selectLayer(layer) {
 
   const mapEl      = document.getElementById('map');
   const radarEl    = document.getElementById('radar-panel');
+  const stormEl    = document.getElementById('storm-panel');
   const comingSoon = document.getElementById('coming-soon');
 
-  // Verberg altijd de radar bij wissel naar andere tab
-  if (layer !== 'radar') {
-    radarEl.classList.remove('active');
-    stopRadar();
-  }
+  // Verberg altijd de radar/storm bij wissel naar andere tab
+  if (layer !== 'radar') { radarEl.classList.remove('active'); stopRadar(); }
+  if (layer !== 'stormen') { stormEl.classList.remove('active'); stopStormen(); }
 
   if (layer === 'golf') {
     mapEl.style.display      = '';
@@ -1763,6 +1827,11 @@ function selectLayer(layer) {
     comingSoon.style.display = 'none';
     radarEl.classList.add('active');
     startRadar();
+  } else if (layer === 'stormen') {
+    mapEl.style.display      = 'none';
+    comingSoon.style.display = 'none';
+    stormEl.classList.add('active');
+    startStormen();
   } else {
     mapEl.style.display      = 'none';
     comingSoon.style.display = 'flex';
@@ -2535,6 +2604,186 @@ function startRadar() {
 function stopRadar() {
   _radarPauseAnim();
   if (_radarRefreshT) { clearInterval(_radarRefreshT); _radarRefreshT = null; }
+}
+
+// ── Stormen (orkanen, tyfonen, cyclonen) ──────────────────────────────────────
+let _stormMap      = null;
+let _stormLayers   = [];
+let _stormRefreshT = null;
+
+function _stormKtColor(kt) {
+  kt = parseInt(kt) || 0;
+  if (kt >= 137) return '#b91c1c'; // Cat 5
+  if (kt >= 113) return '#ef4444'; // Cat 4
+  if (kt >= 96)  return '#f97316'; // Cat 3
+  if (kt >= 83)  return '#facc15'; // Cat 2
+  if (kt >= 64)  return '#fde68a'; // Cat 1
+  if (kt >= 34)  return '#38bdf8'; // TS
+  return '#94a3b8';                // TD
+}
+
+function _stormCatLabel(kt) {
+  kt = parseInt(kt) || 0;
+  if (kt >= 137) return 'Cat 5';
+  if (kt >= 113) return 'Cat 4';
+  if (kt >= 96)  return 'Cat 3';
+  if (kt >= 83)  return 'Cat 2';
+  if (kt >= 64)  return 'Cat 1';
+  if (kt >= 34)  return 'TS';
+  return 'TD';
+}
+
+function _stormMovementArrow(lat, lon, bearingDeg, color) {
+  const rad = bearingDeg * Math.PI / 180;
+  const d = 4; // ~400 km vooruit
+  const dlat = Math.cos(rad) * d;
+  const dlon = Math.sin(rad) * d / Math.cos(lat * Math.PI / 180);
+  return L.polyline([[lat, lon], [lat + dlat, lon + dlon]], {
+    color, weight: 2.5, opacity: 0.85, dashArray: '6,4',
+  });
+}
+
+async function _stormFetch() {
+  if (!_stormMap) return;
+  _stormLayers.forEach(l => _stormMap.removeLayer(l));
+  _stormLayers = [];
+
+  const storms = [];
+
+  // 1. NOAA NHC – Atlantisch + O. Stille Oceaan
+  try {
+    const resp = await fetch('https://www.nhc.noaa.gov/CurrentStorms.json');
+    if (resp.ok) {
+      const data = await resp.json();
+      for (const s of (data.activeStorms || [])) {
+        const lat = s.latitudeNumeric  ?? parseFloat(s.latitude);
+        const lon = s.longitudeNumeric ?? parseFloat(s.longitude) * (String(s.longitude).includes('W') ? -1 : 1);
+        if (isNaN(lat) || isNaN(lon)) continue;
+        storms.push({ name: s.name, lat, lon, kt: parseInt(s.intensity) || 0,
+          movDir: s.movementDir, movSpd: s.movementSpeed,
+          pressure: s.pressure, id: s.id, source: 'NOAA NHC',
+          forecastTrack: s.forecastTrack || s.forecastPositions || null });
+      }
+    }
+  } catch (e) { console.warn('[Storms] NHC:', e); }
+
+  // 2. GDACS – wereldwijde dekking (W. Stille Oceaan, Indische Oceaan, etc.)
+  try {
+    const from = new Date(Date.now() - 10 * 86400000).toISOString().slice(0, 10);
+    const to   = new Date().toISOString().slice(0, 10);
+    const url  = `https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?eventtype=TC&fromDate=${from}&toDate=${to}&alertlevel=Green,Orange,Red`;
+    const resp = await fetch(url);
+    if (resp.ok) {
+      const data = await resp.json();
+      for (const f of (data.features || [])) {
+        const lat = f.geometry?.coordinates?.[1];
+        const lon = f.geometry?.coordinates?.[0];
+        if (lat == null || lon == null) continue;
+        // Sla duplicaten over (NHC-storm al aanwezig op soortgelijke positie)
+        if (storms.some(s => Math.abs(s.lat - lat) < 5 && Math.abs(s.lon - lon) < 5)) continue;
+        const p = f.properties;
+        // Haal windsnelheid uit description indien aanwezig
+        const ktMatch = (p.severitydescription || p.severity || '').match(/(\d+)\s*kt/i);
+        storms.push({ name: p.name || p.eventname || 'Tropische cycloon',
+          lat, lon, kt: ktMatch ? parseInt(ktMatch[1]) : 0,
+          movDir: null, movSpd: null, pressure: null,
+          id: p.eventid, source: 'GDACS',
+          alertLevel: p.alertlevel });
+      }
+    }
+  } catch (e) { console.warn('[Storms] GDACS:', e); }
+
+  // Leg stormen op de kaart
+  document.getElementById('storm-count').textContent =
+    storms.length
+      ? `${storms.length} actieve tropische storm${storms.length !== 1 ? 'en' : ''}`
+      : 'Geen actieve tropische stormen';
+
+  for (const s of storms) {
+    const color = _stormKtColor(s.kt);
+    const cat   = _stormCatLabel(s.kt);
+    const label = (s.name.split(' ').pop() || s.name) + ' · ' + cat;
+
+    // Marker
+    const icon = L.divIcon({
+      className: '',
+      html: `<div class="storm-marker" style="background:${color};border-color:${color};color:${s.kt >= 64 ? '#0c1a2b' : '#fff'}">${label}</div>`,
+      iconAnchor: [0, 8],
+    });
+    const marker = L.marker([s.lat, s.lon], { icon }).addTo(_stormMap);
+
+    // Popup
+    const ms = s.kt ? Math.round(s.kt * 0.514) : null;
+    marker.bindPopup(`
+      <div style="min-width:170px;line-height:1.7">
+        <b style="font-size:1rem">${s.name}</b><br>
+        <span style="color:${color};font-weight:600">${cat}</span><br>
+        ${ms != null ? `Wind: <b>${ms} m/s</b> (${s.kt} kt)<br>` : ''}
+        ${s.pressure ? `Druk: <b>${s.pressure} hPa</b><br>` : ''}
+        ${s.movDir != null ? `Koers: ${s.movDir}° @ ${s.movSpd} kt<br>` : ''}
+        <small style="color:#94a3b8">Bron: ${s.source}</small>
+      </div>`);
+    _stormLayers.push(marker);
+
+    // Trekrichting pijl
+    if (s.movDir != null && s.movSpd > 0) {
+      const arrow = _stormMovementArrow(s.lat, s.lon, s.movDir, color);
+      arrow.addTo(_stormMap);
+      _stormLayers.push(arrow);
+    }
+
+    // Voorspeld trekspoor (indien meegeleverd door NHC)
+    if (Array.isArray(s.forecastTrack) && s.forecastTrack.length) {
+      const pts = [[s.lat, s.lon]];
+      for (const fp of s.forecastTrack) {
+        const flat = fp.latitude ?? fp.lat;
+        const flon = fp.longitude ?? fp.lon;
+        if (flat != null && flon != null) pts.push([flat, flon]);
+      }
+      if (pts.length > 1) {
+        const line = L.polyline(pts, { color, weight: 2, opacity: 0.6, dashArray: '4,4' }).addTo(_stormMap);
+        _stormLayers.push(line);
+        // Forecast dots
+        for (const pt of pts.slice(1)) {
+          const dot = L.circleMarker(pt, { radius: 4, fillColor: color, color: '#fff', weight: 1, fillOpacity: 0.85 }).addTo(_stormMap);
+          _stormLayers.push(dot);
+        }
+      }
+    }
+  }
+
+  if (activeLayer === 'stormen') {
+    setStatus(storms.length ? 'ok' : 'ok',
+      storms.length ? `${storms.length} storm${storms.length !== 1 ? 'en' : ''} actief` : 'Geen actieve stormen');
+  }
+
+  // Zoom naar actieve stormen indien aanwezig
+  if (storms.length && _stormMap) {
+    const group = L.featureGroup(_stormLayers.filter(l => l instanceof L.Marker));
+    if (group.getLayers().length) _stormMap.fitBounds(group.getBounds().pad(0.5), { maxZoom: 5 });
+  }
+}
+
+function startStormen() {
+  if (!_stormMap) {
+    _stormMap = L.map('storm-map', {
+      center: [20, 0], zoom: 2, minZoom: 2,
+      zoomControl: true, scrollWheelZoom: true,
+    });
+    _stormMap.zoomControl.setPosition('topright');
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
+      subdomains: 'abcd', maxZoom: 10,
+    }).addTo(_stormMap);
+  }
+  setStatus('loading', 'Stormdata laden…');
+  _stormFetch();
+  if (_stormRefreshT) clearInterval(_stormRefreshT);
+  _stormRefreshT = setInterval(() => { if (activeLayer === 'stormen') _stormFetch(); }, 15 * 60 * 1000);
+}
+
+function stopStormen() {
+  if (_stormRefreshT) { clearInterval(_stormRefreshT); _stormRefreshT = null; }
 }
 
 </script>
