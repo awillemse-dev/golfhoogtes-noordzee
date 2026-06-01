@@ -44,7 +44,7 @@ class _WS:
         ctx = _ssl.create_default_context()
         self._sock = ctx.wrap_socket(raw, server_hostname=host)
         self._sock.settimeout(timeout)
-        key = _base64.b64encode(_random.randbytes(16)).decode()
+        key = _base64.b64encode(bytes(_random.getrandbits(8) for _ in range(16))).decode()
         req = (
             f"GET {path} HTTP/1.1\r\n"
             f"Host: {host}\r\n"
@@ -113,7 +113,7 @@ class _WS:
         self.send_raw(text.encode("utf-8"), opcode=1)
 
     def send_raw(self, payload, opcode=1):
-        mask_key = _random.randbytes(4)
+        mask_key = bytes(_random.getrandbits(8) for _ in range(4))
         masked = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
         ln = len(payload)
         if ln < 126:
