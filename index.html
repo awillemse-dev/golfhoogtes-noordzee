@@ -2471,6 +2471,25 @@ function startRadar() {
     };
     radarLegend.addTo(_radarMap);
 
+    // Tijdens zoom alleen de actieve laag op de kaart houden —
+    // anders vragen alle 12 lagen tegelijk nieuwe tiles op → traag + lege blokken.
+    _radarMap.on('zoomstart', () => {
+      _rvLayers.forEach((l, i) => {
+        if (i !== _rvCurrentIdx && _radarMap.hasLayer(l)) {
+          _radarMap.removeLayer(l);
+          l._rvPaused = true;
+        }
+      });
+    });
+    _radarMap.on('zoomend', () => {
+      _rvLayers.forEach(l => {
+        if (l._rvPaused) {
+          l.addTo(_radarMap);
+          l._rvPaused = false;
+        }
+      });
+    });
+
     // Play/pause knop
     document.getElementById('radar-play').addEventListener('click', () => {
       if (_radarPlaying) _radarPauseAnim(); else _radarStartAnim();
