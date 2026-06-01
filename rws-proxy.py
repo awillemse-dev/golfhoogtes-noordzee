@@ -145,7 +145,7 @@ _coastal_stations  = None   # dict icao → (naam, lat, lon, elev_m) voor kust-l
 _EMPTY_METAR       = {"type": "FeatureCollection", "features": [], "aantalStations": 0, "opgehaald": "", "laden": True}
 
 # ── Bliksem (Blitzortung WebSocket — server-side relay) ──────────────────────
-_BLIKSEM_MAX      = 30000   # max strikes in buffer (60 min wereldwijd ~20k strikes)
+_BLIKSEM_MAX      = 10000   # max strikes in buffer
 _bliksem_deque    = collections.deque(maxlen=_BLIKSEM_MAX)
 _bliksem_lock     = threading.Lock()
 _BLIKSEM_MAX_AGE  = 60 * 60  # seconden — bewaar 60 min zodat reload direct het uur toont
@@ -3455,7 +3455,7 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
                 self.wfile.flush()
 
                 # Registreer als SSE-client
-                q = _queue.Queue(maxsize=2000)
+                q = _queue.Queue(maxsize=200)
                 with _bliksem_clients_lock:
                     _bliksem_clients.add(q)
                 try:
@@ -3634,10 +3634,6 @@ if __name__ == "__main__":
     print("Eerste request kan ~15 sec duren (catalogus laden).")
     print("Druk Ctrl+C om te stoppen.")
     print()
-    print("[BSH] Geschiedenis pre-seeden vanuit GitHub…")
-    _seed_bsh_history()
-    print("[LaBouée] Geschiedenis pre-seeden vanuit GitHub…")
-    _seed_labouee_history()
     print()
 
     def _refresh_waves():
@@ -3659,8 +3655,22 @@ if __name__ == "__main__":
 
     # Prewarm + achtergrond-refresh in aparte thread — blokkeert de server niet
     def _background_loop():
+        import gc as _gc
+
+        # Fase 0: geschiedenis pre-seeden (blokkeerde vroeger het opstarten)
+        print("[BSH] Geschiedenis pre-seeden vanuit GitHub…")
+        try:
+            _seed_bsh_history()
+        except Exception as e:
+            print(f"[BSH seed] Fout: {e}")
+        print("[LaBouée] Geschiedenis pre-seeden vanuit GitHub…")
+        try:
+            _seed_labouee_history()
+        except Exception as e:
+            print(f"[LaBouée seed] Fout: {e}")
+        print()
+
         # Fase 1: waves snel laden (RWS + BSH + CEFAS + LaBouée + NDBC + FMI, max 35s)
-        # CDIP en SOCIB zitten in achtergrond-caches en worden hierna gevuld.
         print("[CACHE] Fase 1: waves ophalen (snel, zonder CDIP/SOCIB)…")
         try:
             _refresh_waves()
@@ -3668,45 +3678,41 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"[CACHE] Waves fout: {e}\n")
 
-        # Fase 2: CDIP + SOCIB + temp + wind + oceaanzicht parallel (traag, blokkeert golven niet)
-        print("[CACHE] Fase 2: CDIP + SOCIB + temp + wind + oceaanzicht ophalen…")
+        # Fase 2: CDIP + SOCIB + temp + wind + oceaanzicht — SEQUENTIEEL om RAM te sparen.
+        # Elke taak spawnt intern al meerdere threads; parallel draaien verveelvoudigt dat.
+        print("[CACHE] Fase 2: alle bronnen sequentieel laden…")
+        _fase2_taken = (
+            _refresh_cdip_bg, _refresh_socib_bg, _refresh_temp_bg,
+            get_wind_data, _refresh_ocean_vis_bg, get_knmi_data, _refresh_metar_bg,
+        )
+        for _taak in _fase2_taken:
+            try:
+                _taak()
+            except Exception as e:
+                print(f"[CACHE] {_taak.__name__} mislukt: {e}")
+        _gc.collect()
+        # Waves opnieuw cachen nu CDIP + SOCIB gevuld zijn
         try:
-            from concurrent.futures import wait as _wait2
-            ex2 = ThreadPoolExecutor(max_workers=4)
-            fcdip  = ex2.submit(_refresh_cdip_bg)
-            fsocib = ex2.submit(_refresh_socib_bg)
-            ft     = ex2.submit(_refresh_temp_bg)
-            fwnd   = ex2.submit(get_wind_data)
-            focvis = ex2.submit(_refresh_ocean_vis_bg)
-            fknmi  = ex2.submit(get_knmi_data)
-            fmetar = ex2.submit(_refresh_metar_bg)
-            _wait2([fcdip, fsocib, ft, fwnd, focvis, fknmi, fmetar], timeout=180)
-            ex2.shutdown(wait=False)
-            # Waves opnieuw cachen nu CDIP + SOCIB gevuld zijn
             _refresh_waves()
-            print("[CACHE] Alles klaar.\n")
         except Exception as e:
-            print(f"[CACHE] Fout bij vooraf laden: {e}\n")
+            print(f"[CACHE] Waves na fase 2 mislukt: {e}")
+        print("[CACHE] Alles klaar.\n")
 
-        # Daarna elke 9 minuten herhalen
+        # Daarna elke 9 minuten herhalen — ook sequentieel
         while True:
             time.sleep(9 * 60)
             print("[CACHE] Achtergrond-refresh gestart…")
+            for _taak in _fase2_taken:
+                try:
+                    _taak()
+                except Exception as e:
+                    print(f"[CACHE] {_taak.__name__} mislukt: {e}")
+            _gc.collect()
             try:
-                from concurrent.futures import wait as _wait3
-                ex3 = ThreadPoolExecutor(max_workers=4)
-                fcdip  = ex3.submit(_refresh_cdip_bg)
-                fsocib = ex3.submit(_refresh_socib_bg)
-                ft     = ex3.submit(_refresh_temp_bg)
-                fwnd   = ex3.submit(get_wind_data)
-                fknmi  = ex3.submit(get_knmi_data)
-                focvis = ex3.submit(_refresh_ocean_vis_bg)
-                fmetar = ex3.submit(_refresh_metar_bg)
-                _wait3([fcdip, fsocib, ft, fwnd, fknmi, focvis, fmetar], timeout=180)
-                ex3.shutdown(wait=False)
                 _refresh_waves()
             except Exception as e:
-                print(f"[CACHE] Achtergrond-refresh mislukt: {e}")
+                print(f"[CACHE] Waves refresh mislukt: {e}")
+            print("[CACHE] Achtergrond-refresh klaar.")
 
     threading.Thread(target=_background_loop, daemon=True).start()
     threading.Thread(target=_bliksem_bg, daemon=True).start()
