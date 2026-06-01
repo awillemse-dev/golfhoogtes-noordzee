@@ -2236,12 +2236,32 @@ const _RVLayer = L.GridLayer.extend({
     this._frameIdx = options.frameIdx ?? 0;
   },
 
+  // L.GridLayer heeft geen setOpacity — implementeer via container-CSS
+  setOpacity(opacity) {
+    this.options.opacity = opacity;
+    if (this._container) L.DomUtil.setOpacity(this._container, opacity);
+    return this;
+  },
+
+  onAdd(map) {
+    L.GridLayer.prototype.onAdd.call(this, map);
+    // Initiële opacity toepassen na aanmaken container
+    if (this._container) L.DomUtil.setOpacity(this._container, this.options.opacity ?? 1);
+    return this;
+  },
+
   createTile(coords, done) {
     const img = document.createElement('img');
     img.style.cssText = 'width:100%;height:100%;display:block';
     _rvFetchTile(this._frameIdx, coords.z, coords.x, coords.y).then(dataUrl => {
-      if (dataUrl) img.src = dataUrl;
-      done(null, img);
+      if (dataUrl) {
+        // done pas aanroepen nadat browser het img heeft geladen
+        img.onload  = () => done(null, img);
+        img.onerror = () => done(null, img);
+        img.src = dataUrl;
+      } else {
+        done(null, img); // lege tile
+      }
     });
     return img;
   },
@@ -2463,8 +2483,8 @@ function _radarShowFrame(idx) {
 }
 
 function _radarStep() {
-  if (!_rvLayers.length) return;
-  _rvShowFrame((_rvCurrentIdx + 1) % _rvLayers.length);
+  if (!_rvFrames.length) return;
+  _rvShowFrame((_rvCurrentIdx + 1) % _rvFrames.length);
 }
 
 function _radarStartAnim() {
