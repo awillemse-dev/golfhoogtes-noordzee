@@ -2234,6 +2234,8 @@ async function _rvBuildLayers() {
       updateWhenZooming: false,          // geen tile-aanvragen tijdens zoom-animatie
       crossOrigin:       'anonymous',
       attribution:       '&copy; <a href="https://rainviewer.com">RainViewer</a>',
+      maxNativeZoom:     7,              // RainViewer tiles bestaan t/m zoom 7; daarboven opschalen
+      maxZoom:           18,
     });
     // Bijhouden of alle tiles van dit frame in beeld geladen zijn
     layer._rvLoaded = true;
