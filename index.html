@@ -1504,6 +1504,13 @@ function selectSection(section) {
   }
 }
 
+function _statusFromGeoJSON(geojson) {
+  const t = geojson.opgehaald
+    ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+    : '–';
+  setStatus('ok', `${geojson.aantalStations} stations · ${t}`);
+}
+
 function selectLayer(layer) {
   if (layer === activeLayer) return;
   stopCountdown();
@@ -1519,27 +1526,27 @@ function selectLayer(layer) {
   if (layer === 'golf') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastWaveGeoJSON && _isFresh('golf')) { _hideAllGroups(); _waveGroup.addTo(map); startCountdown(); }
+    if (_lastWaveGeoJSON && _isFresh('golf')) { _hideAllGroups(); _waveGroup.addTo(map); _statusFromGeoJSON(_lastWaveGeoJSON); startCountdown(); }
     else fetchWaveData().then(startCountdown);
   } else if (layer === 'temp') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastTempGeoJSON && _isFresh('temp')) { _hideAllGroups(); _tempGroup.addTo(map); startCountdown(); }
+    if (_lastTempGeoJSON && _isFresh('temp')) { _hideAllGroups(); _tempGroup.addTo(map); _statusFromGeoJSON(_lastTempGeoJSON); startCountdown(); }
     else fetchTempData().then(startCountdown);
   } else if (layer === 'wind') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastWindGeoJSON && _isFresh('wind')) { _hideAllGroups(); _windGroup.addTo(map); startCountdown(); }
+    if (_lastWindGeoJSON && _isFresh('wind')) { _hideAllGroups(); _windGroup.addTo(map); _statusFromGeoJSON(_lastWindGeoJSON); startCountdown(); }
     else fetchWindData().then(startCountdown);
   } else if (layer === 'zicht') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastZichtGeoJSON && _isFresh('zicht')) { _hideAllGroups(); _zichtGroup.addTo(map); startCountdown(); }
+    if (_lastZichtGeoJSON && _isFresh('zicht')) { _hideAllGroups(); _zichtGroup.addTo(map); _statusFromGeoJSON(_lastZichtGeoJSON); startCountdown(); }
     else fetchZichtData().then(startCountdown);
   } else if (layer === 'metar') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastMetarGeoJSON && _isFresh('metar')) { _hideAllGroups(); _metarGroup.addTo(map); startCountdown(); }
+    if (_lastMetarGeoJSON && _isFresh('metar')) { _hideAllGroups(); _metarGroup.addTo(map); _statusFromGeoJSON(_lastMetarGeoJSON); startCountdown(); }
     else fetchMetarData().then(startCountdown);
   } else if (layer === 'bliksem') {
     mapEl.style.display      = '';
