@@ -2786,19 +2786,59 @@ async function _stormFetch() {
         ${s.movDir != null ? `Koers: ${Math.round(s.movDir)}° · ${Math.round(s.movSpd ?? 0)} kt<br>` : ''}
         <small style="color:#94a3b8">Bron: ${s.source}</small>
       </div>`);
-    _stormGroup.addLayer(marker);
-
-
-    // Voorspeld spoor
+    // Onzekerheidszone (cone) + spoor vóór marker renderen zodat marker bovenop staat
     if (s.track.length > 0) {
-      const pts = [[s.lat, s.lon], ...s.track];
-      _stormGroup.addLayer(L.polyline(pts, { color, weight: 2, opacity: 0.55, dashArray: '4,4' }));
+      const allPts = [[s.lat, s.lon], ...s.track];
+
+      // Officiële NHC-cone halve breedte per tijdstap (nm → graden lat, 1°≈111km)
+      // Gebaseerd op NHC 2024 foutstatistieken (2/3-kans cirkel per voorspelterm)
+      const coneNm = [0, 40, 75, 100, 130, 155, 180, 235, 295];
+      const left = [], right = [];
+
+      for (let i = 0; i < allPts.length; i++) {
+        const [lat, lon] = allPts[i];
+        const nm  = coneNm[Math.min(i, coneNm.length - 1)];
+        const r   = nm * 1.852 / 111; // nm → graden lat
+        const latRad = lat * Math.PI / 180;
+        const cosLat = Math.cos(latRad);
+
+        // Trackrichting in (x=lon*cos(lat), y=lat) ruimte
+        let ux, uy;
+        if (i < allPts.length - 1) {
+          const [lat2, lon2] = allPts[i + 1];
+          const dx = (lon2 - lon) * cosLat, dy = lat2 - lat;
+          const len = Math.sqrt(dx * dx + dy * dy) || 1;
+          ux = dx / len; uy = dy / len;
+        } else {
+          const [lat0, lon0] = allPts[i - 1];
+          const dx = (lon - lon0) * cosLat, dy = lat - lat0;
+          const len = Math.sqrt(dx * dx + dy * dy) || 1;
+          ux = dx / len; uy = dy / len;
+        }
+
+        // Loodrecht rechts: (uy, -ux) in (x,y) → Δlat=-ux*r, Δlon=uy*r/cos
+        right.push([lat + (-ux * r), lon + (uy  * r / cosLat)]);
+        left.push( [lat + ( ux * r), lon + (-uy * r / cosLat)]);
+      }
+
+      // Cone-polygoon: linkerkant heen, rechterkant terug
+      _stormGroup.addLayer(L.polygon([...left, ...right.reverse()], {
+        color, fillColor: color, fillOpacity: 0.15, weight: 1, opacity: 0.5,
+        dashArray: '4,3',
+      }));
+
+      // Centraallijn van het spoor
+      _stormGroup.addLayer(L.polyline(allPts, { color, weight: 1.5, opacity: 0.7, dashArray: '5,4' }));
+
+      // Forecast-stippen
       for (const pt of s.track) {
         _stormGroup.addLayer(L.circleMarker(pt, {
-          radius: 4, fillColor: color, color: '#fff', weight: 1, fillOpacity: 0.8,
+          radius: 4, fillColor: color, color: '#fff', weight: 1.5, fillOpacity: 0.9,
         }));
       }
     }
+
+    _stormGroup.addLayer(marker);
   }
 
   if (activeLayer === 'stormen') {
