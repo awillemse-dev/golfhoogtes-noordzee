@@ -293,87 +293,6 @@
     /* Voorkom blauwe placeholder tijdens laden van radar-image */
     #radar-map img { background: transparent !important; }
 
-    /* ── Modeldatapaneel (ECMWF) ─────────────────────────────────────────── */
-    #model-panel {
-      display: none;
-      flex: 1;
-      flex-direction: column;
-      background: var(--bg);
-      overflow: hidden;
-    }
-    #model-panel.active { display: flex; }
-    #model-map { flex: 1; min-height: 0; }
-    #model-map img { background: transparent !important; }
-
-    #model-controls {
-      flex-shrink: 0;
-      background: var(--surface);
-      border-top: 1px solid var(--border);
-      padding: 10px 16px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-
-    #model-layer-select {
-      font-size: 0.72rem;
-      font-weight: 600;
-      padding: 5px 8px;
-      border-radius: 6px;
-      border: 1px solid var(--border-2);
-      background: var(--surface-2);
-      color: var(--text);
-      cursor: pointer;
-      flex-shrink: 0;
-      max-width: 200px;
-    }
-
-    #model-slider {
-      flex: 1;
-      min-width: 80px;
-      -webkit-appearance: none;
-      appearance: none;
-      height: 4px;
-      border-radius: 2px;
-      background: var(--border-2);
-      outline: none;
-      cursor: pointer;
-    }
-    #model-slider::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 14px; height: 14px;
-      border-radius: 50%;
-      background: var(--accent);
-      cursor: pointer;
-    }
-    #model-slider::-moz-range-thumb {
-      width: 14px; height: 14px;
-      border-radius: 50%;
-      background: var(--accent);
-      border: none;
-      cursor: pointer;
-    }
-
-    #model-step { font-size: 0.75rem; font-weight: 700; color: var(--accent); min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
-    #model-datetime { font-size: 0.68rem; color: var(--text-muted); white-space: nowrap; }
-    #model-source { font-size: 0.62rem; color: var(--text-muted); white-space: nowrap; margin-left: auto; }
-
-    #model-loading {
-      position: absolute;
-      top: 50%; left: 50%; transform: translate(-50%, -50%);
-      background: rgba(13,22,37,0.88);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 14px 22px;
-      font-size: 0.82rem;
-      color: var(--text-dim);
-      backdrop-filter: blur(4px);
-      z-index: 1000;
-      display: none;
-    }
-    #model-map { position: relative; }
-
     /* Soepele overgang tussen radarframes */
     .rv-radar-frame { transition: opacity 0.2s ease; }
 
@@ -711,14 +630,6 @@
       </svg>
       <span class="tab-label">Waar&shy;nemingen</span>
     </div>
-    <div class="sidebar-tab" id="tab-verwachtingen" onclick="selectSection('verwachtingen')">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3 3v18h18"/>
-        <path d="m19 9-5 5-4-4-3 3"/>
-      </svg>
-      <span class="tab-label">Model&shy;data</span>
-    </div>
   </div>
 
   <!-- ── Kaartgebied ────────────────────────────────────────────────────── -->
@@ -745,20 +656,6 @@
         <input id="radar-slider" type="range" min="0" max="11" value="11" step="1">
         <span id="radar-time">–:––</span>
         <span id="radar-source">Bron: RainViewer</span>
-      </div>
-    </div>
-
-    <!-- Modeldatapaneel (ECMWF WMS) -->
-    <div id="model-panel">
-      <div id="model-map">
-        <div id="model-loading">Lagen laden…</div>
-      </div>
-      <div id="model-controls">
-        <select id="model-layer-select" title="Kies parameter"></select>
-        <span id="model-step">+0h</span>
-        <input id="model-slider" type="range" min="0" max="0" value="0" step="1">
-        <span id="model-datetime">–</span>
-        <span id="model-source">Bron: ECMWF</span>
       </div>
     </div>
 
@@ -1782,30 +1679,16 @@ function selectSection(section) {
   const mapEl      = document.getElementById('map');
   const comingSoon = document.getElementById('coming-soon');
 
-  const modelEl = document.getElementById('model-panel');
-
   if (section === 'waarnemingen') {
     nav.style.display        = '';
     comingSoon.style.display = 'none';
-    modelEl.classList.remove('active');
-    stopModel();
     const layer = activeLayer;
     activeLayer = '';
     selectLayer(layer);
-  } else if (section === 'verwachtingen') {
-    nav.style.display        = 'none';
-    mapEl.style.display      = 'none';
-    comingSoon.style.display = 'none';
-    modelEl.classList.add('active');
-    clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
-    document.getElementById('chart-panel').classList.remove('open');
-    startModel();
   } else {
     nav.style.display        = 'none';
     mapEl.style.display      = 'none';
     comingSoon.style.display = 'flex';
-    modelEl.classList.remove('active');
-    stopModel();
     document.getElementById('coming-soon-label').textContent = section;
     clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
     setStatus('', '–');
@@ -2623,183 +2506,6 @@ function stopRadar() {
   if (_radarRefreshT) { clearInterval(_radarRefreshT); _radarRefreshT = null; }
 }
 
-// ── Model Data (ECMWF WMS) ─────────────────────────────────────────────────
-const ECMWF_WMS = 'https://eccharts.ecmwf.int/wms/';
-
-// Trefwoorden om relevante lagen te filteren (Engelstalige ECMWF layer-titels)
-const _MODEL_KW = ['wind', 'wave', 'swell', 'precip', 'rain', 'pressure', 'msl',
-                   'temperature', 'temp', 'gust', 'humidity', 'snow', 'cloud',
-                   'significant', 'height', 'speed', 'direction'];
-
-let _modelMap        = null;
-let _modelWmsLayer   = null;
-let _modelTimes      = [];   // ISO-strings voor de geselecteerde laag
-let _modelTimeIdx    = 0;
-let _modelStarted    = false;
-
-// Parset een WMS Dimension-waarde naar een array van ISO-tijden.
-// Ondersteunt zowel lijsten als ISO-intervalnotatie (start/end/period).
-function _modelParseTimes(raw) {
-  if (!raw) return [];
-  raw = raw.trim();
-  if (!raw) return [];
-
-  // Intervalnotatie: 2024-01-01T00:00:00Z/2024-01-06T00:00:00Z/PT6H
-  const parts = raw.split('/');
-  if (parts.length === 3) {
-    const start  = new Date(parts[0]);
-    const end    = new Date(parts[1]);
-    const period = parts[2];                // bijv. PT6H, PT1H
-    const match  = period.match(/PT?(\d+)H/i);
-    const stepH  = match ? parseInt(match[1]) : 6;
-    const times  = [];
-    for (let t = start; t <= end; t = new Date(t.getTime() + stepH * 3600000)) {
-      times.push(t.toISOString().replace(/\.\d{3}Z$/, 'Z'));
-    }
-    return times;
-  }
-
-  // Kommalijst
-  return raw.split(',').map(s => s.trim()).filter(Boolean);
-}
-
-async function _modelFetchCapabilities() {
-  const url = `${ECMWF_WMS}?token=public&SERVICE=WMS&REQUEST=GetCapabilities&VERSION=1.3.0`;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const xml = new DOMParser().parseFromString(await resp.text(), 'text/xml');
-
-  const layers = [];
-  xml.querySelectorAll('Layer > Layer').forEach(el => {
-    const name  = el.querySelector(':scope > Name')?.textContent?.trim();
-    const title = el.querySelector(':scope > Title')?.textContent?.trim();
-    if (!name || !title) return;
-
-    // Filter op relevante trefwoorden
-    const low = title.toLowerCase();
-    if (!_MODEL_KW.some(kw => low.includes(kw))) return;
-
-    const dimEl = el.querySelector('Dimension[name="time"], Dimension[name="TIME"]');
-    const times = _modelParseTimes(dimEl?.textContent ?? '');
-    layers.push({ name, title, times });
-  });
-  return layers;
-}
-
-function _modelSetLayer(name, times) {
-  if (_modelWmsLayer) { _modelMap.removeLayer(_modelWmsLayer); _modelWmsLayer = null; }
-
-  _modelTimes   = times;
-  _modelTimeIdx = times.length > 0 ? 0 : -1;
-
-  const params = {
-    layers: name, format: 'image/png', transparent: true, version: '1.3.0',
-    attribution: '&copy; <a href="https://www.ecmwf.int">ECMWF</a>',
-  };
-  if (times.length > 0) params.time = times[0];
-
-  _modelWmsLayer = L.tileLayer.wms(`${ECMWF_WMS}?token=public`, params);
-  _modelWmsLayer.addTo(_modelMap);
-
-  const slider = document.getElementById('model-slider');
-  slider.max   = Math.max(0, times.length - 1);
-  slider.value = 0;
-  _modelUpdateLabels(0);
-}
-
-function _modelUpdateLabels(idx) {
-  const stepEl = document.getElementById('model-step');
-  const dtEl   = document.getElementById('model-datetime');
-  if (!_modelTimes.length || idx < 0) { stepEl.textContent = '–'; dtEl.textContent = '–'; return; }
-
-  const t    = new Date(_modelTimes[idx]);
-  const now  = new Date();
-  const diffH = Math.round((t - now) / 3600000);
-  stepEl.textContent = diffH >= 0 ? `+${diffH}h` : `${diffH}h`;
-
-  const dayStr  = t.toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
-  const timeStr = t.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
-  dtEl.textContent = `${dayStr} ${timeStr} UTC`;
-}
-
-function _modelShowTime(idx) {
-  if (!_modelWmsLayer || !_modelTimes.length) return;
-  _modelTimeIdx = idx;
-  _modelWmsLayer.setParams({ time: _modelTimes[idx] });
-  _modelUpdateLabels(idx);
-}
-
-async function startModel() {
-  // Initialiseer kaart eenmalig
-  if (!_modelMap) {
-    _modelMap = L.map('model-map', {
-      center: [55.0, 4.5], zoom: 5, zoomControl: false,
-    });
-    L.control.zoom({ position: 'topright' }).addTo(_modelMap);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
-      subdomains: 'abcd', maxZoom: 19,
-    }).addTo(_modelMap);
-
-    // Slider-event
-    document.getElementById('model-slider').addEventListener('input', e => {
-      _modelShowTime(parseInt(e.target.value));
-    });
-
-    // Laag-select event
-    document.getElementById('model-layer-select').addEventListener('change', e => {
-      const sel = e.target;
-      const opt = sel.options[sel.selectedIndex];
-      const times = JSON.parse(opt.dataset.times || '[]');
-      _modelSetLayer(opt.value, times);
-      setStatus('ok', `ECMWF · ${opt.text}`);
-    });
-  }
-
-  if (_modelStarted) {
-    // Kaart al geladen — hergebruik
-    setTimeout(() => _modelMap.invalidateSize(), 100);
-    return;
-  }
-
-  // Laad GetCapabilities
-  const loadingEl = document.getElementById('model-loading');
-  loadingEl.style.display = 'block';
-  setStatus('loading', 'ECMWF lagen laden…');
-
-  try {
-    const layers = await _modelFetchCapabilities();
-
-    if (!layers.length) {
-      loadingEl.textContent = 'Geen lagen beschikbaar via ECMWF WMS';
-      setStatus('error', 'Geen ECMWF lagen');
-      return;
-    }
-
-    // Vul dropdown
-    const sel = document.getElementById('model-layer-select');
-    sel.innerHTML = layers
-      .map(l => `<option value="${l.name}" data-times='${JSON.stringify(l.times)}'>${l.title}</option>`)
-      .join('');
-
-    // Laad eerste laag
-    const first = layers[0];
-    _modelSetLayer(first.name, first.times);
-    _modelStarted = true;
-    loadingEl.style.display = 'none';
-    setStatus('ok', `ECMWF · ${first.title}`);
-  } catch (err) {
-    console.error('[model]', err);
-    loadingEl.textContent = 'Fout bij laden ECMWF data';
-    setStatus('error', 'ECMWF niet bereikbaar');
-  }
-
-  setTimeout(() => _modelMap.invalidateSize(), 100);
-}
-
-function stopModel() {
-  // Kaart blijft in geheugen voor snelle herstart
-}
 </script>
 </body>
 </html>
