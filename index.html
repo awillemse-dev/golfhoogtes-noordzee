@@ -270,6 +270,39 @@
     /* Voorkom blauwe placeholder tijdens laden van radar-image */
     #radar-map img { background: transparent !important; }
 
+    /* Radar legenda (Leaflet control) */
+    .radar-legend {
+      background: rgba(13,22,37,0.88);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: 'Inter', system-ui, sans-serif;
+      font-size: 0.72rem;
+      color: var(--text);
+      line-height: 1.6;
+      backdrop-filter: blur(4px);
+    }
+    .radar-legend h4 {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-dim);
+      margin-bottom: 7px;
+    }
+    .radar-legend-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+    }
+    .radar-legend-swatch {
+      width: 12px; height: 12px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+
 
     #coming-soon {
       flex: 1;
@@ -2189,6 +2222,24 @@ function startRadar() {
       attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
       subdomains: 'abcd', maxZoom: 12,
     }).addTo(_radarMap);
+
+    // Legenda
+    const radarLegend = L.control({ position: 'bottomright' });
+    radarLegend.onAdd = () => {
+      const div = L.DomUtil.create('div', 'radar-legend');
+      div.innerHTML = `
+        <h4>Neerslag</h4>
+        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#b4d7f0"></div>Licht</div>
+        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#6baed6"></div>Zwak</div>
+        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#2171b5"></div>Matig</div>
+        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#084594"></div>Zwaar</div>
+        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#fcae91"></div>Hevig</div>
+        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#fb6a4a"></div>Zeer hevig</div>
+        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#cb181d"></div>Extreem</div>
+      `;
+      return div;
+    };
+    radarLegend.addTo(_radarMap);
 
     // Play/pause knop
     document.getElementById('radar-play').addEventListener('click', () => {
