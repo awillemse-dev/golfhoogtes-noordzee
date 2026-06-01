@@ -293,8 +293,9 @@
     /* Voorkom blauwe placeholder tijdens laden van radar-image */
     #radar-map img { background: transparent !important; }
 
-    /* Soepele overgang tussen radarframes */
+    /* Soepele overgang tussen radarframes (uitgeschakeld tijdens scrubben) */
     .rv-radar-frame { transition: opacity 0.2s ease; }
+    #radar-map.scrubbing .rv-radar-frame { transition: none !important; }
 
     /* Radar legenda (Leaflet control) */
     .radar-legend {
@@ -2247,7 +2248,9 @@ async function _rvBuildLayers() {
   });
 }
 
-function _rvShowFrame(idx) {
+// instant=true: meteen wisselen zonder wachten (voor slider-scrubbing)
+// instant=false: wacht op geladen tiles voor soepele overgang (voor auto-play)
+function _rvShowFrame(idx, instant = false) {
   if (!_rvLayers.length || idx < 0 || idx >= _rvLayers.length) return;
 
   const oldIdx   = _rvCurrentIdx;
@@ -2256,7 +2259,6 @@ function _rvShowFrame(idx) {
   _rvCurrentIdx  = idx;
   _radarFrameIdx = idx;
 
-  // Toon het nieuwe frame direct
   newLayer.setOpacity(0.75);
 
   // Update UI
@@ -2272,10 +2274,13 @@ function _rvShowFrame(idx) {
   if (oldIdx < 0 || oldIdx === idx || oldIdx >= _rvLayers.length) return;
   const oldLayer = _rvLayers[oldIdx];
 
-  // Verberg het oude frame pas nadat het nieuwe volledig geladen is.
-  // Op snelle verbindingen (_rvLoaded = true) genoeg om na de CSS-transitie te wachten.
-  // Op trage verbindingen: oud frame blijft zichtbaar totdat het nieuwe frame klaar is
-  // (max. 8 seconden als fallback), zodat er geen lege blokken verschijnen.
+  if (instant) {
+    // Bij scrubben: oud frame direct verbergen, geen wachten
+    oldLayer.setOpacity(0);
+    return;
+  }
+
+  // Bij auto-play: oud frame zichtbaar houden totdat nieuwe geladen is
   if (newLayer._rvLoaded) {
     setTimeout(() => {
       if (_rvCurrentIdx !== oldIdx) oldLayer.setOpacity(0);
@@ -2289,7 +2294,7 @@ function _rvShowFrame(idx) {
       if (_rvCurrentIdx !== oldIdx) oldLayer.setOpacity(0);
     };
     newLayer.on('load', hideOld);
-    setTimeout(hideOld, 8000);   // fallback: maximaal 8 seconden wachten
+    setTimeout(hideOld, 8000);
   }
 }
 
@@ -2495,11 +2500,24 @@ function startRadar() {
       if (_radarPlaying) _radarPauseAnim(); else _radarStartAnim();
     });
 
-    // Slider: dispatch naar juiste bron
+    // Slider: rAF-throttle + transitie uitzetten tijdens scrubben
+    let _sliderRaf = null, _sliderScrubT = null;
+    const radarMapEl = document.getElementById('radar-map');
     document.getElementById('radar-slider').addEventListener('input', e => {
       _radarPauseAnim();
       const idx = parseInt(e.target.value);
-      if (_radarSource === 'europe') _rvShowFrame(idx); else _radarShowFrame(idx);
+
+      // Transitie uitzetten zolang de slider beweegt
+      radarMapEl.classList.add('scrubbing');
+      clearTimeout(_sliderScrubT);
+      _sliderScrubT = setTimeout(() => radarMapEl.classList.remove('scrubbing'), 300);
+
+      // Max één frame-wissel per animatieframe (~60 fps)
+      if (_sliderRaf) cancelAnimationFrame(_sliderRaf);
+      _sliderRaf = requestAnimationFrame(() => {
+        _sliderRaf = null;
+        if (_radarSource === 'europe') _rvShowFrame(idx, true); else _radarShowFrame(idx);
+      });
     });
   }
 
