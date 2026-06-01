@@ -849,8 +849,8 @@ function tempColor(t) {
 function makeTempIcon(t) {
   const sc    = iconScale();
   const color = tempColor(t);
-  const w = Math.round(38 * sc), ht = Math.round(22 * sc);
-  const fs = Math.max(7, Math.round(10 * sc));
+  const w = Math.round(44 * sc), ht = Math.round(26 * sc);
+  const fs = Math.max(7, Math.round(11 * sc));
   const label = t !== null ? t.toFixed(1) : '–';
   return L.divIcon({
     className:   '',
@@ -1042,9 +1042,9 @@ function zichtColor(v) {   // v in km
 function makeZichtIcon(v) {
   const sc    = iconScale();
   const color = zichtColor(v);
-  const size  = Math.round(46 * sc);
+  const size  = Math.round(54 * sc);
   const ht    = Math.round(size * 0.58);
-  const fs    = Math.max(7, Math.round(10 * sc));
+  const fs    = Math.max(7, Math.round(11 * sc));
   const r     = Math.max(2, Math.round(5 * sc));
   const label = v !== null ? (v >= 10 ? Math.round(v) + ' km' : v.toFixed(1) + ' km') : '–';
   return L.divIcon({
