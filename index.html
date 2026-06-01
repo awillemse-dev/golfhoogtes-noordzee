@@ -2147,6 +2147,32 @@ let _rvFrames       = [];   // {time, path} per frame (oud → nieuw)
 let _rvHost         = 'https://tilecache.rainviewer.com';
 let _rvLayers       = [];   // één tile-laag per frame, allemaal op de kaart
 let _rvCurrentIdx   = -1;
+const _rvDone       = new WeakSet(); // bijhouden welke tiles al verwerkt zijn
+
+// Verwijder grijze pixels (lage saturatie) per tile via canvas
+function _rvStripGrey(img) {
+  if (_rvDone.has(img)) return;
+  _rvDone.add(img);
+  const w = img.naturalWidth, h = img.naturalHeight;
+  if (!w || !h) return;
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  try {
+    const id = ctx.getImageData(0, 0, w, h);
+    const d  = id.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i+3] === 0) continue;
+      const mx = Math.max(d[i], d[i+1], d[i+2]);
+      const mn = Math.min(d[i], d[i+1], d[i+2]);
+      // saturatie < 0.25 → grijs → transparant
+      if (mx === 0 || (mx - mn) / mx < 0.25) d[i+3] = 0;
+    }
+    ctx.putImageData(id, 0, 0);
+    img.src = cv.toDataURL('image/png');
+  } catch (_) { /* CORS-fout: gebruik origineel */ }
+}
 
 // ── RainViewer (Europa) ───────────────────────────────────────────────────────
 // Haal frames op en bouw alle tile-lagen IN ÉÉN KEER — wisselen = alleen opacity
@@ -2177,8 +2203,10 @@ async function _rvBuildLayers() {
       className:      'rv-radar-frame',
       keepBuffer:     2,
       updateWhenIdle: false,
+      crossOrigin:    'anonymous',
       attribution:    '&copy; <a href="https://rainviewer.com">RainViewer</a>',
     });
+    layer.on('tileload', e => _rvStripGrey(e.tile));
     if (_radarMap) layer.addTo(_radarMap);
     _rvLayers.push(layer);
   });
