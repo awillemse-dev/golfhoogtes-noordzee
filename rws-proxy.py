@@ -2166,10 +2166,9 @@ def fetch_cdip_data():
             return None
 
     from concurrent.futures import wait as _wait
-    ex = ThreadPoolExecutor(max_workers=4)
-    futs = [ex.submit(fetch_station, sf) for sf in station_files]
-    _wait(futs, timeout=50)           # max 50s totaal; hangende threads worden genegeerd
-    ex.shutdown(wait=False)           # laat resterende threads uitsterven, blokkeer niet
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        futs = [ex.submit(fetch_station, sf) for sf in station_files]
+        _wait(futs, timeout=50)       # max 50s totaal; daarna pending gecanceld via with
     results = []
     for f in futs:
         if f.done():
@@ -2200,18 +2199,17 @@ def _do_refresh():
             _stations = []
 
     from concurrent.futures import wait as _wait
-    ex = ThreadPoolExecutor(max_workers=3)
-    fut_rws     = ex.submit(fetch_latest_values, _stations)
-    fut_bsh     = ex.submit(fetch_bsh_data)
-    fut_cefas   = ex.submit(fetch_cefas_data)
-    fut_labouee = ex.submit(fetch_labouee_data)
-    fut_ndbc    = ex.submit(fetch_ndbc_data)
-    fut_fmi     = ex.submit(fetch_fmi_data)
-    fut_mvb     = ex.submit(fetch_mvb_data)
-
-    # Wacht max 35s op alle snelle bronnen; daarna doorgaan met wat klaar is
-    _wait([fut_rws, fut_bsh, fut_cefas, fut_labouee, fut_ndbc, fut_fmi, fut_mvb], timeout=35)
-    ex.shutdown(wait=False)
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        fut_rws     = ex.submit(fetch_latest_values, _stations)
+        fut_bsh     = ex.submit(fetch_bsh_data)
+        fut_cefas   = ex.submit(fetch_cefas_data)
+        fut_labouee = ex.submit(fetch_labouee_data)
+        fut_ndbc    = ex.submit(fetch_ndbc_data)
+        fut_fmi     = ex.submit(fetch_fmi_data)
+        fut_mvb     = ex.submit(fetch_mvb_data)
+        # Wacht max 35s op alle snelle bronnen; daarna doorgaan met wat klaar is
+        _wait([fut_rws, fut_bsh, fut_cefas, fut_labouee, fut_ndbc, fut_fmi, fut_mvb], timeout=35)
+    # with-blok: resterende taken gecanceld, lopende threads netjes afgewacht
 
     try:
         waarnemingen = fut_rws.result() if fut_rws.done() else []
@@ -2686,15 +2684,15 @@ def _refresh_temp_bg():
     now = datetime.now(timezone.utc)
 
     from concurrent.futures import wait as _wait_t
-    ex = ThreadPoolExecutor(max_workers=3)
-    fut_rws   = ex.submit(_fetch_rws_temp)
-    fut_cefas = ex.submit(_fetch_cefas_temp_list)
-    fut_ndbc  = ex.submit(_fetch_ndbc_temp)
-    fut_imi   = ex.submit(_fetch_imi_temp)
-    fut_lb    = ex.submit(_fetch_labouee_temp)
-    fut_sst   = ex.submit(fetch_ocean_sst)
-    _wait_t([fut_rws, fut_cefas, fut_ndbc, fut_imi, fut_lb, fut_sst], timeout=45)
-    ex.shutdown(wait=False)
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        fut_rws   = ex.submit(_fetch_rws_temp)
+        fut_cefas = ex.submit(_fetch_cefas_temp_list)
+        fut_ndbc  = ex.submit(_fetch_ndbc_temp)
+        fut_imi   = ex.submit(_fetch_imi_temp)
+        fut_lb    = ex.submit(_fetch_labouee_temp)
+        fut_sst   = ex.submit(fetch_ocean_sst)
+        _wait_t([fut_rws, fut_cefas, fut_ndbc, fut_imi, fut_lb, fut_sst], timeout=45)
+    # with-blok: resterende taken gecanceld, lopende threads netjes afgewacht
 
     features = []
     for label, fut, thin in [
@@ -3757,7 +3755,6 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
                 icao = icao.upper()
 
                 from concurrent.futures import wait as _wait_m
-                ex_m = ThreadPoolExecutor(max_workers=2)
 
                 def _fetch_metar_raw():
                     url = (f"https://aviationweather.gov/api/data/metar"
@@ -3775,10 +3772,10 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
                     with urllib.request.urlopen(req, timeout=15) as r:
                         return json.loads(r.read().decode("utf-8"))
 
-                fm = ex_m.submit(_fetch_metar_raw)
-                ft = ex_m.submit(_fetch_taf_raw)
-                _wait_m([fm, ft], timeout=20)
-                ex_m.shutdown(wait=False)
+                with ThreadPoolExecutor(max_workers=2) as ex_m:
+                    fm = ex_m.submit(_fetch_metar_raw)
+                    ft = ex_m.submit(_fetch_taf_raw)
+                    _wait_m([fm, ft], timeout=20)
 
                 metars = fm.result() if fm.done() else []
                 tafs   = ft.result() if ft.done() else []
@@ -3912,13 +3909,39 @@ if __name__ == "__main__":
             _do_refresh()
 
     import socket as _socket
+    _req_sem = threading.Semaphore(20)  # max 20 gelijktijdige requests
+
     class DualStackServer(ThreadingMixIn, HTTPServer):
         """Multi-threaded server op IPv4 + IPv6 — elke request in eigen thread."""
         daemon_threads  = True
+        block_on_close  = False   # wacht niet op handler-threads bij afsluiten
         address_family  = _socket.AF_INET6
         def server_bind(self):
             self.socket.setsockopt(_socket.IPPROTO_IPV6, _socket.IPV6_V6ONLY, 0)
             super().server_bind()
+        def process_request(self, request, client_address):
+            """Begrens gelijktijdige requests zodat RAM niet overloopt."""
+            if not _req_sem.acquire(blocking=False):
+                # Server vol: verbinding direct sluiten
+                try:
+                    self.shutdown_request(request)
+                except Exception:
+                    pass
+                return
+            t = threading.Thread(
+                target=self._handle_and_release,
+                args=(request, client_address),
+                daemon=True,
+            )
+            t.start()
+        def _handle_and_release(self, request, client_address):
+            try:
+                self.finish_request(request, client_address)
+            except Exception:
+                self.handle_error(request, client_address)
+            finally:
+                self.shutdown_request(request)
+                _req_sem.release()
 
     # Server direct starten zodat Safari meteen verbinding kan maken
     server = DualStackServer(("::", PORT), Handler)
@@ -3961,12 +3984,13 @@ if __name__ == "__main__":
                 _taak()
             except Exception as e:
                 print(f"[CACHE] {_taak.__name__} mislukt: {e}")
-        _gc.collect()
+            _gc.collect()   # direct na elke taak geheugen vrijgeven
         # Waves opnieuw cachen nu CDIP + SOCIB gevuld zijn
         try:
             _refresh_waves()
         except Exception as e:
             print(f"[CACHE] Waves na fase 2 mislukt: {e}")
+        _gc.collect()
         print("[CACHE] Alles klaar.\n")
 
         # Daarna elke 9 minuten herhalen — ook sequentieel
@@ -3978,11 +4002,12 @@ if __name__ == "__main__":
                     _taak()
                 except Exception as e:
                     print(f"[CACHE] {_taak.__name__} mislukt: {e}")
-            _gc.collect()
+                _gc.collect()   # direct na elke taak geheugen vrijgeven
             try:
                 _refresh_waves()
             except Exception as e:
                 print(f"[CACHE] Waves refresh mislukt: {e}")
+            _gc.collect()
             print("[CACHE] Achtergrond-refresh klaar.")
 
     threading.Thread(target=_background_loop, daemon=True).start()
