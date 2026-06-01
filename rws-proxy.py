@@ -3682,8 +3682,8 @@ if __name__ == "__main__":
         # Elke taak spawnt intern al meerdere threads; parallel draaien verveelvoudigt dat.
         print("[CACHE] Fase 2: alle bronnen sequentieel laden…")
         _fase2_taken = (
-            _refresh_cdip_bg, _refresh_socib_bg, _refresh_temp_bg,
-            get_wind_data, _refresh_ocean_vis_bg, get_knmi_data, _refresh_metar_bg,
+            _refresh_temp_bg, get_knmi_data, _refresh_metar_bg,
+            get_wind_data, _refresh_ocean_vis_bg, _refresh_socib_bg, _refresh_cdip_bg,
         )
         for _taak in _fase2_taken:
             try:

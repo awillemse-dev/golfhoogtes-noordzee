@@ -1907,12 +1907,41 @@ function startCountdown() {
 // ── Start ─────────────────────────────────────────────────────────────────────
 fetchWaveData().then(startCountdown);
 
-// Prefetch andere tabs op de achtergrond zodat eerste tabwissel instant is.
-// Gespreid over 5–20s zodat de proxy niet tegelijk meerdere requests krijgt.
-setTimeout(() => { if (!_isFresh('temp'))  fetchTempData();  },  5000);
-setTimeout(() => { if (!_isFresh('wind'))  fetchWindData();  }, 10000);
-setTimeout(() => { if (!_isFresh('zicht')) fetchZichtData(); }, 15000);
-setTimeout(() => { if (!_isFresh('metar')) fetchMetarData(); }, 20000);
+// Achtergrond-prefetch: bouw laaggroepen stilletjes voor zodat tabwisseling instant is.
+// Herprobeert automatisch tot de data beschikbaar is (proxy kan nog opstarten).
+function _bgPrefetch(url, isFreshFn, buildFn, retryMs) {
+  if (isFreshFn()) return;
+  fetch(url, { cache: 'no-store' })
+    .then(r => r.json())
+    .then(geo => {
+      if (geo.laden || !geo.features?.length) {
+        setTimeout(() => _bgPrefetch(url, isFreshFn, buildFn, retryMs), retryMs);
+      } else {
+        buildFn(geo);
+      }
+    })
+    .catch(() => setTimeout(() => _bgPrefetch(url, isFreshFn, buildFn, retryMs), retryMs * 2));
+}
+
+// Temp: bouw _tempGroup stilletjes zonder _hideAllGroups() aan te roepen
+function _bgBuildTemp(geo) {
+  _lastTempGeoJSON = geo;
+  _tempGroup.clearLayers();
+  (geo.features || []).forEach(f => {
+    const [lon, lat] = f.geometry.coordinates;
+    const p = f.properties;
+    const marker = L.marker([lat, lon], { icon: makeTempIcon(p.temp_c) });
+    marker.on('click', () => openTempChart(p.code, p.naam || p.code, p.temp_c, p.tijdstip));
+    _tempGroup.addLayer(marker);
+  });
+  _markFetched('temp');
+  if (activeLayer === 'temp') { _hideAllGroups(); _tempGroup.addTo(map); _statusFromGeoJSON(geo); }
+}
+
+setTimeout(() => _bgPrefetch(tempUrl(),  () => _isFresh('temp'),  _bgBuildTemp,  8000),  5000);
+setTimeout(() => { if (!_isFresh('wind'))  fetchWindData();  }, 12000);
+setTimeout(() => { if (!_isFresh('zicht')) fetchZichtData(); }, 18000);
+setTimeout(() => { if (!_isFresh('metar')) fetchMetarData(); }, 24000);
 </script>
 </body>
 </html>
