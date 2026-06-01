@@ -2099,6 +2099,30 @@ function _radarBuildFrames() {
   return frames;
 }
 
+// SLD kleurschema: transparant onder 5 dBZ, daarna groen→geel→oranje→rood→zwart
+const _RADAR_SLD = `<?xml version="1.0" encoding="UTF-8"?>
+<StyledLayerDescriptor version="1.0.0"
+  xmlns="http://www.opengis.net/sld"
+  xmlns:ogc="http://www.opengis.net/ogc"
+  xmlns:xlink="http://www.w3.org/1999/xlink"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <NamedLayer><Name>Reflectivity</Name>
+  <UserStyle><FeatureTypeStyle><Rule>
+  <RasterSymbolizer>
+    <ColorMap type="intervals">
+      <ColorMapEntry color="#000000" quantity="-9999" opacity="0"/>
+      <ColorMapEntry color="#000000" quantity="5"     opacity="0"/>
+      <ColorMapEntry color="#00cc00" quantity="15"    opacity="0.9" label="licht"/>
+      <ColorMapEntry color="#ffff00" quantity="25"    opacity="0.9" label="matig"/>
+      <ColorMapEntry color="#ff8800" quantity="35"    opacity="0.9" label="zwaar"/>
+      <ColorMapEntry color="#ee0000" quantity="45"    opacity="0.9" label="zeer zwaar"/>
+      <ColorMapEntry color="#111111" quantity="70"    opacity="0.9" label="extreem"/>
+    </ColorMap>
+  </RasterSymbolizer>
+  </Rule></FeatureTypeStyle></UserStyle>
+  </NamedLayer>
+</StyledLayerDescriptor>`;
+
 function _radarWmsUrl(timeIso) {
   const params = new URLSearchParams({
     DATASET:     'radar_reflectivity_composites',
@@ -2106,7 +2130,8 @@ function _radarWmsUrl(timeIso) {
     REQUEST:     'GetMap',
     VERSION:     '1.3.0',
     LAYERS:      RADAR_LAYER,
-    STYLES:      'radarReflectivity_transparant/nearest',
+    STYLES:      '',
+    SLD_BODY:    _RADAR_SLD,
     CRS:         'EPSG:4326',
     BBOX:        '48.8,1.5,53.9,9.0',
     WIDTH:       '800',
@@ -2172,9 +2197,9 @@ function startRadar() {
   // Kaart éénmalig aanmaken
   if (!_radarMap) {
     _radarMap = L.map('radar-map', {
-      center:          [52.3, 5.3],
-      zoom:            8,
-      minZoom:         8,
+      center:          [52.1, 5.3],
+      zoom:            7,
+      minZoom:         7,
       zoomControl:     true,
       scrollWheelZoom: true,
       doubleClickZoom: true,
@@ -2185,14 +2210,9 @@ function startRadar() {
     });
     _radarMap.zoomControl.setPosition('topright');
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
-      subdomains: 'abcd', maxZoom: 10,
-    }).addTo(_radarMap);
-
-    // Landgrenzen overlay (lichte labels)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
-      attribution: '', subdomains: 'abcd', maxZoom: 10, opacity: 0.7,
+      subdomains: 'abcd', maxZoom: 12,
     }).addTo(_radarMap);
 
     // Play/pause knop
