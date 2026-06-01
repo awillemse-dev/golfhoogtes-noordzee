@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode
 
 # ── Minimale WebSocket client (alleen stdlib — geen pip nodig) ────────────────
 import socket as _socket
@@ -513,6 +513,266 @@ def fetch_bsh_data():
 
     print(f"[BSH] {len(features)} Noord-Zee stations geladen")
     return features
+
+
+# ── Meetnet Vlaamse Banken (MVB): Belgische kust- en offshore boeien ─────────
+#
+# Bron:  Agentschap Maritieme Dienstverlening en Kust, Afdeling Kust (Vlaanderen)
+# API:   https://api.meetnetvlaamsebanken.be/V2/
+# Auth:  OAuth2 password grant → env vars MVB_USERNAME + MVB_PASSWORD
+#
+# Beschikbare parameters (codes uit catalog):
+#   HM0  — significante golfhoogte (cm)  → omzetten naar m voor golftab
+#   WVS  — windsnelheid scalair (m/s)    → windtab
+#   WRS  — windrichting scalair (°)       → windtab
+#   WATTMP / TW — zeewatertemperatuur (°C) → temperatuurtab (code verschilt per station)
+#
+# De catalog wordt eenmalig gefetcht en 24u gecached. currentData geeft de
+# meest recente meetwaarden voor alle dataset-ID's.
+
+_MVB_API    = "https://api.meetnetvlaamsebanken.be"
+_MVB_USER   = os.environ.get("MVB_USERNAME", "")
+_MVB_PASS   = os.environ.get("MVB_PASSWORD", "")
+
+_mvb_token      = None
+_mvb_token_exp  = 0.0
+_mvb_token_lock = threading.Lock()
+
+_mvb_catalog      = None
+_mvb_catalog_time = 0.0
+
+_mvb_wind_bg = []   # windfeatures gevuld door fetch_mvb_data() → gebruikt door get_wind_data()
+_mvb_temp_bg = []   # tempfeatures gevuld door fetch_mvb_data() → gebruikt door _refresh_temp_bg()
+
+
+def _mvb_get_token():
+    """Geeft een geldig Bearer-token terug; hernieuwt automatisch bij verlopen."""
+    global _mvb_token, _mvb_token_exp
+    with _mvb_token_lock:
+        if _mvb_token and time.time() < _mvb_token_exp - 60:
+            return _mvb_token
+        if not _MVB_USER or not _MVB_PASS:
+            return None
+        body = urlencode({"grant_type": "password",
+                          "username":   _MVB_USER,
+                          "password":   _MVB_PASS}).encode()
+        req = urllib.request.Request(
+            f"{_MVB_API}/Token", data=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            resp = json.loads(r.read())
+        _mvb_token     = resp["access_token"]
+        _mvb_token_exp = time.time() + int(resp.get("expires_in", 3600))
+        print(f"[MVB] Nieuw token verkregen (geldig {resp.get('expires_in', 3600)}s)")
+        return _mvb_token
+
+
+def _mvb_get(path):
+    """GET-request naar MVB API met Bearer-token."""
+    token = _mvb_get_token()
+    if not token:
+        return None
+    req = urllib.request.Request(
+        f"{_MVB_API}{path}",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read())
+
+
+def _mvb_get_catalog():
+    """Haal MVB catalog op (gecached 24u): locaties + parameters + datasets."""
+    global _mvb_catalog, _mvb_catalog_time
+    if _mvb_catalog and (time.time() - _mvb_catalog_time) < 86400:
+        return _mvb_catalog
+    data = _mvb_get("/V2/catalog")
+    if data:
+        _mvb_catalog      = data
+        _mvb_catalog_time = time.time()
+        nloc = len(data.get("Locations") or [])
+        nds  = len(data.get("DataSets")  or data.get("Datasets") or [])
+        print(f"[MVB] Catalog: {nloc} locaties, {nds} datasets")
+    return _mvb_catalog
+
+
+def fetch_mvb_data():
+    """Haal actuele MVB-data op: golf (HM0), wind (WVS/WRS), temperatuur.
+    Geeft golffeatures terug voor _do_refresh; slaat wind+temp op in globals."""
+    global _mvb_wind_bg, _mvb_temp_bg
+
+    if not _MVB_USER or not _MVB_PASS:
+        return []
+
+    try:
+        catalog = _mvb_get_catalog()
+    except Exception as e:
+        print(f"[MVB] Catalog fout: {e}")
+        return []
+    if not catalog:
+        return []
+
+    # Locatie lookup: ID → {naam, lat, lon}
+    loc_map = {}
+    for loc in (catalog.get("Locations") or []):
+        lid  = loc.get("ID") or loc.get("Id") or loc.get("id")
+        lat  = loc.get("Latitude")  or loc.get("latitude")
+        lon  = loc.get("Longitude") or loc.get("longitude")
+        naam = loc.get("Name") or loc.get("name") or str(lid)
+        if lid is not None and lat is not None and lon is not None:
+            loc_map[lid] = {"naam": naam, "lat": float(lat), "lon": float(lon)}
+
+    # Dataset lookup: dataset-ID → {loc_id, par_id}
+    ds_map = {}
+    for ds in (catalog.get("DataSets") or catalog.get("Datasets") or []):
+        did    = ds.get("ID")          or ds.get("Id")          or ds.get("id")
+        loc_id = ds.get("LocationID")  or ds.get("LocationId")  or ds.get("Location")
+        par_id = ds.get("ParameterID") or ds.get("ParameterId") or ds.get("Parameter")
+        if did is not None:
+            ds_map[did] = {"loc_id": loc_id, "par_id": str(par_id or "").upper()}
+
+    try:
+        current = _mvb_get("/V2/currentData")
+    except Exception as e:
+        print(f"[MVB] currentData fout: {e}")
+        return []
+    if not current:
+        return []
+
+    values = current if isinstance(current, list) else (current.get("Values") or [])
+
+    now          = datetime.now(timezone.utc)
+    wave_features = []
+    wind_by_loc   = {}
+    temp_by_loc   = {}
+
+    # Temperatuur-parametersynoniemen (exact code hangt af van catalogversie)
+    TEMP_PARAMS = {"WATTMP", "TW", "WT", "WATERTEMP", "TEMP", "TWAT", "TWATER"}
+
+    for val in values:
+        did       = val.get("ID")        or val.get("Id")        or val.get("id")
+        raw_value = val.get("Value")     or val.get("value")
+        ts_str    = (val.get("Timestamp") or val.get("DateTime")
+                     or val.get("Time")   or val.get("timestamp") or "")
+
+        if raw_value is None:
+            continue
+
+        ds     = ds_map.get(did, {})
+        loc_id = ds.get("loc_id")
+        par_id = ds.get("par_id", "")
+        loc    = loc_map.get(loc_id)
+        if not loc:
+            continue
+        lat, lon, naam = loc["lat"], loc["lon"], loc["naam"]
+
+        # Tijdstip parsen + staleness filter (48u)
+        tijdstip = None
+        if ts_str:
+            try:
+                dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if (now - dt).total_seconds() > 48 * 3600:
+                    continue
+                tijdstip = dt.isoformat()
+            except Exception:
+                pass
+
+        code_base = f"mvb.{naam.lower().replace(' ', '_').replace('-', '_')}"
+
+        if par_id == "HM0":
+            try:
+                hm0 = round(float(raw_value) / 100.0, 2)   # cm → m
+                if not (0 <= hm0 <= 25):
+                    continue
+                wave_features.append({
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                    "properties": {
+                        "code":      f"{code_base}.hm0",
+                        "naam":      naam,
+                        "hm0_m":    hm0,
+                        "tijdstip":  tijdstip,
+                        "status":    None,
+                        "kwaliteit": None,
+                        "bron":      "MVB",
+                    },
+                })
+            except (ValueError, TypeError):
+                pass
+
+        elif par_id == "WVS":
+            try:
+                spd = round(float(raw_value), 1)
+                if not (0 <= spd <= 60):
+                    continue
+                wd = wind_by_loc.setdefault(loc_id, {"naam": naam, "lat": lat, "lon": lon})
+                wd["wind_ms"]  = spd
+                wd.setdefault("tijdstip", tijdstip)
+            except (ValueError, TypeError):
+                pass
+
+        elif par_id == "WRS":
+            try:
+                wd = wind_by_loc.setdefault(loc_id, {"naam": naam, "lat": lat, "lon": lon})
+                wd["wind_dir"] = round(float(raw_value))
+            except (ValueError, TypeError):
+                pass
+
+        elif par_id in TEMP_PARAMS:
+            try:
+                tc = round(float(raw_value), 1)
+                if not (-2 <= tc <= 40):
+                    continue
+                temp_by_loc[loc_id] = {
+                    "naam": naam, "lat": lat, "lon": lon,
+                    "temp_c": tc, "tijdstip": tijdstip,
+                }
+            except (ValueError, TypeError):
+                pass
+
+    # Wind features
+    wind_features = []
+    for loc_id, w in wind_by_loc.items():
+        if "wind_ms" not in w:
+            continue
+        cb = f"mvb.{w['naam'].lower().replace(' ', '_').replace('-', '_')}"
+        wind_features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [w["lon"], w["lat"]]},
+            "properties": {
+                "code":     f"{cb}.wind",
+                "rws_code": None,
+                "naam":     w["naam"],
+                "wind_ms":  w.get("wind_ms"),
+                "wind_dir": w.get("wind_dir"),
+                "tijdstip": w.get("tijdstip"),
+                "bron":     "MVB",
+            },
+        })
+    _mvb_wind_bg = wind_features
+
+    # Temperatuur features
+    temp_features = []
+    for loc_id, t in temp_by_loc.items():
+        cb = f"mvb.{t['naam'].lower().replace(' ', '_').replace('-', '_')}"
+        temp_features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [t["lon"], t["lat"]]},
+            "properties": {
+                "code":     f"{cb}.temp",
+                "naam":     t["naam"],
+                "temp_c":   t["temp_c"],
+                "tijdstip": t["tijdstip"],
+                "bron":     "MVB",
+            },
+        })
+    _mvb_temp_bg = temp_features
+
+    print(f"[MVB] {len(wave_features)} golf / {len(wind_features)} wind / {len(temp_features)} temp")
+    return wave_features
 
 
 # ── CEFAS WaveNet: Britse golfmeetstations ───────────────────────────────────
@@ -1947,9 +2207,10 @@ def _do_refresh():
     fut_labouee = ex.submit(fetch_labouee_data)
     fut_ndbc    = ex.submit(fetch_ndbc_data)
     fut_fmi     = ex.submit(fetch_fmi_data)
+    fut_mvb     = ex.submit(fetch_mvb_data)
 
     # Wacht max 35s op alle snelle bronnen; daarna doorgaan met wat klaar is
-    _wait([fut_rws, fut_bsh, fut_cefas, fut_labouee, fut_ndbc, fut_fmi], timeout=35)
+    _wait([fut_rws, fut_bsh, fut_cefas, fut_labouee, fut_ndbc, fut_fmi, fut_mvb], timeout=35)
     ex.shutdown(wait=False)
 
     try:
@@ -1960,7 +2221,8 @@ def _do_refresh():
     rws_geojson = build_geojson(_stations, waarnemingen)
 
     for fut, label in [(fut_bsh, "BSH"), (fut_cefas, "CEFAS"),
-                       (fut_labouee, "LaBouée"), (fut_ndbc, "NDBC"), (fut_fmi, "FMI")]:
+                       (fut_labouee, "LaBouée"), (fut_ndbc, "NDBC"),
+                       (fut_fmi, "FMI"), (fut_mvb, "MVB")]:
         if fut.done():
             try:
                 rws_geojson["features"].extend(fut.result())
@@ -1976,7 +2238,7 @@ def _do_refresh():
     rws_geojson["aantalStations"] = len(rws_geojson["features"])
     _cache      = rws_geojson
     _cache_time = time.time()
-    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS + BSH + CEFAS + LaBouée + NDBC + FMI + CDIP + SOCIB)")
+    print(f"[TOTAAL] {_cache['aantalStations']} stations (RWS+BSH+CEFAS+LaBouée+NDBC+FMI+MVB+CDIP+SOCIB)")
 
 
 _EMPTY_WAVES = {
@@ -2455,6 +2717,11 @@ def _refresh_temp_bg():
         except Exception as e:
             print(f"[{label}] Fout: {e}")
 
+    # MVB zeewatertemperatuur (gevuld door fetch_mvb_data in _do_refresh)
+    features.extend(_mvb_temp_bg)
+    if _mvb_temp_bg:
+        print(f"[MVB temp] {len(_mvb_temp_bg)} stations")
+
     _temp_bg = {"type": "FeatureCollection", "features": features,
                 "opgehaald": now.isoformat(), "aantalStations": len(features)}
     _temp_bg_time = time.time()
@@ -2625,6 +2892,10 @@ def get_wind_data():
     # SOCIB windstations uit achtergrond-cache (nooit blokkerend)
     features.extend(_socib_wind_bg)
     print(f"[WIND] +{len(_socib_wind_bg)} SOCIB windstations → totaal {len(features)}")
+
+    # MVB windstations (gevuld door fetch_mvb_data in _do_refresh)
+    features.extend(_mvb_wind_bg)
+    print(f"[WIND] +{len(_mvb_wind_bg)} MVB windstations → totaal {len(features)}")
 
     _wind_cache = {"type": "FeatureCollection", "features": features,
                    "opgehaald": now.isoformat(), "aantalStations": len(features)}

@@ -9,3 +9,7 @@ services:
     envVars:
       - key: PORT
         value: 10000
+      - key: MVB_USERNAME
+        sync: false   # in te vullen via Render dashboard
+      - key: MVB_PASSWORD
+        sync: false   # in te vullen via Render dashboard
