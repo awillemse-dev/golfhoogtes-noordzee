@@ -267,6 +267,9 @@
       white-space: nowrap;
     }
 
+    /* Voorkom blauwe placeholder tijdens laden van radar-image */
+    #radar-map img { background: transparent !important; }
+
     #coming-soon {
       flex: 1;
       display: none;
@@ -2119,14 +2122,23 @@ function _radarShowFrame(idx) {
 
   const timeIso = _radarFrames[idx];
 
-  if (_radarWmsLayer) {
-    _radarMap.removeLayer(_radarWmsLayer);
-  }
+  const prevLayer = _radarWmsLayer;
   _radarWmsLayer = L.imageOverlay(
     _radarWmsUrl(timeIso),
     RADAR_BOUNDS,
-    { opacity: 0.85, zIndex: 10 }
+    { opacity: 0, zIndex: 10 }
   ).addTo(_radarMap);
+
+  // Fade in zodra het plaatje geladen is; verwijder de vorige daarna
+  _radarWmsLayer.getElement()
+    ? _radarWmsLayer.getElement().addEventListener('load', () => {
+        _radarWmsLayer.setOpacity(0.85);
+        if (prevLayer) _radarMap.removeLayer(prevLayer);
+      }, { once: true })
+    : _radarWmsLayer.on('load', () => {
+        _radarWmsLayer.setOpacity(0.85);
+        if (prevLayer) _radarMap.removeLayer(prevLayer);
+      });
 
   // Slider en tijdlabel bijwerken
   document.getElementById('radar-slider').value = idx;
