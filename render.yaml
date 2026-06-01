@@ -2,6 +2,7 @@ services:
   - type: web
     name: noordzee-proxy
     runtime: python
+    pythonVersion: "3.11"
     buildCommand: pip install --upgrade pip
     startCommand: python3 rws-proxy.py
     autoDeploy: true

@@ -3091,7 +3091,7 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
             return
 
         # ── /api/status ─────────────────────────────────────────────────────
-        if path == "/api/status":
+        elif path == "/api/status":
             lock_free = _refresh_lock.acquire(blocking=False)
             if lock_free:
                 _refresh_lock.release()
