@@ -189,6 +189,84 @@
     #main { flex: 1; display: flex; overflow: hidden; }
     #map  { flex: 1; }
 
+    /* ── Radarpaneel ─────────────────────────────────────────────────────── */
+    #radar-panel {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      background: var(--bg);
+      overflow: hidden;
+    }
+    #radar-panel.active { display: flex; }
+
+    #radar-map {
+      flex: 1;
+      min-height: 0;
+    }
+
+    #radar-controls {
+      flex-shrink: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    #radar-play {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: none;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    #radar-play:hover { background: #7dd3fc; }
+    #radar-play svg { width: 16px; height: 16px; fill: #0c1a2b; }
+
+    #radar-slider {
+      flex: 1;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border-2);
+      outline: none;
+      cursor: pointer;
+    }
+    #radar-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    #radar-slider::-moz-range-thumb {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: none;
+      cursor: pointer;
+    }
+
+    #radar-time {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      min-width: 42px;
+      text-align: right;
+    }
+
+    #radar-source {
+      font-size: 0.62rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
     #coming-soon {
       flex: 1;
       display: none;
@@ -460,6 +538,14 @@
       </svg>
       Bliksem
     </button>
+    <button class="nav-btn" id="nav-radar" onclick="selectLayer('radar')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="2"/>
+        <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/>
+      </svg>
+      Radar
+    </button>
   </nav>
 
   <div id="status" class="loading">
@@ -503,6 +589,19 @@
       </div>
       <div id="coming-soon-label">Verwachtingen</div>
       <div class="coming-soon-sub">Data volgt binnenkort</div>
+    </div>
+
+    <!-- Radarpaneel -->
+    <div id="radar-panel">
+      <div id="radar-map"></div>
+      <div id="radar-controls">
+        <button id="radar-play" title="Afspelen / pauzeren">
+          <svg id="radar-play-icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </button>
+        <input id="radar-slider" type="range" min="0" max="11" value="11" step="1">
+        <span id="radar-time">–:––</span>
+        <span id="radar-source">Bron: KNMI</span>
+      </div>
     </div>
 
     <!-- Grafiekpaneel -->
@@ -1525,7 +1624,14 @@ function selectLayer(layer) {
   updateLegend(layer);
 
   const mapEl      = document.getElementById('map');
+  const radarEl    = document.getElementById('radar-panel');
   const comingSoon = document.getElementById('coming-soon');
+
+  // Verberg altijd de radar bij wissel naar andere tab
+  if (layer !== 'radar') {
+    radarEl.classList.remove('active');
+    stopRadar();
+  }
 
   if (layer === 'golf') {
     mapEl.style.display      = '';
@@ -1556,6 +1662,11 @@ function selectLayer(layer) {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
     startBliksem();
+  } else if (layer === 'radar') {
+    mapEl.style.display      = 'none';
+    comingSoon.style.display = 'none';
+    radarEl.classList.add('active');
+    startRadar();
   } else {
     mapEl.style.display      = 'none';
     comingSoon.style.display = 'flex';
@@ -1946,6 +2057,166 @@ setTimeout(() => _bgPrefetch(tempUrl(),  () => _isFresh('temp'),  _bgBuildTemp, 
 setTimeout(() => { if (!_isFresh('wind'))  fetchWindData();  }, 12000);
 setTimeout(() => { if (!_isFresh('zicht')) fetchZichtData(); }, 18000);
 setTimeout(() => { if (!_isFresh('metar')) fetchMetarData(); }, 24000);
+
+// ── Radar (KNMI WMS) ──────────────────────────────────────────────────────────
+const RADAR_WMS   = 'https://anonymous.api.dataplatform.knmi.nl/wms/adaguc-server';
+const RADAR_LAYER = 'Reflectivity';
+const RADAR_FRAMES = 12;   // 1 uur, elke 5 minuten
+const RADAR_INTERVAL_MS = 600; // ms per frame tijdens afspelen
+
+// Bounding box NL: vast, geen zoom
+const RADAR_BOUNDS = [[48.8, 1.5], [53.9, 9.0]];
+
+let _radarMap       = null;
+let _radarWmsLayer  = null;
+let _radarFrames    = [];   // array van ISO-tijdstrings (oud → nieuw)
+let _radarFrameIdx  = 0;
+let _radarPlaying   = true;
+let _radarAnimT     = null;
+let _radarRefreshT  = null;
+
+function _radarRoundToFive(date) {
+  const d = new Date(date);
+  d.setUTCSeconds(0, 0);
+  d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 5) * 5);
+  return d;
+}
+
+function _radarBuildFrames() {
+  const latest = _radarRoundToFive(new Date());
+  // Laatste frame is 10 min geleden (WMS heeft vertraging)
+  latest.setUTCMinutes(latest.getUTCMinutes() - 10);
+  const frames = [];
+  for (let i = RADAR_FRAMES - 1; i >= 0; i--) {
+    const t = new Date(latest);
+    t.setUTCMinutes(t.getUTCMinutes() - i * 5);
+    frames.push(t.toISOString().replace(/\.\d{3}Z$/, 'Z'));
+  }
+  return frames;
+}
+
+function _radarWmsUrl(timeIso) {
+  const params = new URLSearchParams({
+    DATASET:     'radar_reflectivity_composites',
+    SERVICE:     'WMS',
+    REQUEST:     'GetMap',
+    VERSION:     '1.3.0',
+    LAYERS:      RADAR_LAYER,
+    CRS:         'EPSG:4326',
+    BBOX:        '48.8,1.5,53.9,9.0',
+    WIDTH:       '800',
+    HEIGHT:      '600',
+    FORMAT:      'image/png',
+    TRANSPARENT: 'TRUE',
+    TIME:        timeIso,
+  });
+  return `${RADAR_WMS}?${params}`;
+}
+
+function _radarShowFrame(idx) {
+  if (!_radarMap || !_radarFrames.length) return;
+  _radarFrameIdx = idx;
+
+  const timeIso = _radarFrames[idx];
+
+  if (_radarWmsLayer) {
+    _radarMap.removeLayer(_radarWmsLayer);
+  }
+  _radarWmsLayer = L.imageOverlay(
+    _radarWmsUrl(timeIso),
+    RADAR_BOUNDS,
+    { opacity: 0.85, zIndex: 10 }
+  ).addTo(_radarMap);
+
+  // Slider en tijdlabel bijwerken
+  document.getElementById('radar-slider').value = idx;
+  const d = new Date(timeIso);
+  document.getElementById('radar-time').textContent =
+    d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
+
+  // Status
+  const latest = new Date(_radarFrames[_radarFrames.length - 1]);
+  const latestStr = latest.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
+  setStatus('ok', `Neerslag radar · tot ${latestStr}`);
+}
+
+function _radarStep() {
+  if (!_radarFrames.length) return;
+  const next = (_radarFrameIdx + 1) % RADAR_FRAMES;
+  _radarShowFrame(next);
+}
+
+function _radarStartAnim() {
+  if (_radarAnimT) return;
+  _radarAnimT = setInterval(_radarStep, RADAR_INTERVAL_MS);
+  _radarPlaying = true;
+  document.getElementById('radar-play-icon').innerHTML = '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
+}
+
+function _radarPauseAnim() {
+  if (_radarAnimT) { clearInterval(_radarAnimT); _radarAnimT = null; }
+  _radarPlaying = false;
+  document.getElementById('radar-play-icon').innerHTML = '<polygon points="5 3 19 12 5 21 5 3"/>';
+}
+
+function startRadar() {
+  setStatus('loading', 'Radar laden…');
+
+  // Kaart éénmalig aanmaken
+  if (!_radarMap) {
+    _radarMap = L.map('radar-map', {
+      center:         [51.5, 5.2],
+      zoom:           7,
+      zoomControl:    false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      touchZoom:      false,
+      dragging:       false,
+      keyboard:       false,
+      boxZoom:        false,
+    });
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
+      subdomains: 'abcd', maxZoom: 10,
+    }).addTo(_radarMap);
+
+    // Landgrenzen overlay (lichte labels)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+      attribution: '', subdomains: 'abcd', maxZoom: 10, opacity: 0.7,
+    }).addTo(_radarMap);
+
+    // Play/pause knop
+    document.getElementById('radar-play').addEventListener('click', () => {
+      if (_radarPlaying) _radarPauseAnim(); else _radarStartAnim();
+    });
+
+    // Slider
+    document.getElementById('radar-slider').addEventListener('input', e => {
+      _radarPauseAnim();
+      _radarShowFrame(parseInt(e.target.value));
+    });
+  }
+
+  // Frames opbouwen en starten
+  _radarFrames = _radarBuildFrames();
+  document.getElementById('radar-slider').max = RADAR_FRAMES - 1;
+  _radarShowFrame(RADAR_FRAMES - 1);
+  _radarStartAnim();
+
+  // Elke 5 minuten frames vernieuwen
+  if (_radarRefreshT) clearInterval(_radarRefreshT);
+  _radarRefreshT = setInterval(() => {
+    if (activeLayer !== 'radar') return;
+    _radarFrames = _radarBuildFrames();
+    if (!_radarPlaying) _radarShowFrame(_radarFrameIdx);
+  }, 5 * 60 * 1000);
+}
+
+function stopRadar() {
+  _radarPauseAnim();
+  if (_radarRefreshT) { clearInterval(_radarRefreshT); _radarRefreshT = null; }
+}
 </script>
 </body>
 </html>
