@@ -267,6 +267,29 @@
       white-space: nowrap;
     }
 
+    .radar-src-btn {
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border-2);
+      background: var(--surface-2);
+      color: var(--text-dim);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      flex-shrink: 0;
+    }
+    .radar-src-btn.active {
+      background: var(--accent-glow);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .radar-src-btn:hover:not(.active) {
+      background: var(--surface-3);
+      color: var(--text);
+    }
+
     /* Voorkom blauwe placeholder tijdens laden van radar-image */
     #radar-map img { background: transparent !important; }
 
@@ -637,7 +660,7 @@
         </button>
         <input id="radar-slider" type="range" min="0" max="11" value="11" step="1">
         <span id="radar-time">–:––</span>
-        <span id="radar-source">Bron: KNMI</span>
+        <span id="radar-source">Bron: RainViewer</span>
       </div>
     </div>
 
@@ -2095,23 +2118,117 @@ setTimeout(() => { if (!_isFresh('wind'))  fetchWindData();  }, 12000);
 setTimeout(() => { if (!_isFresh('zicht')) fetchZichtData(); }, 18000);
 setTimeout(() => { if (!_isFresh('metar')) fetchMetarData(); }, 24000);
 
-// ── Radar (KNMI WMS) ──────────────────────────────────────────────────────────
+// ── Radar (KNMI WMS + RainViewer Europa) ─────────────────────────────────────
 const RADAR_WMS   = 'https://anonymous.api.dataplatform.knmi.nl/wms/adaguc-server';
 const RADAR_LAYER = 'Reflectivity';
 const RADAR_FRAMES = 12;   // 1 uur, elke 5 minuten
 const RADAR_INTERVAL_MS = 600; // ms per frame tijdens afspelen
 
-// Bounding box NL: vast, geen zoom
+// Bounding box NL (KNMI)
 const RADAR_BOUNDS = [[48.8, 1.5], [53.9, 9.0]];
+
+// RainViewer (Europa)
+const RV_API = 'https://api.rainviewer.com/public/weather-maps.json';
 
 let _radarMap       = null;
 let _radarWmsLayer  = null;
-let _radarFrames    = [];   // array van ISO-tijdstrings (oud → nieuw)
+let _radarFrames    = [];   // KNMI: array van ISO-tijdstrings (oud → nieuw)
 let _radarFrameIdx  = 0;
 let _radarPlaying   = true;
 let _radarAnimT     = null;
 let _radarRefreshT  = null;
+let _radarSource    = 'europe';
 
+// RainViewer state
+let _rvFrames       = [];   // array van {time, path} objecten
+let _rvHost         = 'https://tilecache.rainviewer.com';
+let _rvTileLayer    = null;
+
+// ── RainViewer (Europa) ───────────────────────────────────────────────────────
+async function _rvFetchFrames() {
+  try {
+    const resp = await fetch(RV_API);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    _rvHost   = data.host || 'https://tilecache.rainviewer.com';
+    _rvFrames = (data.radar && data.radar.past) ? data.radar.past : [];
+    console.log('[RV] frames geladen:', _rvFrames.length, 'host:', _rvHost);
+  } catch (e) {
+    console.error('[RV] fetch mislukt:', e);
+    _rvFrames = [];
+  }
+}
+
+function _rvShowFrame(idx) {
+  if (!_radarMap || !_rvFrames.length || _radarSource !== 'europe') return;
+  _radarFrameIdx = idx;
+  const frame = _rvFrames[idx];
+  // Kleurschema 6 = NEXRAD groen/geel/oranje/rood, smooth=1, snow=1
+  const url = `${_rvHost}${frame.path}/256/{z}/{x}/{y}/6/1_1.png`;
+
+  document.getElementById('radar-slider').value = idx;
+  const d = new Date(frame.time * 1000);
+  document.getElementById('radar-time').textContent =
+    d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
+
+  if (_rvTileLayer) {
+    _rvTileLayer.setUrl(url);
+  } else {
+    _rvTileLayer = L.tileLayer(url, {
+      opacity: 0.75,
+      zIndex: 10,
+      crossOrigin: true,
+      attribution: '&copy; <a href="https://rainviewer.com">RainViewer</a>',
+    }).addTo(_radarMap);
+  }
+
+  if (activeLayer === 'radar') {
+    const latest = new Date(_rvFrames[_rvFrames.length - 1].time * 1000);
+    const latestStr = latest.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
+    setStatus('ok', `Neerslag Europa · tot ${latestStr}`);
+  }
+}
+
+function _rvRemoveLayer() {
+  if (_rvTileLayer && _radarMap) { _radarMap.removeLayer(_rvTileLayer); _rvTileLayer = null; }
+}
+
+function _radarSetSource(src) {
+  if (_radarSource === src) return;
+  _radarSource = src;
+
+  document.getElementById('radar-src-knmi').classList.toggle('active', src === 'knmi');
+  document.getElementById('radar-src-europe').classList.toggle('active', src === 'europe');
+
+  _radarPauseAnim();
+
+  if (src === 'knmi') {
+    _rvRemoveLayer();
+    document.getElementById('radar-source').textContent = 'Bron: KNMI';
+    _radarUpdateLegend();
+    _radarMap.setView([52.1, 5.3], 7, { animate: true });
+    _radarFrames = _radarBuildFrames();
+    document.getElementById('radar-slider').max = RADAR_FRAMES - 1;
+    _radarShowFrame(RADAR_FRAMES - 1);
+    _radarStartAnim();
+  } else {
+    // Verwijder KNMI-laag definitief — ook als img.onload nog loopt
+    if (_radarWmsLayer) { _radarMap.removeLayer(_radarWmsLayer); _radarWmsLayer = null; }
+    document.getElementById('radar-source').textContent = 'Bron: RainViewer';
+    _radarUpdateLegend();
+    setStatus('loading', 'Europa radar laden…');
+    _radarMap.setView([52.0, 8.0], 5, { animate: true });
+    _rvFetchFrames().then(() => {
+      if (_radarSource !== 'europe') return; // gebruiker heeft al terug gewisseld
+      if (!_rvFrames.length) { setStatus('error', 'RainViewer niet beschikbaar'); return; }
+      document.getElementById('radar-slider').max = _rvFrames.length - 1;
+      _rvShowFrame(_rvFrames.length - 1);
+      _radarStartAnim();
+    });
+  }
+}
+
+// ── KNMI helpers ─────────────────────────────────────────────────────────────
 function _radarRoundToFive(date) {
   const d = new Date(date);
   d.setUTCSeconds(0, 0);
@@ -2169,7 +2286,7 @@ function _radarShowFrame(idx) {
   const prevLayer = _radarWmsLayer;
   const img = new Image();
   img.onload = () => {
-    if (!_radarMap) return;
+    if (!_radarMap || _radarSource !== 'knmi') return;
     _radarWmsLayer = L.imageOverlay(url, RADAR_BOUNDS, { opacity: 0.85, zIndex: 10 }).addTo(_radarMap);
     if (prevLayer) _radarMap.removeLayer(prevLayer);
     const latest = new Date(_radarFrames[_radarFrames.length - 1]);
@@ -2181,9 +2298,8 @@ function _radarShowFrame(idx) {
 }
 
 function _radarStep() {
-  if (!_radarFrames.length) return;
-  const next = (_radarFrameIdx + 1) % RADAR_FRAMES;
-  _radarShowFrame(next);
+  if (!_rvFrames.length) return;
+  _rvShowFrame((_radarFrameIdx + 1) % _rvFrames.length);
 }
 
 function _radarStartAnim() {
@@ -2199,15 +2315,32 @@ function _radarPauseAnim() {
   document.getElementById('radar-play-icon').innerHTML = '<polygon points="5 3 19 12 5 21 5 3"/>';
 }
 
+const _LEGEND_RV = [
+  { color: '#00e5ff', label: 'Licht' },
+  { color: '#4caf50', label: 'Zwak' },
+  { color: '#cddc39', label: 'Matig' },
+  { color: '#ffeb3b', label: 'Zwaar' },
+  { color: '#ff9800', label: 'Hevig' },
+  { color: '#f44336', label: 'Zeer hevig' },
+  { color: '#7b1fa2', label: 'Extreem' },
+];
+
+function _radarUpdateLegend(div) {
+  div = div || document.getElementById('radar-legend-div');
+  if (!div) return;
+  div.innerHTML = '<h4>Neerslag</h4>' +
+    _LEGEND_RV.map(i => `<div class="radar-legend-row"><div class="radar-legend-swatch" style="background:${i.color}"></div>${i.label}</div>`).join('');
+}
+
 function startRadar() {
   setStatus('loading', 'Radar laden…');
 
   // Kaart éénmalig aanmaken
   if (!_radarMap) {
     _radarMap = L.map('radar-map', {
-      center:          [52.1, 5.3],
-      zoom:            7,
-      minZoom:         7,
+      center:          [52.0, 5.0],
+      zoom:            5,
+      minZoom:         4,
       zoomControl:     true,
       scrollWheelZoom: true,
       doubleClickZoom: true,
@@ -2227,16 +2360,8 @@ function startRadar() {
     const radarLegend = L.control({ position: 'bottomright' });
     radarLegend.onAdd = () => {
       const div = L.DomUtil.create('div', 'radar-legend');
-      div.innerHTML = `
-        <h4>Neerslag</h4>
-        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#b4d7f0"></div>Licht</div>
-        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#6baed6"></div>Zwak</div>
-        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#2171b5"></div>Matig</div>
-        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#084594"></div>Zwaar</div>
-        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#fcae91"></div>Hevig</div>
-        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#fb6a4a"></div>Zeer hevig</div>
-        <div class="radar-legend-row"><div class="radar-legend-swatch" style="background:#cb181d"></div>Extreem</div>
-      `;
+      div.id = 'radar-legend-div';
+      _radarUpdateLegend(div);
       return div;
     };
     radarLegend.addTo(_radarMap);
@@ -2246,25 +2371,27 @@ function startRadar() {
       if (_radarPlaying) _radarPauseAnim(); else _radarStartAnim();
     });
 
-    // Slider
+    // Slider: dispatch naar juiste bron
     document.getElementById('radar-slider').addEventListener('input', e => {
       _radarPauseAnim();
-      _radarShowFrame(parseInt(e.target.value));
+      const idx = parseInt(e.target.value);
+      if (_radarSource === 'europe') _rvShowFrame(idx); else _radarShowFrame(idx);
     });
   }
 
-  // Frames opbouwen en starten
-  _radarFrames = _radarBuildFrames();
-  document.getElementById('radar-slider').max = RADAR_FRAMES - 1;
-  _radarShowFrame(RADAR_FRAMES - 1);
-  _radarStartAnim();
+  // Frames laden via RainViewer (Europa)
+  _rvFetchFrames().then(() => {
+    if (!_rvFrames.length) { setStatus('error', 'Radar niet beschikbaar'); return; }
+    document.getElementById('radar-slider').max = _rvFrames.length - 1;
+    _rvShowFrame(_rvFrames.length - 1);
+    _radarStartAnim();
+  });
 
   // Elke 5 minuten frames vernieuwen
   if (_radarRefreshT) clearInterval(_radarRefreshT);
   _radarRefreshT = setInterval(() => {
     if (activeLayer !== 'radar') return;
-    _radarFrames = _radarBuildFrames();
-    if (!_radarPlaying) _radarShowFrame(_radarFrameIdx);
+    _rvFetchFrames();  // stille achtergrondupdate
   }, 5 * 60 * 1000);
 }
 
