@@ -2170,7 +2170,7 @@ async function _rvBuildLayers() {
 
   // Maak voor elk frame een tile-laag (verborgen) en voeg toe aan kaart
   _rvFrames.forEach(frame => {
-    const url   = `${_rvHost}${frame.path}/512/{z}/{x}/{y}/4/1_1.png`;
+    const url   = `${_rvHost}${frame.path}/512/{z}/{x}/{y}/4/1_0.png`;
     const layer = L.tileLayer(url, {
       opacity:        0,
       zIndex:         10,
