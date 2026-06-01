@@ -1458,7 +1458,7 @@ def _ensure_socib_paths():
         [("waves_recorder", d) for d in SOCIB_WAVE_DIRS] +
         [("weather_station", d) for d in SOCIB_WIND_DIRS]
     )
-    with ThreadPoolExecutor(max_workers=len(all_dirs)) as ex:
+    with ThreadPoolExecutor(max_workers=min(len(all_dirs), 3)) as ex:
         futs = {(cat, d): ex.submit(_get_socib_latest_path, cat, d) for cat, d in all_dirs}
     for (cat, d), fut in futs.items():
         try:
@@ -1579,7 +1579,7 @@ def _socib_fetch_station_wave(station_dir):
 def fetch_socib_data():
     """Haal golfdata op van SOCIB THREDDS OPeNDAP (Middellandse Zee, Balearen)."""
     _ensure_socib_paths()
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=3) as ex:
         results = list(ex.map(_socib_fetch_station_wave, SOCIB_WAVE_DIRS))
     features = [r for r in results if r is not None]
     print(f"[SOCIB] {len(features)} golfstations geladen")
@@ -1649,7 +1649,7 @@ def _socib_fetch_station_wind(station_dir):
 def fetch_socib_wind_data():
     """Haal winddata op van SOCIB THREDDS OPeNDAP (Middellandse Zee, Balearen)."""
     _ensure_socib_paths()
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=3) as ex:
         results = list(ex.map(_socib_fetch_station_wind, SOCIB_WIND_DIRS))
     features = [r for r in results if r is not None]
     print(f"[SOCIB wind] {len(features)} stations geladen")
@@ -1906,7 +1906,7 @@ def fetch_cdip_data():
             return None
 
     from concurrent.futures import wait as _wait
-    ex = ThreadPoolExecutor(max_workers=20)
+    ex = ThreadPoolExecutor(max_workers=4)
     futs = [ex.submit(fetch_station, sf) for sf in station_files]
     _wait(futs, timeout=50)           # max 50s totaal; hangende threads worden genegeerd
     ex.shutdown(wait=False)           # laat resterende threads uitsterven, blokkeer niet
@@ -1940,7 +1940,7 @@ def _do_refresh():
             _stations = []
 
     from concurrent.futures import wait as _wait
-    ex = ThreadPoolExecutor(max_workers=6)
+    ex = ThreadPoolExecutor(max_workers=3)
     fut_rws     = ex.submit(fetch_latest_values, _stations)
     fut_bsh     = ex.submit(fetch_bsh_data)
     fut_cefas   = ex.submit(fetch_cefas_data)
@@ -2162,7 +2162,7 @@ def _fetch_cdip_temp():
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=20) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         results = list(ex.map(fetch_stn, station_files))
     return [r for r in results if r is not None]
 
@@ -2279,7 +2279,7 @@ def _fetch_rws_temp():
         })
 
     from concurrent.futures import wait as _wt
-    ex_rws  = ThreadPoolExecutor(max_workers=len(batches) or 1)
+    ex_rws  = ThreadPoolExecutor(max_workers=min(len(batches), 3) or 1)
     futs    = [ex_rws.submit(fetch_batch, b) for b in batches]
     _wt(futs, timeout=20)
     ex_rws.shutdown(wait=False)
@@ -2424,7 +2424,7 @@ def _refresh_temp_bg():
     now = datetime.now(timezone.utc)
 
     from concurrent.futures import wait as _wait_t
-    ex = ThreadPoolExecutor(max_workers=6)
+    ex = ThreadPoolExecutor(max_workers=3)
     fut_rws   = ex.submit(_fetch_rws_temp)
     fut_cefas = ex.submit(_fetch_cefas_temp_list)
     fut_ndbc  = ex.submit(_fetch_ndbc_temp)
@@ -2605,7 +2605,7 @@ def get_wind_data():
         batches     = [stations[i:i+BATCH] for i in range(0, len(stations), BATCH)]
 
         # Alle batches parallel ophalen
-        with ThreadPoolExecutor(max_workers=len(batches)) as ex:
+        with ThreadPoolExecutor(max_workers=min(len(batches), 3)) as ex:
             futs = [ex.submit(_fetch_wind_batch, b, station_map, now) for b in batches]
             for fut in futs:
                 try:
@@ -3672,7 +3672,7 @@ if __name__ == "__main__":
         print("[CACHE] Fase 2: CDIP + SOCIB + temp + wind + oceaanzicht ophalen…")
         try:
             from concurrent.futures import wait as _wait2
-            ex2 = ThreadPoolExecutor(max_workers=7)
+            ex2 = ThreadPoolExecutor(max_workers=4)
             fcdip  = ex2.submit(_refresh_cdip_bg)
             fsocib = ex2.submit(_refresh_socib_bg)
             ft     = ex2.submit(_refresh_temp_bg)
@@ -3694,7 +3694,7 @@ if __name__ == "__main__":
             print("[CACHE] Achtergrond-refresh gestart…")
             try:
                 from concurrent.futures import wait as _wait3
-                ex3 = ThreadPoolExecutor(max_workers=7)
+                ex3 = ThreadPoolExecutor(max_workers=4)
                 fcdip  = ex3.submit(_refresh_cdip_bg)
                 fsocib = ex3.submit(_refresh_socib_bg)
                 ft     = ex3.submit(_refresh_temp_bg)
