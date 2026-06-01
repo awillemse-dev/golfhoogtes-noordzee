@@ -2609,9 +2609,8 @@ async function _stormFetchNHC(storms) {
       const lat = _stormParseDeg(s.latitudeNumeric ?? s.latitude);
       const lon = _stormParseDeg(s.longitudeNumeric ?? s.longitude);
       if (isNaN(lat) || isNaN(lon)) continue;
-      // Alleen orkaan-sterkte (kt >= 64) = Cat 1+
       const kt = parseInt(s.intensity) || 0;
-      if (kt < 64) continue;
+      if (kt < 34) continue;
       storms.push({
         name: s.name, lat, lon, kt,
         movDir: s.movementDir != null ? parseFloat(s.movementDir) : null,
@@ -2627,40 +2626,75 @@ async function _stormFetchNHC(storms) {
   } catch (e) { console.warn('[Storms] NHC JSON:', e); }
 }
 
-// Parseer JTWC best-track GeoJSON (Stillle + Indische Oceaan)
+// Haal één JTWC warning-tekstbestand op en parseer positie/wind/forecast
+async function _stormParseJTWCText(url, name, storms) {
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return;
+    const txt = await r.text();
+
+    // Huidige positie: "011800Z --- NEAR 27.9N 127.3E"
+    const posM = txt.match(/WARNING POSITION:[\s\S]*?NEAR\s+([\d.]+)\s*([NS])\s+([\d.]+)\s*([EW])/i)
+               || txt.match(/POSITION NEAR\s+([\d.]+)\s*([NS])\s+([\d.]+)\s*([EW])/i);
+    if (!posM) return;
+    const lat = parseFloat(posM[1]) * (posM[2].toUpperCase() === 'S' ? -1 : 1);
+    const lon = parseFloat(posM[3]) * (posM[4].toUpperCase() === 'W' ? -1 : 1);
+    if (isNaN(lat) || isNaN(lon)) return;
+
+    // Windsnelheid eerste voorkomen na "WARNING POSITION"
+    const warnBlock = txt.split('WARNING POSITION:')[1] || txt;
+    const ktM  = warnBlock.match(/MAX SUSTAINED WINDS\s*-\s*(\d+)\s*KT/i);
+    const kt   = ktM ? parseInt(ktM[1]) : 0;
+
+    // Trekrichting: "MOVEMENT PAST SIX HOURS - 010 DEGREES AT 12 KTS"
+    const movM = txt.match(/MOVEMENT PAST\s+[^-]+-\s*(\d+)\s+DEGREES\s+AT\s+(\d+)\s+KT/i);
+
+    // Luchtdruk
+    const presM = txt.match(/MINIMUM SEA LEVEL PRESSURE\s*-\s*(\d+)\s*MB/i);
+
+    // Forecast-posities: "020600Z --- 30.4N 130.0E"
+    const track = [];
+    const fcRe = /\d{6}Z\s*---\s*([\d.]+)\s*([NS])\s+([\d.]+)\s*([EW])/g;
+    let fm;
+    while ((fm = fcRe.exec(txt)) !== null) {
+      const flat = parseFloat(fm[1]) * (fm[2].toUpperCase() === 'S' ? -1 : 1);
+      const flon = parseFloat(fm[3]) * (fm[4].toUpperCase() === 'W' ? -1 : 1);
+      if (!isNaN(flat) && !isNaN(flon)) track.push([flat, flon]);
+    }
+
+    if (storms.some(s => Math.abs(s.lat - lat) < 4 && Math.abs(s.lon - lon) < 4)) return;
+    storms.push({
+      name, lat, lon, kt,
+      movDir: movM ? parseFloat(movM[1]) : null,
+      movSpd: movM ? parseFloat(movM[2]) : null,
+      pressure: presM ? parseInt(presM[1]) : null,
+      source: 'JTWC',
+      track,
+    });
+  } catch (e) { console.warn('[Storms] JTWC text parse:', e); }
+}
+
+// Haal JTWC RSS op, volg warning-links voor echte data
 async function _stormFetchJTWC(storms) {
   try {
-    // JTWC publiceert GeoJSON van actieve stormen via een publieke endpoint
     const r = await fetch('https://www.metoc.navy.mil/jtwc/rss/jtwc.rss');
     if (!r.ok) return;
     const xml = new DOMParser().parseFromString(await r.text(), 'application/xml');
+    const fetches = [];
     for (const item of xml.querySelectorAll('item')) {
-      const title = item.querySelector('title')?.textContent || '';
-      const desc  = item.querySelector('description')?.textContent || '';
-      // Naam
-      const nameM = title.match(/^([A-Z0-9\- ]+?)\s*(?:[\(\[]|$)/i);
-      const name  = nameM ? nameM[1].trim() : title.trim();
-      // Positie uit description: bijv. "Position: 14.2N 132.5E"
-      const posM = desc.match(/Position[^:]*:\s*([\d.]+)\s*([NS])\s+([\d.]+)\s*([EW])/i);
-      if (!posM) continue;
-      const lat = parseFloat(posM[1]) * (posM[2].toUpperCase() === 'S' ? -1 : 1);
-      const lon = parseFloat(posM[3]) * (posM[4].toUpperCase() === 'W' ? -1 : 1);
-      if (isNaN(lat) || isNaN(lon)) continue;
-      // Windsnelheid
-      const ktM = desc.match(/Max\s+(?:Sustained\s+)?Winds?[^:]*:\s*(\d+)\s*kt/i);
-      const kt  = ktM ? parseInt(ktM[1]) : 0;
-      if (kt < 64) continue;
-      // Sla op als niet al dichtbij een NHC-storm
-      if (storms.some(s => Math.abs(s.lat - lat) < 4 && Math.abs(s.lon - lon) < 4)) continue;
-      // Trekrichting
-      const movM = desc.match(/Moving\s+([\d.]+)\s*degrees\s+at\s+([\d.]+)\s*kt/i);
-      storms.push({
-        name, lat, lon, kt,
-        movDir: movM ? parseFloat(movM[1]) : null,
-        movSpd: movM ? parseFloat(movM[2]) : null,
-        pressure: null, source: 'JTWC', track: [],
-      });
+      const desc = item.querySelector('description')?.textContent || '';
+      // Elk afzonderlijk storm-item heeft een "TC Warning Text" link
+      // bijv. href='https://www.metoc.navy.mil/jtwc/products/wp0626web.txt'
+      const linkMs = [...desc.matchAll(/href='([^']+web\.txt)'/gi)];
+      for (const lm of linkMs) {
+        const txtUrl = lm[1];
+        // Naam uit link: wp0626web.txt → "06W" → titel
+        const titleM = desc.match(/(?:Tropical|Typhoon|Hurricane|Cyclone|Super Typhoon)[^<]*?(\w{3,}\s*\w+)\s*Warning/i);
+        const name   = titleM ? titleM[0].replace(/Warning.*/, '').trim() : txtUrl;
+        fetches.push(_stormParseJTWCText(txtUrl, name, storms));
+      }
     }
+    await Promise.all(fetches);
   } catch (e) { console.warn('[Storms] JTWC RSS:', e); }
 }
 
@@ -2676,7 +2710,7 @@ async function _stormFetchJMA(storms) {
       const lon = (t.lon ?? t.longitude) / 10;
       if (isNaN(lat) || isNaN(lon)) continue;
       const kt = Math.round((t.maxWind ?? 0) * 1.944); // m/s → kt
-      if (kt < 64) continue;
+      if (kt < 34) continue;
       if (storms.some(s => Math.abs(s.lat - lat) < 4 && Math.abs(s.lon - lon) < 4)) continue;
       const name = t.name || t.nameJa || `Typhoon ${t.number ?? ''}`;
       storms.push({
