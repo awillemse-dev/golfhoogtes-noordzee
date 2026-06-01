@@ -2172,8 +2172,9 @@ function startRadar() {
   // Kaart éénmalig aanmaken
   if (!_radarMap) {
     _radarMap = L.map('radar-map', {
-      center:          [51.5, 5.2],
-      zoom:            7,
+      center:          [52.3, 5.3],
+      zoom:            8,
+      minZoom:         8,
       zoomControl:     true,
       scrollWheelZoom: true,
       doubleClickZoom: true,
