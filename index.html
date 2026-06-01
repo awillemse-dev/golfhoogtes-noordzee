@@ -1220,6 +1220,7 @@ async function fetchMetarData() {
 
 // ── Bliksem (SSE-relay via proxy → geen CORS/origin issues) ──────────────────
 const BLIKSEM_MAX_AGE_MS = 60 * 60 * 1000;
+const _BLIKSEM_LS_KEY    = 'zeedata_bliksem_v1';
 
 let _bliksemLayers  = [];
 let _bliksemSse     = null;
@@ -1296,11 +1297,36 @@ function _bliksemFlash(lat, lon) {
 }
 
 
+// Sla huidige strikes op in localStorage zodat ze na pagina-herlaad hersteld worden
+function _bliksemPersist() {
+  try {
+    const cutoff = Date.now() - BLIKSEM_MAX_AGE_MS;
+    const strikes = _bliksemLayers
+      .filter(m => m.options._tsMs >= cutoff)
+      .map(m => { const ll = m.getLatLng(); return { lat: ll.lat, lon: ll.lng, ts: m.options._tsMs / 1000 }; });
+    localStorage.setItem(_BLIKSEM_LS_KEY, JSON.stringify(strikes));
+  } catch (_) {}
+}
+
+// Herstel strikes uit localStorage (na pagina-herlaad of tab-switch)
+function _bliksemRestoreFromStorage() {
+  try {
+    const raw = localStorage.getItem(_BLIKSEM_LS_KEY);
+    if (!raw) return 0;
+    const strikes = JSON.parse(raw);
+    const cutoffS = (Date.now() - BLIKSEM_MAX_AGE_MS) / 1000;
+    let n = 0;
+    for (const s of strikes) {
+      if (s.ts >= cutoffS) { _bliksemAddStrike(s.lat, s.lon, s.ts); n++; }
+    }
+    return n;
+  } catch (_) { return 0; }
+}
+
 function _bliksemRefreshColors() {
   if (activeLayer !== 'bliksem') return;
-  const now        = Date.now();
-  const cutoff     = now - BLIKSEM_MAX_AGE_MS;
-  // Verwijder oude strikes
+  const now    = Date.now();
+  const cutoff = now - BLIKSEM_MAX_AGE_MS;
   _bliksemLayers.filter(m => m.options._tsMs < cutoff)
     .forEach(m => { _bliksemGroup.removeLayer(m); _bliksemKnownTs.delete(m.options._tsMs); });
   _bliksemLayers = _bliksemLayers.filter(m => m.options._tsMs >= cutoff);
@@ -1310,8 +1336,7 @@ function _bliksemRefreshColors() {
     const stroke = _bliksemStroke(age);
     m.setStyle({ color: stroke.color, weight: stroke.weight, fillColor: c, fillOpacity: _bliksemOpacity(age), radius: _bliksemRadius(age) });
   });
-
-
+  _bliksemPersist();   // elke 15s opslaan
   setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 60 min`);
 }
 
@@ -1342,20 +1367,29 @@ function startBliksem() {
   if (_bliksemColorT) { clearInterval(_bliksemColorT);  _bliksemColorT = null; }
 
   _bliksemGroup.addTo(map);
-  setStatus('loading', 'Bliksemdata ophalen…');
+
+  // Herstel vorige sessie uit localStorage — direct zichtbaar zonder netwerkwachttijd
+  const cached = _bliksemRestoreFromStorage();
+  if (cached > 0) {
+    setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 60 min`);
+    if (!_bliksemColorT) _bliksemColorT = setInterval(_bliksemRefreshColors, 15000);
+  } else {
+    setStatus('loading', 'Bliksemdata ophalen…');
+  }
 
   _bliksemPoll().then((count) => {
     if (activeLayer !== 'bliksem') return;
+    _bliksemPersist();   // meteen opslaan na eerste volledige poll
     _bliksemOpenSse();
     _bliksemPollT = setInterval(() => { if (activeLayer === 'bliksem') _bliksemPoll(); }, 20000);
     if (!_bliksemColorT) _bliksemColorT = setInterval(_bliksemRefreshColors, 15000);
-    if (count === 0) {
+    if (count === 0 && cached === 0) {
       setStatus('loading', 'Proxy opgestart · data laden…');
       _bliksemRetryT = setTimeout(() => { if (activeLayer === 'bliksem') _bliksemPoll(); }, 15000);
     }
   }).catch(() => {
     if (activeLayer !== 'bliksem') return;
-    setStatus('loading', 'Proxy wekken · opnieuw proberen…');
+    if (cached === 0) setStatus('loading', 'Proxy wekken · opnieuw proberen…');
     _bliksemRetryT = setTimeout(startBliksem, 8000);
   });
 }
