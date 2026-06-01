@@ -1408,6 +1408,7 @@ async function _bliksemPoll() {
   }
   console.log(`[bliksem] poll: ${geo.features?.length ?? 0} totaal, ${n} nieuw`);
   setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 60 min`);
+  _bliksemPersist();   // sla na elke poll op zodat herlaad volledig herstelt
   return n;
 }
 
@@ -1424,6 +1425,7 @@ function _bliksemOpenSse() {
     try { d = JSON.parse(evt.data); } catch { return; }
     if (d.batch) {
       for (const s of d.batch) _bliksemAddStrike(s.lat, s.lon, s.ts);
+      _bliksemPersist();   // sla volledige batch direct op
       return;
     }
     if (d.lat !== undefined) _bliksemAddStrike(d.lat, d.lon, d.ts);
