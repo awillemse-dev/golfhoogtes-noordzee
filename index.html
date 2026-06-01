@@ -270,6 +270,9 @@
     /* Voorkom blauwe placeholder tijdens laden van radar-image */
     #radar-map img { background: transparent !important; }
 
+    /* Zwarte achtergrond van WMS onzichtbaar maken — alleen gekleurde radarechos blijven over */
+    #radar-map .leaflet-image-layer { mix-blend-mode: screen; }
+
     #coming-soon {
       flex: 1;
       display: none;
@@ -2111,6 +2114,7 @@ function _radarWmsUrl(timeIso) {
     HEIGHT:      '600',
     FORMAT:      'image/png',
     TRANSPARENT: 'TRUE',
+    BGCOLOR:     '0x000000',
     TIME:        timeIso,
   });
   return `${RADAR_WMS}?${params}`;
