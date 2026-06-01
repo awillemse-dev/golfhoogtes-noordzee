@@ -714,27 +714,29 @@ function makeTempIcon(t) {
   });
 }
 
-let tempMarkers = [];
+const _tempGroup  = L.layerGroup();
+const _windGroup  = L.layerGroup();
+const _zichtGroup = L.layerGroup();
+const _metarGroup = L.layerGroup();
 
-function clearTempMarkers() {
-  tempMarkers.forEach(m => map.removeLayer(m));
-  tempMarkers = [];
-}
+function clearTempMarkers()  { _tempGroup.clearLayers();  map.removeLayer(_tempGroup); }
+function clearWindMarkers()  { _windGroup.clearLayers();  map.removeLayer(_windGroup); }
+function clearZichtMarkers() { _zichtGroup.clearLayers(); map.removeLayer(_zichtGroup); }
+function clearMetarMarkers() { _metarGroup.clearLayers(); map.removeLayer(_metarGroup); }
 
 function renderTempMarkers(geojson) {
   _lastTempGeoJSON = geojson;
-  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
+  _hideAllGroups();
+  _tempGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
     const t = p.temp_c;
-
     const marker = L.marker([lat, lon], { icon: makeTempIcon(t) });
     marker.on('click', () => openTempChart(p.code, p.naam || p.code, t, p.tijdstip));
-    marker.addTo(map);
-    tempMarkers.push(marker);
+    _tempGroup.addLayer(marker);
   });
-
+  _tempGroup.addTo(map);
 }
 
 function tempUrl()            { return `${PROXY_URL}/api/temp`; }
@@ -829,25 +831,20 @@ function makeWindIcon(w, dir) {
   });
 }
 
-let windMarkers = [];
-
-function clearWindMarkers() {
-  windMarkers.forEach(m => map.removeLayer(m));
-  windMarkers = [];
-}
 
 function renderWindMarkers(geojson) {
   _lastWindGeoJSON = geojson;
-  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
+  _hideAllGroups();
+  _windGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
     const w = p.wind_ms;
     const marker = L.marker([lat, lon], { icon: makeWindIcon(w, p.wind_dir) });
     marker.on('click', () => openWindChart(p.code, p.naam || p.code, w, p.tijdstip));
-    marker.addTo(map);
-    windMarkers.push(marker);
+    _windGroup.addLayer(marker);
   });
+  _windGroup.addTo(map);
 }
 
 function windUrl()            { return `${PROXY_URL}/api/wind`; }
@@ -909,21 +906,20 @@ function makeZichtIcon(v) {
   });
 }
 
-let zichtMarkers = [];
-function clearZichtMarkers() { zichtMarkers.forEach(m => map.removeLayer(m)); zichtMarkers = []; }
 
 function renderZichtMarkers(geojson) {
   _lastZichtGeoJSON = geojson;
-  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
+  _hideAllGroups();
+  _zichtGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
-    const v = f.properties.vv;   // km
+    const v = f.properties.vv;
     const marker = L.marker([lat, lon], { icon: makeZichtIcon(v) });
     marker.bindTooltip(f.properties.stationname || f.properties.naam || '', { direction: 'top', offset: [0, -4] });
     marker.on('click', () => openZichtChart(f.properties.code, f.properties.stationname || f.properties.naam || f.properties.code, v, f.properties.tijdstip));
-    marker.addTo(map);
-    zichtMarkers.push(marker);
+    _zichtGroup.addLayer(marker);
   });
+  _zichtGroup.addTo(map);
 }
 
 // ── METAR/TAF ─────────────────────────────────────────────────────────────────
@@ -945,23 +941,21 @@ function makeMetarIcon(fc) {
   return L.divIcon({ className: '', html: svg, iconSize: [r*2+4, r*2+4], iconAnchor: [r+2, r+2] });
 }
 
-let metarMarkers     = [];
 let _lastMetarGeoJSON = null;
-
-function clearMetarMarkers() { metarMarkers.forEach(m => map.removeLayer(m)); metarMarkers = []; }
 
 function renderMetarMarkers(geojson) {
   _lastMetarGeoJSON = geojson;
-  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
+  _hideAllGroups();
+  _metarGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p  = f.properties;
     const marker = L.marker([lat, lon], { icon: makeMetarIcon(p.fc) });
     marker.bindTooltip(`${p.icao} – ${p.naam}`, { direction: 'top', offset: [0, -4] });
     marker.on('click', () => openMetarPanel(p.icao, p.naam));
-    marker.addTo(map);
-    metarMarkers.push(marker);
+    _metarGroup.addLayer(marker);
   });
+  _metarGroup.addTo(map);
 }
 
 function metarUrl() { return `${PROXY_URL}/api/metar`; }
@@ -1513,27 +1507,27 @@ function selectLayer(layer) {
   if (layer === 'golf') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastWaveGeoJSON && _isFresh('golf')) { renderMarkers(_lastWaveGeoJSON); startCountdown(); }
+    if (_lastWaveGeoJSON && _isFresh('golf')) { _hideAllGroups(); _waveGroup.addTo(map); startCountdown(); }
     else fetchWaveData().then(startCountdown);
   } else if (layer === 'temp') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastTempGeoJSON && _isFresh('temp')) { renderTempMarkers(_lastTempGeoJSON); startCountdown(); }
+    if (_lastTempGeoJSON && _isFresh('temp')) { _hideAllGroups(); _tempGroup.addTo(map); startCountdown(); }
     else fetchTempData().then(startCountdown);
   } else if (layer === 'wind') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastWindGeoJSON && _isFresh('wind')) { renderWindMarkers(_lastWindGeoJSON); startCountdown(); }
+    if (_lastWindGeoJSON && _isFresh('wind')) { _hideAllGroups(); _windGroup.addTo(map); startCountdown(); }
     else fetchWindData().then(startCountdown);
   } else if (layer === 'zicht') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastZichtGeoJSON && _isFresh('zicht')) { renderZichtMarkers(_lastZichtGeoJSON); startCountdown(); }
+    if (_lastZichtGeoJSON && _isFresh('zicht')) { _hideAllGroups(); _zichtGroup.addTo(map); startCountdown(); }
     else fetchZichtData().then(startCountdown);
   } else if (layer === 'metar') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastMetarGeoJSON && _isFresh('metar')) { renderMetarMarkers(_lastMetarGeoJSON); startCountdown(); }
+    if (_lastMetarGeoJSON && _isFresh('metar')) { _hideAllGroups(); _metarGroup.addTo(map); startCountdown(); }
     else fetchMetarData().then(startCountdown);
   } else if (layer === 'bliksem') {
     mapEl.style.display      = '';
@@ -1557,6 +1551,7 @@ function wavesUrl()       { return `${PROXY_URL}/api/waves`; }
 function historyUrl(code) { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
 
 let markers = [];
+const _waveGroup  = L.layerGroup();
 let _lastWaveGeoJSON = null, _lastTempGeoJSON = null, _lastWindGeoJSON = null, _lastZichtGeoJSON = null;
 
 // Herlaad markers bij zoomwijziging (aanpassen icongrootte)
@@ -1569,9 +1564,15 @@ map.on('zoomend', () => {
   // bliksem: canvas renderer herschaalt automatisch
 });
 
-function clearMarkers() {
-  markers.forEach(m => map.removeLayer(m));
-  markers = [];
+function clearMarkers() { _waveGroup.clearLayers(); map.removeLayer(_waveGroup); }
+
+function _hideAllGroups() {
+  map.removeLayer(_waveGroup);
+  map.removeLayer(_tempGroup);
+  map.removeLayer(_windGroup);
+  map.removeLayer(_zichtGroup);
+  map.removeLayer(_metarGroup);
+  stopBliksem();
 }
 
 function formatTijdstip(iso) {
@@ -1585,17 +1586,17 @@ function formatTijdstip(iso) {
 
 function renderMarkers(geojson) {
   _lastWaveGeoJSON = geojson;
-  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
+  _hideAllGroups();
+  _waveGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
     const h = p.hm0_m;
     const marker = L.marker([lat, lon], { icon: makeIcon(h) });
     marker.on('click', () => openChart(p.code, p.naam, h, p.tijdstip));
-    marker.addTo(map);
-    markers.push(marker);
+    _waveGroup.addLayer(marker);
   });
-
+  _waveGroup.addTo(map);
 }
 
 async function fetchWithTimeout(url, timeoutMs = 90000) {
