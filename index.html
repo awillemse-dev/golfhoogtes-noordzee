@@ -726,7 +726,6 @@ function clearMetarMarkers() { _metarGroup.clearLayers(); map.removeLayer(_metar
 
 function renderTempMarkers(geojson) {
   _lastTempGeoJSON = geojson;
-  _hideAllGroups();
   _tempGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
@@ -736,7 +735,7 @@ function renderTempMarkers(geojson) {
     marker.on('click', () => openTempChart(p.code, p.naam || p.code, t, p.tijdstip));
     _tempGroup.addLayer(marker);
   });
-  _tempGroup.addTo(map);
+  if (activeLayer === 'temp') { _hideAllGroups(); _tempGroup.addTo(map); }
 }
 
 function tempUrl()            { return `${PROXY_URL}/api/temp`; }
@@ -834,7 +833,6 @@ function makeWindIcon(w, dir) {
 
 function renderWindMarkers(geojson) {
   _lastWindGeoJSON = geojson;
-  _hideAllGroups();
   _windGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
@@ -844,27 +842,29 @@ function renderWindMarkers(geojson) {
     marker.on('click', () => openWindChart(p.code, p.naam || p.code, w, p.tijdstip));
     _windGroup.addLayer(marker);
   });
-  _windGroup.addTo(map);
+  if (activeLayer === 'wind') { _hideAllGroups(); _windGroup.addTo(map); }
 }
 
 function windUrl()            { return `${PROXY_URL}/api/wind`; }
 function windHistoryUrl(code) { return `${PROXY_URL}/api/wind-history?code=${encodeURIComponent(code)}`; }
 
 async function fetchWindData() {
-  setStatus('loading', 'laden…');
+  if (activeLayer === 'wind') setStatus('loading', 'laden…');
   try {
     const resp = await fetchWithTimeout(windUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     renderWindMarkers(geojson);
     _markFetched('wind');
-    const opgehaald = geojson.opgehaald
-      ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
-      : new Date().toLocaleTimeString('nl-NL');
-    setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    if (activeLayer === 'wind') {
+      const opgehaald = geojson.opgehaald
+        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+        : new Date().toLocaleTimeString('nl-NL');
+      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    }
   } catch (err) {
     console.error(err);
-    setStatus('error', 'Opnieuw laden…');
+    if (activeLayer === 'wind') setStatus('error', 'Opnieuw laden…');
     setTimeout(() => { if (activeLayer === 'wind') fetchWindData().then(startCountdown); }, 5000);
   }
 }
@@ -909,7 +909,6 @@ function makeZichtIcon(v) {
 
 function renderZichtMarkers(geojson) {
   _lastZichtGeoJSON = geojson;
-  _hideAllGroups();
   _zichtGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
@@ -919,7 +918,7 @@ function renderZichtMarkers(geojson) {
     marker.on('click', () => openZichtChart(f.properties.code, f.properties.stationname || f.properties.naam || f.properties.code, v, f.properties.tijdstip));
     _zichtGroup.addLayer(marker);
   });
-  _zichtGroup.addTo(map);
+  if (activeLayer === 'zicht') { _hideAllGroups(); _zichtGroup.addTo(map); }
 }
 
 // ── METAR/TAF ─────────────────────────────────────────────────────────────────
@@ -945,7 +944,6 @@ let _lastMetarGeoJSON = null;
 
 function renderMetarMarkers(geojson) {
   _lastMetarGeoJSON = geojson;
-  _hideAllGroups();
   _metarGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
@@ -955,7 +953,7 @@ function renderMetarMarkers(geojson) {
     marker.on('click', () => openMetarPanel(p.icao, p.naam));
     _metarGroup.addLayer(marker);
   });
-  _metarGroup.addTo(map);
+  if (activeLayer === 'metar') { _hideAllGroups(); _metarGroup.addTo(map); }
 }
 
 function metarUrl() { return `${PROXY_URL}/api/metar`; }
@@ -1033,25 +1031,27 @@ async function openMetarPanel(icao, naam) {
 }
 
 async function fetchMetarData() {
-  setStatus('loading', 'laden…');
+  if (activeLayer === 'metar') setStatus('loading', 'laden…');
   try {
     const resp = await fetchWithTimeout(metarUrl(), 60000);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     if (geojson.laden) {
-      setStatus('loading', 'METAR data wordt geladen…');
+      if (activeLayer === 'metar') setStatus('loading', 'METAR data wordt geladen…');
       setTimeout(() => { if (activeLayer === 'metar') fetchMetarData().then(startCountdown); }, 5000);
       return;
     }
     renderMetarMarkers(geojson);
     _markFetched('metar');
-    const opgehaald = geojson.opgehaald
-      ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
-      : new Date().toLocaleTimeString('nl-NL');
-    setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    if (activeLayer === 'metar') {
+      const opgehaald = geojson.opgehaald
+        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+        : new Date().toLocaleTimeString('nl-NL');
+      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    }
   } catch (err) {
     console.error(err);
-    setStatus('error', 'Opnieuw laden…');
+    if (activeLayer === 'metar') setStatus('error', 'Opnieuw laden…');
     setTimeout(() => { if (activeLayer === 'metar') fetchMetarData().then(startCountdown); }, 5000);
   }
 }
@@ -1319,20 +1319,22 @@ async function openZichtChart(code, naam, huidigVv, tijdstip) {
 }
 
 async function fetchZichtData() {
-  setStatus('loading', 'laden…');
+  if (activeLayer === 'zicht') setStatus('loading', 'laden…');
   try {
     const resp = await fetchWithTimeout(zichtUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     renderZichtMarkers(geojson);
     _markFetched('zicht');
-    const opgehaald = geojson.opgehaald
-      ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
-      : new Date().toLocaleTimeString('nl-NL');
-    setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    if (activeLayer === 'zicht') {
+      const opgehaald = geojson.opgehaald
+        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+        : new Date().toLocaleTimeString('nl-NL');
+      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    }
   } catch (err) {
     console.error(err);
-    setStatus('error', 'Opnieuw laden…');
+    if (activeLayer === 'zicht') setStatus('error', 'Opnieuw laden…');
     setTimeout(() => { if (activeLayer === 'zicht') fetchZichtData().then(startCountdown); }, 5000);
   }
 }
@@ -1447,25 +1449,27 @@ async function openWindChart(code, naam, huidigWind, tijdstip) {
 }
 
 async function fetchTempData() {
-  setStatus('loading', 'laden…');
+  if (activeLayer === 'temp') setStatus('loading', 'laden…');
   try {
     const resp = await fetchWithTimeout(tempUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     if (geojson.laden) {
-      setStatus('loading', 'temperatuurdata wordt geladen…');
+      if (activeLayer === 'temp') setStatus('loading', 'temperatuurdata wordt geladen…');
       setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
       return;
     }
     renderTempMarkers(geojson);
     _markFetched('temp');
-    const opgehaald = geojson.opgehaald
-      ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
-      : new Date().toLocaleTimeString('nl-NL');
-    setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    if (activeLayer === 'temp') {
+      const opgehaald = geojson.opgehaald
+        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+        : new Date().toLocaleTimeString('nl-NL');
+      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    }
   } catch (err) {
     console.error(err);
-    setStatus('error', 'Opnieuw laden…');
+    if (activeLayer === 'temp') setStatus('error', 'Opnieuw laden…');
     setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
   }
 }
@@ -1605,7 +1609,6 @@ function formatTijdstip(iso) {
 
 function renderMarkers(geojson) {
   _lastWaveGeoJSON = geojson;
-  _hideAllGroups();
   _waveGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
@@ -1615,7 +1618,7 @@ function renderMarkers(geojson) {
     marker.on('click', () => openChart(p.code, p.naam, h, p.tijdstip));
     _waveGroup.addLayer(marker);
   });
-  _waveGroup.addTo(map);
+  if (activeLayer === 'golf') { _hideAllGroups(); _waveGroup.addTo(map); }
 }
 
 async function fetchWithTimeout(url, timeoutMs = 90000) {
@@ -1630,25 +1633,26 @@ async function fetchWithTimeout(url, timeoutMs = 90000) {
 }
 
 async function fetchWaveData() {
-  setStatus('loading', 'laden…');
+  if (activeLayer === 'golf') setStatus('loading', 'laden…');
   try {
     const resp = await fetchWithTimeout(wavesUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    // Server is nog aan het opstarten — probeer opnieuw over 5 seconden
     if (geojson.laden) {
       setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
       return;
     }
     renderMarkers(geojson);
     _markFetched('golf');
-    const opgehaald = geojson.opgehaald
-      ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
-      : new Date().toLocaleTimeString('nl-NL');
-    setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    if (activeLayer === 'golf') {
+      const opgehaald = geojson.opgehaald
+        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+        : new Date().toLocaleTimeString('nl-NL');
+      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    }
   } catch (err) {
     console.error(err);
-    setStatus('error', 'Opnieuw laden…');
+    if (activeLayer === 'golf') setStatus('error', 'Opnieuw laden…');
     setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
   }
 }
