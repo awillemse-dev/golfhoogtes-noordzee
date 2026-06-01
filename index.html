@@ -2121,35 +2121,28 @@ function _radarShowFrame(idx) {
   _radarFrameIdx = idx;
 
   const timeIso = _radarFrames[idx];
+  const url     = _radarWmsUrl(timeIso);
 
-  const prevLayer = _radarWmsLayer;
-  _radarWmsLayer = L.imageOverlay(
-    _radarWmsUrl(timeIso),
-    RADAR_BOUNDS,
-    { opacity: 0, zIndex: 10 }
-  ).addTo(_radarMap);
-
-  // Fade in zodra het plaatje geladen is; verwijder de vorige daarna
-  _radarWmsLayer.getElement()
-    ? _radarWmsLayer.getElement().addEventListener('load', () => {
-        _radarWmsLayer.setOpacity(0.85);
-        if (prevLayer) _radarMap.removeLayer(prevLayer);
-      }, { once: true })
-    : _radarWmsLayer.on('load', () => {
-        _radarWmsLayer.setOpacity(0.85);
-        if (prevLayer) _radarMap.removeLayer(prevLayer);
-      });
-
-  // Slider en tijdlabel bijwerken
+  // Slider en tijdlabel alvast bijwerken
   document.getElementById('radar-slider').value = idx;
   const d = new Date(timeIso);
   document.getElementById('radar-time').textContent =
     d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
 
-  // Status
-  const latest = new Date(_radarFrames[_radarFrames.length - 1]);
-  const latestStr = latest.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
-  setStatus('ok', `Neerslag radar · tot ${latestStr}`);
+  // Laad de afbeelding volledig VOORDAT de overlay aan de kaart wordt toegevoegd.
+  // Zo is er nooit een blauw placeholder-vlak zichtbaar.
+  const prevLayer = _radarWmsLayer;
+  const img = new Image();
+  img.onload = () => {
+    if (!_radarMap) return;
+    _radarWmsLayer = L.imageOverlay(url, RADAR_BOUNDS, { opacity: 0.85, zIndex: 10 }).addTo(_radarMap);
+    if (prevLayer) _radarMap.removeLayer(prevLayer);
+    const latest = new Date(_radarFrames[_radarFrames.length - 1]);
+    const latestStr = latest.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
+    setStatus('ok', `Neerslag radar · tot ${latestStr}`);
+  };
+  img.onerror = () => { /* tijdstip overslaan, huidige frame behouden */ };
+  img.src = url;
 }
 
 function _radarStep() {
@@ -2177,16 +2170,17 @@ function startRadar() {
   // Kaart éénmalig aanmaken
   if (!_radarMap) {
     _radarMap = L.map('radar-map', {
-      center:         [51.5, 5.2],
-      zoom:           7,
-      zoomControl:    false,
-      scrollWheelZoom: false,
-      doubleClickZoom: false,
-      touchZoom:      false,
-      dragging:       false,
-      keyboard:       false,
-      boxZoom:        false,
+      center:          [51.5, 5.2],
+      zoom:            7,
+      zoomControl:     true,
+      scrollWheelZoom: true,
+      doubleClickZoom: true,
+      touchZoom:       true,
+      dragging:        true,
+      keyboard:        true,
+      boxZoom:         true,
     });
+    _radarMap.zoomControl.setPosition('topright');
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
