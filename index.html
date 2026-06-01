@@ -1065,6 +1065,7 @@ let _bliksemColorT  = null;
 let _bliksemKnownTs = new Set();
 
 const _bliksemRenderer = L.canvas({ padding: 0.5 });
+const _bliksemGroup    = L.layerGroup();
 
 function _bliksemColor(ageMs) {
   if (ageMs <   5 * 60000) return '#ffdd00';   // < 5 min  — geel
@@ -1090,7 +1091,7 @@ function _bliksemStroke(ageMs) {
 }
 
 function clearBliksemMarkers() {
-  _bliksemLayers.forEach(m => map.removeLayer(m));
+  _bliksemGroup.clearLayers();
   _bliksemLayers = [];
   _bliksemKnownTs.clear();
 }
@@ -1110,7 +1111,8 @@ function _bliksemAddStrike(lat, lon, tsS) {
     fillColor:   _bliksemColor(ageMs),
     fillOpacity: _bliksemOpacity(ageMs),
     _tsMs:       tsMs,
-  }).addTo(map);
+  });
+  _bliksemGroup.addLayer(m);
   _bliksemLayers.push(m);
 
   // Flash + persistent rood rondje voor verse strikes (< 5s oud)
@@ -1138,7 +1140,7 @@ function _bliksemRefreshColors() {
   const cutoff     = now - BLIKSEM_MAX_AGE_MS;
   // Verwijder oude strikes
   _bliksemLayers.filter(m => m.options._tsMs < cutoff)
-    .forEach(m => { map.removeLayer(m); _bliksemKnownTs.delete(m.options._tsMs); });
+    .forEach(m => { _bliksemGroup.removeLayer(m); _bliksemKnownTs.delete(m.options._tsMs); });
   _bliksemLayers = _bliksemLayers.filter(m => m.options._tsMs >= cutoff);
   _bliksemLayers.forEach(m => {
     const age    = now - m.options._tsMs;
@@ -1155,30 +1157,39 @@ let _bliksemRetryT  = null;
 let _bliksemPollT   = null;   // polling interval als SSE fallback
 
 function startBliksem() {
-  clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers();
+  // Verberg andere lagen (O(1) per groep)
+  map.removeLayer(_waveGroup);
+  map.removeLayer(_tempGroup);
+  map.removeLayer(_windGroup);
+  map.removeLayer(_zichtGroup);
+  map.removeLayer(_metarGroup);
+
+  // SSE loopt al op de achtergrond → gewoon de groep tonen, geen re-fetch nodig
+  if (_bliksemSse && _bliksemSse.readyState !== EventSource.CLOSED) {
+    _bliksemGroup.addTo(map);
+    setStatus('ok', `${_bliksemLayers.length} bliksems · laatste 60 min`);
+    if (!_bliksemColorT) _bliksemColorT = setInterval(_bliksemRefreshColors, 15000);
+    if (!_bliksemPollT)  _bliksemPollT  = setInterval(() => { if (activeLayer === 'bliksem') _bliksemPoll(); }, 20000);
+    return;
+  }
+
+  // Eerste keer of na volledige stop: opnieuw opstarten
   clearBliksemMarkers();
   if (_bliksemRetryT) { clearTimeout(_bliksemRetryT);   _bliksemRetryT = null; }
   if (_bliksemPollT)  { clearInterval(_bliksemPollT);   _bliksemPollT  = null; }
   if (_bliksemColorT) { clearInterval(_bliksemColorT);  _bliksemColorT = null; }
 
+  _bliksemGroup.addTo(map);
   setStatus('loading', 'Bliksemdata ophalen…');
 
-  // Stap 1: haal direct de volledige buffer op via polling (werkt altijd)
   _bliksemPoll().then((count) => {
     if (activeLayer !== 'bliksem') return;
-    // Stap 2: SSE voor real-time updates
     _bliksemOpenSse();
-    // Stap 3: poll elke 20s als aanvulling
-    _bliksemPollT = setInterval(() => {
-      if (activeLayer === 'bliksem') _bliksemPoll();
-    }, 20000);
+    _bliksemPollT = setInterval(() => { if (activeLayer === 'bliksem') _bliksemPoll(); }, 20000);
     if (!_bliksemColorT) _bliksemColorT = setInterval(_bliksemRefreshColors, 15000);
-    // Als proxy net opgestart was en buffer leeg, opnieuw pollen na 15s
     if (count === 0) {
       setStatus('loading', 'Proxy opgestart · data laden…');
-      _bliksemRetryT = setTimeout(() => {
-        if (activeLayer === 'bliksem') _bliksemPoll();
-      }, 15000);
+      _bliksemRetryT = setTimeout(() => { if (activeLayer === 'bliksem') _bliksemPoll(); }, 15000);
     }
   }).catch(() => {
     if (activeLayer !== 'bliksem') return;
@@ -1236,6 +1247,7 @@ function stopBliksem() {
   if (_bliksemColorT) { clearInterval(_bliksemColorT);  _bliksemColorT = null; }
   if (_bliksemSse)    { _bliksemSse.close();            _bliksemSse    = null; }
   clearBliksemMarkers();
+  map.removeLayer(_bliksemGroup);
 }
 
 function zichtUrl()            { return `${PROXY_URL}/api/visibility`; }
@@ -1572,7 +1584,7 @@ function _hideAllGroups() {
   map.removeLayer(_windGroup);
   map.removeLayer(_zichtGroup);
   map.removeLayer(_metarGroup);
-  stopBliksem();
+  map.removeLayer(_bliksemGroup);  // O(1) — SSE blijft actief op de achtergrond
 }
 
 function formatTijdstip(iso) {
@@ -1887,6 +1899,13 @@ function startCountdown() {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 fetchWaveData().then(startCountdown);
+
+// Prefetch andere tabs op de achtergrond zodat eerste tabwissel instant is.
+// Gespreid over 5–20s zodat de proxy niet tegelijk meerdere requests krijgt.
+setTimeout(() => { if (!_isFresh('temp'))  fetchTempData();  },  5000);
+setTimeout(() => { if (!_isFresh('wind'))  fetchWindData();  }, 10000);
+setTimeout(() => { if (!_isFresh('zicht')) fetchZichtData(); }, 15000);
+setTimeout(() => { if (!_isFresh('metar')) fetchMetarData(); }, 20000);
 </script>
 </body>
 </html>
