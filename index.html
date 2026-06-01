@@ -2170,7 +2170,7 @@ async function _rvBuildLayers() {
 
   // Maak voor elk frame een tile-laag (verborgen) en voeg toe aan kaart
   _rvFrames.forEach(frame => {
-    const url   = `${_rvHost}${frame.path}/512/{z}/{x}/{y}/6/1_1.png`;
+    const url   = `${_rvHost}${frame.path}/512/{z}/{x}/{y}/4/1_1.png`;
     const layer = L.tileLayer(url, {
       opacity:        0,
       zIndex:         10,
@@ -2335,13 +2335,13 @@ function _radarPauseAnim() {
 }
 
 const _LEGEND_RV = [
-  { color: '#00e5ff', label: 'Licht' },
-  { color: '#4caf50', label: 'Zwak' },
-  { color: '#cddc39', label: 'Matig' },
-  { color: '#ffeb3b', label: 'Zwaar' },
-  { color: '#ff9800', label: 'Hevig' },
-  { color: '#f44336', label: 'Zeer hevig' },
-  { color: '#7b1fa2', label: 'Extreem' },
+  { color: '#04e004', label: 'Licht' },
+  { color: '#04b404', label: 'Zwak' },
+  { color: '#e4e400', label: 'Matig' },
+  { color: '#e4a400', label: 'Zwaar' },
+  { color: '#e40000', label: 'Hevig' },
+  { color: '#b40000', label: 'Zeer hevig' },
+  { color: '#cc00cc', label: 'Extreem' },
 ];
 
 function _radarUpdateLegend(div) {
