@@ -638,7 +638,7 @@
         <path d="M9.6 4.6A2 2 0 1 1 11 8H2"/>
         <path d="M12.6 19.4A2 2 0 1 0 14 16H2"/>
       </svg>
-      Stormen
+      Orkanen
     </button>
   </nav>
 
@@ -2576,13 +2576,13 @@ let _stormRefreshT = null;
 
 function _stormKtColor(kt) {
   kt = parseInt(kt) || 0;
-  if (kt >= 137) return '#7c3aed'; // Cat 5 — paars
-  if (kt >= 113) return '#dc2626'; // Cat 4 — donkerrood
-  if (kt >= 96)  return '#ea580c'; // Cat 3 — oranje
-  if (kt >= 83)  return '#d97706'; // Cat 2 — amber
-  if (kt >= 64)  return '#ca8a04'; // Cat 1 — geel-oranje
-  if (kt >= 34)  return '#0369a1'; // TS/STS — donkerblauw
-  return '#475569';
+  if (kt >= 137) return '#1e1e1e'; // Cat 5 — zwart
+  if (kt >= 113) return '#7c3aed'; // Cat 4 — paars
+  if (kt >= 96)  return '#dc2626'; // Cat 3 — rood
+  if (kt >= 83)  return '#ea580c'; // Cat 2 — oranje
+  if (kt >= 64)  return '#ea580c'; // Cat 1 — oranje
+  if (kt >= 34)  return '#ca8a04'; // TS/STS — geel
+  return '#ca8a04';
 }
 
 function _stormCatLabel(kt) {
