@@ -2343,14 +2343,19 @@ async function _rvBuildLayers() {
   _rvFrames.forEach(frame => {
     const url   = `${_rvHost}${frame.path}/512/{z}/{x}/{y}/4/1_0.png`;
     const layer = L.tileLayer(url, {
-      opacity:        0,
-      zIndex:         10,
-      className:      'rv-radar-frame',
-      keepBuffer:     2,
-      updateWhenIdle: false,
-      crossOrigin:    'anonymous',
-      attribution:    '&copy; <a href="https://rainviewer.com">RainViewer</a>',
+      opacity:           0,
+      zIndex:            10,
+      className:         'rv-radar-frame',
+      keepBuffer:        4,              // meer tiles in cache houden
+      updateWhenIdle:    false,
+      updateWhenZooming: false,          // geen tile-aanvragen tijdens zoom-animatie
+      crossOrigin:       'anonymous',
+      attribution:       '&copy; <a href="https://rainviewer.com">RainViewer</a>',
     });
+    // Bijhouden of alle tiles van dit frame in beeld geladen zijn
+    layer._rvLoaded = true;
+    layer.on('loading', () => { layer._rvLoaded = false; });
+    layer.on('load',    () => { layer._rvLoaded = true;  });
     layer.on('tileload', e => _rvStripGrey(e.tile));
     if (_radarMap) layer.addTo(_radarMap);
     _rvLayers.push(layer);
@@ -2360,22 +2365,46 @@ async function _rvBuildLayers() {
 function _rvShowFrame(idx) {
   if (!_rvLayers.length || idx < 0 || idx >= _rvLayers.length) return;
 
-  // Verberg huidig frame
-  if (_rvCurrentIdx >= 0 && _rvCurrentIdx < _rvLayers.length)
-    _rvLayers[_rvCurrentIdx].setOpacity(0);
+  const oldIdx   = _rvCurrentIdx;
+  const newLayer = _rvLayers[idx];
 
-  _rvCurrentIdx = idx;
+  _rvCurrentIdx  = idx;
   _radarFrameIdx = idx;
-  _rvLayers[idx].setOpacity(0.75);
 
+  // Toon het nieuwe frame direct
+  newLayer.setOpacity(0.75);
+
+  // Update UI
   document.getElementById('radar-slider').value = idx;
   const d = new Date(_rvFrames[idx].time * 1000);
   document.getElementById('radar-time').textContent =
     d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
-
   if (activeLayer === 'radar') {
     const latest = new Date(_rvFrames[_rvFrames.length - 1].time * 1000);
     setStatus('ok', `Neerslag Europa · tot ${latest.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' })}`);
+  }
+
+  if (oldIdx < 0 || oldIdx === idx || oldIdx >= _rvLayers.length) return;
+  const oldLayer = _rvLayers[oldIdx];
+
+  // Verberg het oude frame pas nadat het nieuwe volledig geladen is.
+  // Op snelle verbindingen (_rvLoaded = true) genoeg om na de CSS-transitie te wachten.
+  // Op trage verbindingen: oud frame blijft zichtbaar totdat het nieuwe frame klaar is
+  // (max. 8 seconden als fallback), zodat er geen lege blokken verschijnen.
+  if (newLayer._rvLoaded) {
+    setTimeout(() => {
+      if (_rvCurrentIdx !== oldIdx) oldLayer.setOpacity(0);
+    }, 220);
+  } else {
+    let resolved = false;
+    const hideOld = () => {
+      if (resolved) return;
+      resolved = true;
+      newLayer.off('load', hideOld);
+      if (_rvCurrentIdx !== oldIdx) oldLayer.setOpacity(0);
+    };
+    newLayer.on('load', hideOld);
+    setTimeout(hideOld, 8000);   // fallback: maximaal 8 seconden wachten
   }
 }
 
