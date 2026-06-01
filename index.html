@@ -356,16 +356,22 @@
 
     /* ── Storm-markers ───────────────────────────────────────────────────── */
     .storm-marker {
-      font-size: 0.62rem;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.68rem;
       font-weight: 700;
-      color: #0c1a2b;
-      border-radius: 3px;
-      padding: 2px 5px;
+      color: #fff;
+      border-radius: 4px;
+      padding: 3px 6px;
       white-space: nowrap;
-      border: 1.5px solid rgba(255,255,255,0.5);
-      box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+      border: 1.5px solid rgba(255,255,255,0.35);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.6);
       cursor: pointer;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+      line-height: 1.2;
     }
+    .storm-marker-icon { font-size: 0.9rem; line-height: 1; text-shadow: none; }
 
     /* ── Grafiekpaneel ────────────────────────────────────────────────────── */
     #chart-panel {
@@ -2568,13 +2574,13 @@ let _stormRefreshT = null;
 
 function _stormKtColor(kt) {
   kt = parseInt(kt) || 0;
-  if (kt >= 137) return '#b91c1c';
-  if (kt >= 113) return '#ef4444';
-  if (kt >= 96)  return '#f97316';
-  if (kt >= 83)  return '#facc15';
-  if (kt >= 64)  return '#fbbf24';
-  if (kt >= 34)  return '#38bdf8';
-  return '#94a3b8';
+  if (kt >= 137) return '#7c3aed'; // Cat 5 — paars
+  if (kt >= 113) return '#dc2626'; // Cat 4 — donkerrood
+  if (kt >= 96)  return '#ea580c'; // Cat 3 — oranje
+  if (kt >= 83)  return '#d97706'; // Cat 2 — amber
+  if (kt >= 64)  return '#ca8a04'; // Cat 1 — geel-oranje
+  if (kt >= 34)  return '#0369a1'; // TS/STS — donkerblauw
+  return '#475569';
 }
 
 function _stormCatLabel(kt) {
@@ -2627,11 +2633,28 @@ async function _stormFetchNHC(storms) {
 }
 
 // Haal één JTWC warning-tekstbestand op en parseer positie/wind/forecast
-async function _stormParseJTWCText(url, name, storms) {
+async function _stormParseJTWCText(url, _nameHint, storms) {
   try {
     const r = await fetch(url);
     if (!r.ok) return;
     const txt = await r.text();
+
+    // Naam uit de SUBJ-regel: "TROPICAL STORM 06W (JANGMI) WARNING NR 023"
+    // Gebruik naam-in-haakjes indien aanwezig, anders type + ID
+    const subjM = txt.match(/SUBJ\/([^\n\/]+)/i);
+    let name = _nameHint;
+    if (subjM) {
+      const subj = subjM[1].trim();
+      const parenM = subj.match(/\(([^)]+)\)/);
+      if (parenM) {
+        // "JANGMI" → capitalize: "Jangmi"
+        name = parenM[1].charAt(0) + parenM[1].slice(1).toLowerCase();
+      } else {
+        // Geen naam in haakjes → gebruik type + ID: "Tropical Storm 06W"
+        const typeM = subj.match(/^((?:SUPER\s+)?(?:TROPICAL\s+STORM|TYPHOON|HURRICANE|CYCLONE|SUBTROPICAL\s+STORM)\s+\S+)/i);
+        if (typeM) name = typeM[1].replace(/\w+/g, w => w.charAt(0) + w.slice(1).toLowerCase());
+      }
+    }
 
     // Huidige positie: "011800Z --- NEAR 27.9N 127.3E"
     const posM = txt.match(/WARNING POSITION:[\s\S]*?NEAR\s+([\d.]+)\s*([NS])\s+([\d.]+)\s*([EW])/i)
@@ -2746,8 +2769,8 @@ async function _stormFetch() {
     // Marker
     const icon = L.divIcon({
       className: '',
-      html: `<div class="storm-marker" style="background:${color};border-color:${color};color:#0c1a2b">${shortName} · ${cat}</div>`,
-      iconAnchor: [0, 8],
+      html: `<div class="storm-marker" style="background:${color}"><span class="storm-marker-icon">🌀</span>${shortName} · ${cat}</div>`,
+      iconAnchor: [0, 10],
     });
     const marker = L.marker([s.lat, s.lon], { icon });
     const ms = Math.round(s.kt * 0.514);
