@@ -2142,7 +2142,8 @@ let _radarSource    = 'europe';
 // RainViewer state
 let _rvFrames       = [];   // array van {time, path} objecten
 let _rvHost         = 'https://tilecache.rainviewer.com';
-let _rvTileLayer    = null;
+let _rvTileLayer    = null;   // momenteel zichtbare laag
+let _rvPendingLayer = null;   // laag die nog aan het laden is
 
 // ── RainViewer (Europa) ───────────────────────────────────────────────────────
 async function _rvFetchFrames() {
@@ -2160,37 +2161,51 @@ async function _rvFetchFrames() {
 }
 
 function _rvShowFrame(idx) {
-  if (!_radarMap || !_rvFrames.length || _radarSource !== 'europe') return;
+  if (!_radarMap || !_rvFrames.length) return;
   _radarFrameIdx = idx;
   const frame = _rvFrames[idx];
-  // Kleurschema 6 = NEXRAD groen/geel/oranje/rood, smooth=1, snow=1
-  const url = `${_rvHost}${frame.path}/256/{z}/{x}/{y}/6/1_1.png`;
+  // 512px tiles voor hogere resolutie; kleurschema 6 = NEXRAD
+  const url = `${_rvHost}${frame.path}/512/{z}/{x}/{y}/6/1_1.png`;
 
   document.getElementById('radar-slider').value = idx;
   const d = new Date(frame.time * 1000);
   document.getElementById('radar-time').textContent =
     d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
 
-  if (_rvTileLayer) {
-    _rvTileLayer.setUrl(url);
-  } else {
-    _rvTileLayer = L.tileLayer(url, {
-      opacity: 0.75,
-      zIndex: 10,
-      crossOrigin: true,
-      attribution: '&copy; <a href="https://rainviewer.com">RainViewer</a>',
-    }).addTo(_radarMap);
-  }
+  // Annuleer vorige pending laag zodat die niet alsnog zichtbaar wordt
+  if (_rvPendingLayer) { _radarMap.removeLayer(_rvPendingLayer); _rvPendingLayer = null; }
 
-  if (activeLayer === 'radar') {
-    const latest = new Date(_rvFrames[_rvFrames.length - 1].time * 1000);
-    const latestStr = latest.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
-    setStatus('ok', `Neerslag Europa · tot ${latestStr}`);
-  }
+  // Maak nieuwe laag onzichtbaar aan — oude laag blijft zichtbaar tot nieuwe klaar is
+  const newLayer = L.tileLayer(url, {
+    opacity:          0,
+    zIndex:           11,
+    keepBuffer:       2,
+    updateWhenIdle:   false,
+    attribution:      '&copy; <a href="https://rainviewer.com">RainViewer</a>',
+  }).addTo(_radarMap);
+  _rvPendingLayer = newLayer;
+
+  const activate = () => {
+    if (_rvPendingLayer !== newLayer) return; // ondertussen door nieuwer frame vervangen
+    newLayer.setOpacity(0.75);
+    _rvPendingLayer = null;
+    const old = _rvTileLayer;
+    _rvTileLayer = newLayer;
+    if (old) _radarMap.removeLayer(old);
+    if (activeLayer === 'radar') {
+      const latest = new Date(_rvFrames[_rvFrames.length - 1].time * 1000);
+      setStatus('ok', `Neerslag Europa · tot ${latest.toLocaleTimeString('nl-NL', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Amsterdam' })}`);
+    }
+  };
+
+  // Toon zodra alle tiles in beeld geladen zijn; fallback na 1.5 s
+  newLayer.once('load', activate);
+  setTimeout(() => { if (_rvPendingLayer === newLayer) activate(); }, 1500);
 }
 
 function _rvRemoveLayer() {
-  if (_rvTileLayer && _radarMap) { _radarMap.removeLayer(_rvTileLayer); _rvTileLayer = null; }
+  if (_rvTileLayer    && _radarMap) { _radarMap.removeLayer(_rvTileLayer);    _rvTileLayer    = null; }
+  if (_rvPendingLayer && _radarMap) { _radarMap.removeLayer(_rvPendingLayer); _rvPendingLayer = null; }
 }
 
 function _radarSetSource(src) {
