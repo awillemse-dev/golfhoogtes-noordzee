@@ -1075,7 +1075,6 @@ def fetch_ndbc_wind_history(station_id):
 _ndbc_wind_features = []   # gevuld door fetch_ndbc_data(), gebruikt door get_wind_data()
 _ndbc_vis_features  = []   # gevuld door fetch_ndbc_data(), gebruikt door /api/visibility
 _ocean_vis_features = []   # gevuld door _refresh_ocean_vis_bg(), gebruikt door /api/visibility
-_vis_cache_ready    = False  # True zodra _refresh_ocean_vis_bg de eerste keer klaar is
 
 def fetch_ndbc_data():
     req = urllib.request.Request(
@@ -1949,14 +1948,13 @@ def _refresh_socib_bg():
 
 def _refresh_ocean_vis_bg():
     """Vul _ocean_vis_features vanuit Open-Meteo (modelzicht voor oceaanpunten)."""
-    global _ocean_vis_features, _vis_cache_ready
+    global _ocean_vis_features
     try:
         features = fetch_ocean_visibility()
         _ocean_vis_features = features
         print(f"[Ocean VIS bg] {len(features)} oceaanpunten geladen")
     except Exception as e:
         print(f"[Ocean VIS bg] Fout: {e}")
-    _vis_cache_ready = True  # ook bij fout: laat client niet eeuwig wachten
 
 
 def fetch_socib_wave_history(nc_path, naam, code):
@@ -3003,7 +3001,7 @@ def _load_coastal_stations():
             elev_ft = float(row["elevation_ft"]) if row.get("elevation_ft") else None
         except ValueError:
             continue
-        if elev_ft is None or elev_ft > 500:   # 500 ft ≈ 150 m – sluit alleen hoog binnenland uit
+        if elev_ft is None or elev_ft > 33:   # 33 ft ≈ 10 m
             continue
         try:
             lat = float(row["latitude_deg"])
@@ -3421,11 +3419,6 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
         # ── /api/visibility ──────────────────────────────────────────────
         elif path == "/api/visibility":
             try:
-                if not _vis_cache_ready:
-                    self.send_response(200)
-                    self._send_json(json.dumps({"type": "FeatureCollection", "features": [],
-                                                "aantalStations": 0, "laden": True}).encode())
-                    return
                 knmi = get_knmi_data()
                 knmi_vis = [f for f in knmi.get("features", [])
                             if f["properties"].get("vv") is not None]

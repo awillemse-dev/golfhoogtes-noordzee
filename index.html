@@ -13,18 +13,17 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     :root {
-      --bg:          #070c16;
-      --surface:     #0b1423;
-      --surface-2:   #101d30;
-      --surface-3:   #16273e;
-      --border:      #1a2b40;
-      --border-2:    #21364f;
+      --bg:          #080d18;
+      --surface:     #0d1625;
+      --surface-2:   #131f33;
+      --surface-3:   #192840;
+      --border:      #1c2e45;
+      --border-2:    #243a56;
       --accent:      #38bdf8;
-      --accent-2:    #0ea5e9;
-      --accent-glow: rgba(56,189,248,0.10);
+      --accent-glow: rgba(56,189,248,0.12);
       --text:        #e2e8f0;
       --text-dim:    #7a91a8;
-      --text-muted:  #3a4f65;
+      --text-muted:  #3d5167;
       --green:       #4ade80;
       --yellow:      #fbbf24;
       --red:         #f87171;
@@ -44,23 +43,14 @@
 
     /* ── Header ─────────────────────────────────────────────────────────── */
     header {
-      height: 54px;
-      padding: 0 18px;
+      height: 52px;
+      padding: 0 16px;
       background: var(--surface);
       border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 14px;
       flex-shrink: 0;
-      position: relative;
-    }
-    header::after {
-      content: '';
-      position: absolute;
-      bottom: 0; left: 0; right: 0;
-      height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(56,189,248,0.3) 30%, rgba(56,189,248,0.3) 70%, transparent);
-      pointer-events: none;
     }
 
     .brand {
@@ -68,46 +58,39 @@
       align-items: center;
       gap: 10px;
       flex-shrink: 0;
-      text-decoration: none;
     }
     .brand-icon {
-      width: 32px; height: 32px;
-      border-radius: 9px;
-      background: linear-gradient(145deg, #38bdf8 0%, #0369a1 100%);
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      background: linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%);
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 0 16px rgba(56,189,248,0.35), 0 2px 6px rgba(0,0,0,0.4);
-      flex-shrink: 0;
+      box-shadow: 0 0 12px rgba(14,165,233,0.3);
     }
-    .brand-icon svg { width: 17px; height: 17px; color: white; }
+    .brand-icon svg { width: 16px; height: 16px; color: white; }
     .brand-name {
-      font-size: 0.92rem;
-      font-weight: 700;
+      font-size: 0.88rem;
+      font-weight: 600;
       color: #f1f5f9;
-      letter-spacing: -0.02em;
-    }
-    .brand-sub {
-      font-size: 0.65rem;
-      color: var(--text-muted);
-      font-weight: 400;
-      letter-spacing: 0.01em;
+      letter-spacing: -0.01em;
     }
 
     .h-divider {
       width: 1px;
-      height: 22px;
-      background: linear-gradient(to bottom, transparent, var(--border-2), transparent);
+      height: 20px;
+      background: var(--border);
       flex-shrink: 0;
     }
 
     /* ── Navigatie ──────────────────────────────────────────────────────── */
     nav {
       display: flex;
-      gap: 1px;
-      background: rgba(0,0,0,0.25);
+      gap: 2px;
+      background: var(--bg);
       border: 1px solid var(--border);
-      border-radius: 9px;
+      border-radius: 8px;
       padding: 3px;
     }
 
@@ -115,67 +98,53 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 5px 12px;
-      border-radius: 6px;
+      padding: 5px 13px;
+      border-radius: 5px;
       border: none;
       background: none;
       color: var(--text-dim);
-      font-size: 0.77rem;
+      font-size: 0.78rem;
       font-weight: 500;
       font-family: inherit;
       cursor: pointer;
       white-space: nowrap;
       transition: color 0.15s, background 0.15s;
-      position: relative;
     }
-    .nav-btn svg { width: 13px; height: 13px; flex-shrink: 0; transition: color 0.15s; }
-    .nav-btn:hover { color: var(--text); background: var(--surface-3); }
-    .nav-btn.active {
-      color: var(--accent);
-      background: linear-gradient(135deg, rgba(56,189,248,0.14), rgba(56,189,248,0.06));
-      box-shadow: inset 0 0 0 1px rgba(56,189,248,0.2);
-    }
+    .nav-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+    .nav-btn:hover  { color: var(--text); background: var(--surface-2); }
+    .nav-btn.active { color: var(--accent); background: var(--surface-2); }
 
     /* ── Status ──────────────────────────────────────────────────────────── */
     #status {
-      font-size: 0.73rem;
+      font-size: 0.75rem;
       color: var(--text-dim);
       margin-left: auto;
       display: flex;
       align-items: center;
       gap: 7px;
       flex-shrink: 0;
-      background: rgba(0,0,0,0.2);
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 4px 12px;
     }
     .status-dot {
-      width: 6px; height: 6px;
+      width: 7px; height: 7px;
       border-radius: 50%;
       background: var(--text-muted);
       flex-shrink: 0;
       transition: background 0.3s, box-shadow 0.3s;
     }
-    #status.ok      .status-dot { background: var(--green);  box-shadow: 0 0 7px rgba(74,222,128,0.6); }
-    #status.loading .status-dot { background: var(--yellow); box-shadow: 0 0 7px rgba(251,191,36,0.5); animation: pulse-dot 1.2s ease-in-out infinite; }
-    #status.error   .status-dot { background: var(--red);    box-shadow: 0 0 7px rgba(248,113,113,0.5); }
-    #status span { color: var(--text); font-size: 0.72rem; }
-    @keyframes pulse-dot {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
-    }
+    #status.ok      .status-dot { background: var(--green);  box-shadow: 0 0 6px rgba(74,222,128,0.5); }
+    #status.loading .status-dot { background: var(--yellow); box-shadow: 0 0 6px rgba(251,191,36,0.4); }
+    #status.error   .status-dot { background: var(--red);    box-shadow: 0 0 6px rgba(248,113,113,0.4); }
+    #status span { color: var(--text); }
 
     #countdown {
-      font-size: 0.68rem;
+      font-size: 0.7rem;
       color: var(--text-muted);
-      background: rgba(0,0,0,0.25);
+      background: var(--bg);
       border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 3px 10px;
+      border-radius: 5px;
+      padding: 3px 9px;
       font-variant-numeric: tabular-nums;
       flex-shrink: 0;
-      letter-spacing: 0.02em;
     }
 
     /* ── Layout ──────────────────────────────────────────────────────────── */
@@ -183,41 +152,38 @@
 
     /* ── Zijbalk ─────────────────────────────────────────────────────────── */
     #sidebar {
-      width: 160px;
+      width: 68px;
       flex-shrink: 0;
-      background: transparent;
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border-right: 1px solid rgba(255,255,255,0.07);
+      background: var(--surface);
+      border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
-      padding: 14px 8px;
+      padding: 10px 6px;
       gap: 4px;
-      overflow-y: auto;
     }
 
-    .sidebar-section-label {
-      font-size: 0.68rem;
-      font-weight: 700;
-      color: var(--text-dim);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      padding: 10px 8px;
-      border-radius: 7px;
-      border: 1px solid transparent;
+    .sidebar-tab {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      padding: 10px 6px;
       cursor: pointer;
-      user-select: none;
+      color: var(--text-muted);
+      font-size: 0.6rem;
+      font-weight: 600;
+      text-align: center;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border-radius: 8px;
+      border: 1px solid transparent;
       transition: all 0.15s;
-      white-space: normal;
-      overflow: visible;
-      line-height: 1.3;
+      user-select: none;
     }
-    .sidebar-section-label:hover { background: rgba(255,255,255,0.06); color: var(--text); }
-    .sidebar-section-label.active {
-      background: linear-gradient(135deg, rgba(56,189,248,0.14), rgba(56,189,248,0.05));
-      color: var(--accent);
-      border-color: rgba(56,189,248,0.18);
-    }
+    .sidebar-tab svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .sidebar-tab:hover  { background: var(--surface-2); color: var(--text-dim); border-color: var(--border); }
+    .sidebar-tab.active { background: var(--accent-glow); color: var(--accent); border-color: rgba(56,189,248,0.22); }
+    .sidebar-tab .tab-label { line-height: 1.2; }
 
     /* ── Kaartgebied ──────────────────────────────────────────────────────── */
     #main { flex: 1; display: flex; overflow: hidden; }
@@ -506,30 +472,29 @@
 
     /* ── Legenda ────────────────────────────────────────────────────────── */
     .legend {
-      background: rgba(7,12,22,0.94);
-      border: 1px solid var(--border-2);
-      border-radius: 12px;
-      padding: 13px 15px;
-      font-size: 0.74rem;
-      color: #8fa3b8;
-      backdrop-filter: blur(16px);
-      box-shadow: 0 8px 32px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.04);
+      background: rgba(13,22,37,0.96);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 0.75rem;
+      color: #94a3b8;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
     }
     .legend h4 {
-      font-size: 0.63rem;
-      color: var(--accent);
+      font-size: 0.65rem;
+      color: var(--text-dim);
       margin-bottom: 10px;
-      font-weight: 700;
+      font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.09em;
+      letter-spacing: 0.07em;
     }
     .legend-sub {
-      font-size: 0.62rem;
+      font-size: 0.63rem;
       color: var(--text-muted);
-      margin-top: 9px;
+      margin-top: 8px;
       padding-top: 8px;
       border-top: 1px solid var(--border);
-      letter-spacing: 0.01em;
     }
 
     /* Bliksem flash — eenmalige puls bij nieuw strike */
@@ -570,40 +535,26 @@
       border-radius: 4px 0 0 0 !important;
     }
     .leaflet-control-attribution a { color: #475569 !important; }
-
-    .leaflet-popup-content-wrapper {
-      background: rgba(11,20,35,0.97);
-      color: var(--text);
-      border: 1px solid var(--border-2);
-      border-radius: 12px;
-      box-shadow: 0 12px 40px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.05);
-      backdrop-filter: blur(12px);
-    }
-    .leaflet-popup-content { margin: 13px 16px; }
-    .leaflet-popup-tip { background: rgba(11,20,35,0.97); }
-    .leaflet-popup-close-button { color: var(--text-dim) !important; font-size: 1rem !important; top: 8px !important; right: 10px !important; }
-    .leaflet-popup-close-button:hover { color: var(--text) !important; }
-    .popup-naam   { font-weight: 700; font-size: 0.87rem; color: var(--accent); margin-bottom: 5px; letter-spacing: -0.01em; }
-    .popup-waarde { font-size: 1.6rem; font-weight: 700; margin: 5px 0; letter-spacing: -0.03em; }
-    .popup-meta   { font-size: 0.71rem; color: var(--text-dim); }
-    .popup-tijd   { font-size: 0.67rem; color: var(--text-muted); margin-top: 3px; }
-
-    /* ── Leaflet zoom ───────────────────────────────────────────────────── */
-    .leaflet-control-zoom {
-      border: 1px solid var(--border-2) !important;
-      border-radius: 10px !important;
-      overflow: hidden;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.4) !important;
-    }
     .leaflet-control-zoom a {
       background: var(--surface) !important;
       color: var(--text-dim) !important;
       border-color: var(--border) !important;
-      font-size: 1rem !important;
-      line-height: 30px !important;
-      width: 30px !important; height: 30px !important;
     }
-    .leaflet-control-zoom a:hover { background: var(--surface-3) !important; color: var(--text) !important; }
+    .leaflet-control-zoom a:hover { background: var(--surface-2) !important; color: var(--text) !important; }
+
+    .leaflet-popup-content-wrapper {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border-2);
+      border-radius: 10px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    .leaflet-popup-tip { background: var(--surface-2); }
+    .leaflet-popup-close-button { color: var(--text-dim) !important; }
+    .popup-naam   { font-weight: 600; font-size: 0.85rem; color: var(--accent); margin-bottom: 4px; }
+    .popup-waarde { font-size: 1.5rem; font-weight: 700; margin: 4px 0; }
+    .popup-meta   { font-size: 0.7rem; color: var(--text-dim); }
+    .popup-tijd   { font-size: 0.67rem; color: var(--text-muted); margin-top: 2px; }
   </style>
 </head>
 <body>
@@ -619,10 +570,7 @@
         <path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
       </svg>
     </div>
-    <div>
-      <div class="brand-name">Zeedata</div>
-      <div class="brand-sub">Maritiem weer</div>
-    </div>
+    <span class="brand-name">Zeedata</span>
   </div>
 
   <div class="h-divider"></div>
@@ -705,8 +653,14 @@
 
   <!-- ── Zijbalk ────────────────────────────────────────────────────────── -->
   <div id="sidebar">
-    <div class="sidebar-section-label active" id="tab-waarnemingen" onclick="selectSection('waarnemingen')">Waarnemingen Zee</div>
-    <div class="sidebar-section-label" id="tab-nederland" onclick="selectSection('nederland')">Waarnemingen Nederland</div>
+    <div class="sidebar-tab active" id="tab-waarnemingen" onclick="selectSection('waarnemingen')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="2"/>
+        <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/>
+      </svg>
+      <span class="tab-label">Waar&shy;nemingen</span>
+    </div>
   </div>
 
   <!-- ── Kaartgebied ────────────────────────────────────────────────────── -->
@@ -1099,13 +1053,18 @@ async function fetchWindData() {
     const resp = await fetchWithTimeout(windUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) { setTimeout(fetchWindData, 3000); return; }
     renderWindMarkers(geojson);
     _markFetched('wind');
-    if (activeLayer === 'wind') _statusFromGeoJSON(geojson);
+    if (activeLayer === 'wind') {
+      const opgehaald = geojson.opgehaald
+        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+        : new Date().toLocaleTimeString('nl-NL');
+      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    }
   } catch (err) {
-    console.error('[wind]', err);
-    setTimeout(fetchWindData, 3000);
+    console.error(err);
+    if (activeLayer === 'wind') setStatus('error', 'Opnieuw laden…');
+    setTimeout(() => { if (activeLayer === 'wind') fetchWindData().then(startCountdown); }, 5000);
   }
 }
 
@@ -1276,13 +1235,23 @@ async function fetchMetarData() {
     const resp = await fetchWithTimeout(metarUrl(), 60000);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) { setTimeout(fetchMetarData, 3000); return; }
+    if (geojson.laden) {
+      if (activeLayer === 'metar') setStatus('loading', 'METAR data wordt geladen…');
+      setTimeout(() => { if (activeLayer === 'metar') fetchMetarData().then(startCountdown); }, 5000);
+      return;
+    }
     renderMetarMarkers(geojson);
     _markFetched('metar');
-    if (activeLayer === 'metar') _statusFromGeoJSON(geojson);
+    if (activeLayer === 'metar') {
+      const opgehaald = geojson.opgehaald
+        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+        : new Date().toLocaleTimeString('nl-NL');
+      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    }
   } catch (err) {
-    console.error('[metar]', err);
-    setTimeout(fetchMetarData, 3000);
+    console.error(err);
+    if (activeLayer === 'metar') setStatus('error', 'Opnieuw laden…');
+    setTimeout(() => { if (activeLayer === 'metar') fetchMetarData().then(startCountdown); }, 5000);
   }
 }
 
@@ -1590,13 +1559,18 @@ async function fetchZichtData() {
     const resp = await fetchWithTimeout(zichtUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) { setTimeout(fetchZichtData, 3000); return; }
     renderZichtMarkers(geojson);
     _markFetched('zicht');
-    if (activeLayer === 'zicht') _statusFromGeoJSON(geojson);
+    if (activeLayer === 'zicht') {
+      const opgehaald = geojson.opgehaald
+        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+        : new Date().toLocaleTimeString('nl-NL');
+      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    }
   } catch (err) {
-    console.error('[zicht]', err);
-    setTimeout(fetchZichtData, 3000);
+    console.error(err);
+    if (activeLayer === 'zicht') setStatus('error', 'Opnieuw laden…');
+    setTimeout(() => { if (activeLayer === 'zicht') fetchZichtData().then(startCountdown); }, 5000);
   }
 }
 
@@ -1715,13 +1689,23 @@ async function fetchTempData() {
     const resp = await fetchWithTimeout(tempUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) { setTimeout(fetchTempData, 3000); return; }
+    if (geojson.laden) {
+      if (activeLayer === 'temp') setStatus('loading', 'temperatuurdata wordt geladen…');
+      setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
+      return;
+    }
     renderTempMarkers(geojson);
     _markFetched('temp');
-    if (activeLayer === 'temp') _statusFromGeoJSON(geojson);
+    if (activeLayer === 'temp') {
+      const opgehaald = geojson.opgehaald
+        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+        : new Date().toLocaleTimeString('nl-NL');
+      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    }
   } catch (err) {
-    console.error('[temp]', err);
-    setTimeout(fetchTempData, 3000);
+    console.error(err);
+    if (activeLayer === 'temp') setStatus('error', 'Opnieuw laden…');
+    setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
   }
 }
 
@@ -1733,7 +1717,7 @@ function selectSection(section) {
   if (section === activeSection) return;
   activeSection = section;
 
-  document.querySelectorAll('.sidebar-section-label').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
   document.getElementById(`tab-${section}`).classList.add('active');
 
   const nav        = document.querySelector('nav');
@@ -1786,27 +1770,27 @@ function selectLayer(layer) {
   if (layer === 'golf') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastWaveGeoJSON && _isFresh('golf')) { renderMarkers(_lastWaveGeoJSON); _statusFromGeoJSON(_lastWaveGeoJSON); startCountdown(); }
+    if (_lastWaveGeoJSON && _isFresh('golf')) { _hideAllGroups(); _waveGroup.addTo(map); _statusFromGeoJSON(_lastWaveGeoJSON); startCountdown(); }
     else fetchWaveData().then(startCountdown);
   } else if (layer === 'temp') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastTempGeoJSON && _isFresh('temp')) { renderTempMarkers(_lastTempGeoJSON); _statusFromGeoJSON(_lastTempGeoJSON); startCountdown(); }
+    if (_lastTempGeoJSON && _isFresh('temp')) { _hideAllGroups(); _tempGroup.addTo(map); _statusFromGeoJSON(_lastTempGeoJSON); startCountdown(); }
     else fetchTempData().then(startCountdown);
   } else if (layer === 'wind') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastWindGeoJSON && _isFresh('wind')) { renderWindMarkers(_lastWindGeoJSON); _statusFromGeoJSON(_lastWindGeoJSON); startCountdown(); }
+    if (_lastWindGeoJSON && _isFresh('wind')) { _hideAllGroups(); _windGroup.addTo(map); _statusFromGeoJSON(_lastWindGeoJSON); startCountdown(); }
     else fetchWindData().then(startCountdown);
   } else if (layer === 'zicht') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastZichtGeoJSON && _isFresh('zicht')) { renderZichtMarkers(_lastZichtGeoJSON); _statusFromGeoJSON(_lastZichtGeoJSON); startCountdown(); }
+    if (_lastZichtGeoJSON && _isFresh('zicht')) { _hideAllGroups(); _zichtGroup.addTo(map); _statusFromGeoJSON(_lastZichtGeoJSON); startCountdown(); }
     else fetchZichtData().then(startCountdown);
   } else if (layer === 'metar') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastMetarGeoJSON && _isFresh('metar')) { renderMetarMarkers(_lastMetarGeoJSON); _statusFromGeoJSON(_lastMetarGeoJSON); startCountdown(); }
+    if (_lastMetarGeoJSON && _isFresh('metar')) { _hideAllGroups(); _metarGroup.addTo(map); _statusFromGeoJSON(_lastMetarGeoJSON); startCountdown(); }
     else fetchMetarData().then(startCountdown);
   } else if (layer === 'bliksem') {
     mapEl.style.display      = '';
@@ -1834,7 +1818,7 @@ function selectLayer(layer) {
 // ── Kaartdata ─────────────────────────────────────────────────────────────────
 const LOCAL     = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const PROXY_URL = LOCAL ? 'http://localhost:3001' : 'https://noordzee-proxy.onrender.com';
-const REPO_RAW  = 'https://raw.githubusercontent.com/awillemse-dev/golfhoogtes-noordzee/main';
+
 function wavesUrl()       { return `${PROXY_URL}/api/waves`; }
 function historyUrl(code) { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
 
@@ -1905,16 +1889,21 @@ async function fetchWaveData() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     if (geojson.laden) {
-      // Proxy cache nog niet klaar — altijd herproberen (ook als tab niet actief is)
-      setTimeout(fetchWaveData, 3000);
+      setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
       return;
     }
     renderMarkers(geojson);
     _markFetched('golf');
-    if (activeLayer === 'golf') _statusFromGeoJSON(geojson);
+    if (activeLayer === 'golf') {
+      const opgehaald = geojson.opgehaald
+        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+        : new Date().toLocaleTimeString('nl-NL');
+      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
+    }
   } catch (err) {
-    console.error('[waves]', err);
-    setTimeout(fetchWaveData, 3000);
+    console.error(err);
+    if (activeLayer === 'golf') setStatus('error', 'Opnieuw laden…');
+    setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
   }
 }
 
@@ -2125,6 +2114,11 @@ function _markFetched(layer) {
   _layerFetchedAt[layer] = Date.now();
 }
 
+// ── Keep-alive ping (voorkomt slaapstand op Render free tier) ─────────────────
+if (!LOCAL) {
+  setInterval(() => fetch(`${PROXY_URL}/api/ping`, { cache: 'no-store' }).catch(() => {}), 9 * 60 * 1000);
+}
+
 // ── Hervat bliksem feed als tab weer zichtbaar wordt ─────────────────────────
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || activeLayer !== 'bliksem') return;
@@ -2165,14 +2159,6 @@ function startCountdown() {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-// Pre-load: toon data direct vanuit statisch bestand (snel, altijd beschikbaar).
-// fetchWaveData() haalt daarna de volledige data op via de proxy (meer bronnen).
-if (!LOCAL) {
-  fetch(`${REPO_RAW}/data/waves.json`, { cache: 'no-store' })
-    .then(r => r.ok ? r.json() : null)
-    .then(geo => { if (geo && !geo.laden && !_lastWaveGeoJSON) { renderMarkers(geo); if (activeLayer === 'golf') _statusFromGeoJSON(geo); } })
-    .catch(() => {});
-}
 fetchWaveData().then(startCountdown);
 
 // Achtergrond-prefetch: bouw laaggroepen stilletjes voor zodat tabwisseling instant is.
