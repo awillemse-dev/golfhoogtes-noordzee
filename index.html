@@ -979,7 +979,7 @@ function renderTempMarkers(geojson) {
   if (activeLayer === 'temp') { _hideAllGroups(); _tempGroup.addTo(map); }
 }
 
-function tempUrl()            { return `${PROXY_URL}/api/temp`; }
+function tempUrl()            { return LOCAL ? `${PROXY_URL}/api/temp` : `${REPO_RAW}/data/temp.json`; }
 function tempHistoryUrl(code) { return `${PROXY_URL}/api/temp-history?code=${encodeURIComponent(code)}`; }
 
 // ── Windsnelheid ──────────────────────────────────────────────────────────────
@@ -1864,8 +1864,11 @@ function selectLayer(layer) {
 // ── Kaartdata ─────────────────────────────────────────────────────────────────
 const LOCAL     = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const PROXY_URL = LOCAL ? 'http://localhost:3001' : 'https://noordzee-proxy.onrender.com';
+const REPO_RAW  = 'https://raw.githubusercontent.com/awillemse-dev/golfhoogtes-noordzee/main';
 
-function wavesUrl()       { return `${PROXY_URL}/api/waves`; }
+// Golfhoogte en temp worden als statische bestanden bijgehouden in de repo (elke 10 min via
+// GitHub Actions). Laden direct van GitHub CDN — geen proxy wake-up nodig.
+function wavesUrl()       { return LOCAL ? `${PROXY_URL}/api/waves` : `${REPO_RAW}/data/waves.json`; }
 function historyUrl(code) { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
 
 let markers = [];
