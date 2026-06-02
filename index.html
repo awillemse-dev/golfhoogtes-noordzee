@@ -1099,18 +1099,13 @@ async function fetchWindData() {
     const resp = await fetchWithTimeout(windUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
+    if (geojson.laden) { setTimeout(fetchWindData, 3000); return; }
     renderWindMarkers(geojson);
     _markFetched('wind');
-    if (activeLayer === 'wind') {
-      const opgehaald = geojson.opgehaald
-        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
-        : new Date().toLocaleTimeString('nl-NL');
-      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
-    }
+    if (activeLayer === 'wind') _statusFromGeoJSON(geojson);
   } catch (err) {
-    console.error(err);
-    if (activeLayer === 'wind') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'wind') fetchWindData().then(startCountdown); }, 5000);
+    console.error('[wind]', err);
+    setTimeout(fetchWindData, 3000);
   }
 }
 
@@ -1281,23 +1276,13 @@ async function fetchMetarData() {
     const resp = await fetchWithTimeout(metarUrl(), 60000);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) {
-      if (activeLayer === 'metar') setStatus('loading', 'METAR data wordt geladen…');
-      setTimeout(() => { if (activeLayer === 'metar') fetchMetarData().then(startCountdown); }, 5000);
-      return;
-    }
+    if (geojson.laden) { setTimeout(fetchMetarData, 3000); return; }
     renderMetarMarkers(geojson);
     _markFetched('metar');
-    if (activeLayer === 'metar') {
-      const opgehaald = geojson.opgehaald
-        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
-        : new Date().toLocaleTimeString('nl-NL');
-      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
-    }
+    if (activeLayer === 'metar') _statusFromGeoJSON(geojson);
   } catch (err) {
-    console.error(err);
-    if (activeLayer === 'metar') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'metar') fetchMetarData().then(startCountdown); }, 5000);
+    console.error('[metar]', err);
+    setTimeout(fetchMetarData, 3000);
   }
 }
 
@@ -1605,23 +1590,13 @@ async function fetchZichtData() {
     const resp = await fetchWithTimeout(zichtUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) {
-      if (activeLayer === 'zicht') setStatus('loading', 'Zichtdata wordt geladen…');
-      setTimeout(() => { if (activeLayer === 'zicht') fetchZichtData().then(startCountdown); }, 5000);
-      return;
-    }
+    if (geojson.laden) { setTimeout(fetchZichtData, 3000); return; }
     renderZichtMarkers(geojson);
     _markFetched('zicht');
-    if (activeLayer === 'zicht') {
-      const opgehaald = geojson.opgehaald
-        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
-        : new Date().toLocaleTimeString('nl-NL');
-      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
-    }
+    if (activeLayer === 'zicht') _statusFromGeoJSON(geojson);
   } catch (err) {
-    console.error(err);
-    if (activeLayer === 'zicht') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'zicht') fetchZichtData().then(startCountdown); }, 5000);
+    console.error('[zicht]', err);
+    setTimeout(fetchZichtData, 3000);
   }
 }
 
@@ -1740,23 +1715,13 @@ async function fetchTempData() {
     const resp = await fetchWithTimeout(tempUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) {
-      if (activeLayer === 'temp') setStatus('loading', 'temperatuurdata wordt geladen…');
-      setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
-      return;
-    }
+    if (geojson.laden) { setTimeout(fetchTempData, 3000); return; }
     renderTempMarkers(geojson);
     _markFetched('temp');
-    if (activeLayer === 'temp') {
-      const opgehaald = geojson.opgehaald
-        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
-        : new Date().toLocaleTimeString('nl-NL');
-      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
-    }
+    if (activeLayer === 'temp') _statusFromGeoJSON(geojson);
   } catch (err) {
-    console.error(err);
-    if (activeLayer === 'temp') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
+    console.error('[temp]', err);
+    setTimeout(fetchTempData, 3000);
   }
 }
 
@@ -1869,10 +1834,7 @@ function selectLayer(layer) {
 // ── Kaartdata ─────────────────────────────────────────────────────────────────
 const LOCAL     = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const PROXY_URL = LOCAL ? 'http://localhost:3001' : 'https://noordzee-proxy.onrender.com';
-const REPO_RAW  = 'https://raw.githubusercontent.com/awillemse-dev/golfhoogtes-noordzee/main';
-
-// Proxy heeft meer bronnen (MVB, NDBC, etc.) dan het statisch bestand.
-// wavesUrl/tempUrl wijzen altijd naar de proxy voor complete data.
+// Proxy heeft meer bronnen (MVB, NDBC, etc.) — altijd actief op betaald Render plan.
 function wavesUrl()       { return `${PROXY_URL}/api/waves`; }
 function historyUrl(code) { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
 
@@ -1943,21 +1905,16 @@ async function fetchWaveData() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     if (geojson.laden) {
-      setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
+      // Proxy cache nog niet klaar — altijd herproberen (ook als tab niet actief is)
+      setTimeout(fetchWaveData, 3000);
       return;
     }
     renderMarkers(geojson);
     _markFetched('golf');
-    if (activeLayer === 'golf') {
-      const opgehaald = geojson.opgehaald
-        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
-        : new Date().toLocaleTimeString('nl-NL');
-      setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
-    }
+    if (activeLayer === 'golf') _statusFromGeoJSON(geojson);
   } catch (err) {
-    console.error(err);
-    if (activeLayer === 'golf') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
+    console.error('[waves]', err);
+    setTimeout(fetchWaveData, 3000);
   }
 }
 
@@ -2168,11 +2125,6 @@ function _markFetched(layer) {
   _layerFetchedAt[layer] = Date.now();
 }
 
-// ── Keep-alive ping (voorkomt slaapstand op Render free tier) ─────────────────
-if (!LOCAL) {
-  setInterval(() => fetch(`${PROXY_URL}/api/ping`, { cache: 'no-store' }).catch(() => {}), 9 * 60 * 1000);
-}
-
 // ── Hervat bliksem feed als tab weer zichtbaar wordt ─────────────────────────
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || activeLayer !== 'bliksem') return;
@@ -2213,18 +2165,6 @@ function startCountdown() {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-// Proxy wakker pingen: golf/temp gaan via CDN, proxy wordt anders pas aangesproken
-// als de gebruiker wind/zicht/metar opent. Ping alvast zodat hij warm is.
-if (!LOCAL) fetch(`${PROXY_URL}/api/ping`, { cache: 'no-store' }).catch(() => {});
-
-// Pre-load: toon data direct vanuit statisch bestand (snel, geen proxy wake-up).
-// fetchWaveData() haalt daarna de volledige data op via de proxy (meer bronnen).
-if (!LOCAL) {
-  fetch(`${REPO_RAW}/data/waves.json`, { cache: 'no-store' })
-    .then(r => r.ok ? r.json() : null)
-    .then(geo => { if (geo && !geo.laden && !_lastWaveGeoJSON) { renderMarkers(geo); if (activeLayer === 'golf') _statusFromGeoJSON(geo); } })
-    .catch(() => {});
-}
 fetchWaveData().then(startCountdown);
 
 // Achtergrond-prefetch: bouw laaggroepen stilletjes voor zodat tabwisseling instant is.
