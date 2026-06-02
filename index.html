@@ -1834,7 +1834,7 @@ function selectLayer(layer) {
 // ── Kaartdata ─────────────────────────────────────────────────────────────────
 const LOCAL     = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const PROXY_URL = LOCAL ? 'http://localhost:3001' : 'https://noordzee-proxy.onrender.com';
-// Proxy heeft meer bronnen (MVB, NDBC, etc.) — altijd actief op betaald Render plan.
+const REPO_RAW  = 'https://raw.githubusercontent.com/awillemse-dev/golfhoogtes-noordzee/main';
 function wavesUrl()       { return `${PROXY_URL}/api/waves`; }
 function historyUrl(code) { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
 
@@ -2165,6 +2165,14 @@ function startCountdown() {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
+// Pre-load: toon data direct vanuit statisch bestand (snel, altijd beschikbaar).
+// fetchWaveData() haalt daarna de volledige data op via de proxy (meer bronnen).
+if (!LOCAL) {
+  fetch(`${REPO_RAW}/data/waves.json`, { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null)
+    .then(geo => { if (geo && !geo.laden && !_lastWaveGeoJSON) { renderMarkers(geo); if (activeLayer === 'golf') _statusFromGeoJSON(geo); } })
+    .catch(() => {});
+}
 fetchWaveData().then(startCountdown);
 
 // Achtergrond-prefetch: bouw laaggroepen stilletjes voor zodat tabwisseling instant is.
