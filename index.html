@@ -979,7 +979,7 @@ function renderTempMarkers(geojson) {
   if (activeLayer === 'temp') { _hideAllGroups(); _tempGroup.addTo(map); }
 }
 
-function tempUrl()            { return LOCAL ? `${PROXY_URL}/api/temp` : `${REPO_RAW}/data/temp.json`; }
+function tempUrl()            { return `${PROXY_URL}/api/temp`; }
 function tempHistoryUrl(code) { return `${PROXY_URL}/api/temp-history?code=${encodeURIComponent(code)}`; }
 
 // ── Windsnelheid ──────────────────────────────────────────────────────────────
@@ -1866,9 +1866,9 @@ const LOCAL     = window.location.hostname === 'localhost' || window.location.ho
 const PROXY_URL = LOCAL ? 'http://localhost:3001' : 'https://noordzee-proxy.onrender.com';
 const REPO_RAW  = 'https://raw.githubusercontent.com/awillemse-dev/golfhoogtes-noordzee/main';
 
-// Golfhoogte en temp worden als statische bestanden bijgehouden in de repo (elke 10 min via
-// GitHub Actions). Laden direct van GitHub CDN — geen proxy wake-up nodig.
-function wavesUrl()       { return LOCAL ? `${PROXY_URL}/api/waves` : `${REPO_RAW}/data/waves.json`; }
+// Proxy heeft meer bronnen (MVB, NDBC, etc.) dan het statisch bestand.
+// wavesUrl/tempUrl wijzen altijd naar de proxy voor complete data.
+function wavesUrl()       { return `${PROXY_URL}/api/waves`; }
 function historyUrl(code) { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
 
 let markers = [];
@@ -2208,6 +2208,14 @@ function startCountdown() {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
+// Pre-load: toon data direct vanuit statisch bestand (snel, geen proxy wake-up).
+// fetchWaveData() haalt daarna de volledige data op via de proxy (meer bronnen).
+if (!LOCAL) {
+  fetch(`${REPO_RAW}/data/waves.json`, { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null)
+    .then(geo => { if (geo && !geo.laden && !_lastWaveGeoJSON) { renderMarkers(geo); if (activeLayer === 'golf') _statusFromGeoJSON(geo); } })
+    .catch(() => {});
+}
 fetchWaveData().then(startCountdown);
 
 // Achtergrond-prefetch: bouw laaggroepen stilletjes voor zodat tabwisseling instant is.
