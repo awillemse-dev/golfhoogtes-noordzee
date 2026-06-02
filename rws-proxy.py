@@ -3001,7 +3001,7 @@ def _load_coastal_stations():
             elev_ft = float(row["elevation_ft"]) if row.get("elevation_ft") else None
         except ValueError:
             continue
-        if elev_ft is None or elev_ft > 33:   # 33 ft ≈ 10 m
+        if elev_ft is None or elev_ft > 500:   # 500 ft ≈ 150 m – sluit alleen hoog binnenland uit
             continue
         try:
             lat = float(row["latitude_deg"])

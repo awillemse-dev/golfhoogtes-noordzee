@@ -2208,6 +2208,10 @@ function startCountdown() {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
+// Proxy wakker pingen: golf/temp gaan via CDN, proxy wordt anders pas aangesproken
+// als de gebruiker wind/zicht/metar opent. Ping alvast zodat hij warm is.
+if (!LOCAL) fetch(`${PROXY_URL}/api/ping`, { cache: 'no-store' }).catch(() => {});
+
 // Pre-load: toon data direct vanuit statisch bestand (snel, geen proxy wake-up).
 // fetchWaveData() haalt daarna de volledige data op via de proxy (meer bronnen).
 if (!LOCAL) {
