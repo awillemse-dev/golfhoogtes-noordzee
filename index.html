@@ -1062,9 +1062,9 @@ async function fetchWindData() {
       setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
     }
   } catch (err) {
-    console.error(err);
+    console.error('[wind]', err);
     if (activeLayer === 'wind') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'wind') fetchWindData().then(startCountdown); }, 5000);
+    setTimeout(fetchWindData, 3000);
   }
 }
 
@@ -1235,11 +1235,7 @@ async function fetchMetarData() {
     const resp = await fetchWithTimeout(metarUrl(), 60000);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) {
-      if (activeLayer === 'metar') setStatus('loading', 'METAR data wordt geladen…');
-      setTimeout(() => { if (activeLayer === 'metar') fetchMetarData().then(startCountdown); }, 5000);
-      return;
-    }
+    if (geojson.laden) { setTimeout(fetchMetarData, 3000); return; }
     renderMetarMarkers(geojson);
     _markFetched('metar');
     if (activeLayer === 'metar') {
@@ -1249,9 +1245,9 @@ async function fetchMetarData() {
       setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
     }
   } catch (err) {
-    console.error(err);
+    console.error('[metar]', err);
     if (activeLayer === 'metar') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'metar') fetchMetarData().then(startCountdown); }, 5000);
+    setTimeout(fetchMetarData, 3000);
   }
 }
 
@@ -1559,6 +1555,7 @@ async function fetchZichtData() {
     const resp = await fetchWithTimeout(zichtUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
+    if (geojson.laden) { setTimeout(fetchZichtData, 3000); return; }
     renderZichtMarkers(geojson);
     _markFetched('zicht');
     if (activeLayer === 'zicht') {
@@ -1568,9 +1565,9 @@ async function fetchZichtData() {
       setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
     }
   } catch (err) {
-    console.error(err);
+    console.error('[zicht]', err);
     if (activeLayer === 'zicht') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'zicht') fetchZichtData().then(startCountdown); }, 5000);
+    setTimeout(fetchZichtData, 3000);
   }
 }
 
@@ -1689,11 +1686,7 @@ async function fetchTempData() {
     const resp = await fetchWithTimeout(tempUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) {
-      if (activeLayer === 'temp') setStatus('loading', 'temperatuurdata wordt geladen…');
-      setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
-      return;
-    }
+    if (geojson.laden) { setTimeout(fetchTempData, 3000); return; }
     renderTempMarkers(geojson);
     _markFetched('temp');
     if (activeLayer === 'temp') {
@@ -1703,9 +1696,9 @@ async function fetchTempData() {
       setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
     }
   } catch (err) {
-    console.error(err);
+    console.error('[temp]', err);
     if (activeLayer === 'temp') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
+    setTimeout(fetchTempData, 3000);
   }
 }
 
@@ -1888,10 +1881,7 @@ async function fetchWaveData() {
     const resp = await fetchWithTimeout(wavesUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) {
-      setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
-      return;
-    }
+    if (geojson.laden) { setTimeout(fetchWaveData, 3000); return; }
     renderMarkers(geojson);
     _markFetched('golf');
     if (activeLayer === 'golf') {
@@ -1901,9 +1891,9 @@ async function fetchWaveData() {
       setStatus('ok', `${geojson.aantalStations} stations · ${opgehaald}`);
     }
   } catch (err) {
-    console.error(err);
+    console.error('[waves]', err);
     if (activeLayer === 'golf') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
+    setTimeout(fetchWaveData, 3000);
   }
 }
 
@@ -2192,10 +2182,10 @@ function _bgBuildTemp(geo) {
   if (activeLayer === 'temp') { _hideAllGroups(); _tempGroup.addTo(map); _statusFromGeoJSON(geo); }
 }
 
-setTimeout(() => _bgPrefetch(tempUrl(),  () => _isFresh('temp'),  _bgBuildTemp,  8000),  5000);
-setTimeout(() => { if (!_isFresh('wind'))  fetchWindData();  }, 12000);
-setTimeout(() => { if (!_isFresh('zicht')) fetchZichtData(); }, 18000);
-setTimeout(() => { if (!_isFresh('metar')) fetchMetarData(); }, 24000);
+setTimeout(() => _bgPrefetch(tempUrl(),  () => _isFresh('temp'),  _bgBuildTemp,  5000),  2000);
+setTimeout(() => { if (!_isFresh('wind'))  fetchWindData();  },  4000);
+setTimeout(() => { if (!_isFresh('zicht')) fetchZichtData(); },  6000);
+setTimeout(() => { if (!_isFresh('metar')) fetchMetarData(); },  8000);
 
 // ── Radar (KNMI WMS + RainViewer Europa) ─────────────────────────────────────
 const RADAR_WMS   = 'https://anonymous.api.dataplatform.knmi.nl/wms/adaguc-server';

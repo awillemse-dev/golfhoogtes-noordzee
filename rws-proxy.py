@@ -2978,8 +2978,10 @@ def get_nl_border():
 
 # ── Nederland actuele waarnemingen (Buienradar/KNMI) ─────────────────────────
 
-_knmi_cache = None
-_knmi_time  = 0
+_knmi_cache        = None
+_knmi_time         = 0
+_knmi_vis_features = []   # alle KNMI-stations met vv (geen temp-eis, incl. offshore)
+_vis_cache_ready   = False
 
 def _load_coastal_stations():
     """Bouw eenmalig een dict van kust-ICAO codes vanuit OurAirports CSV (elev ≤ 10m / 33ft)."""
@@ -3123,6 +3125,7 @@ def get_metar_data():
 
 def fetch_knmi_data():
     """Haalt actuele waarnemingen op van Buienradar (elke 10 min, geen API key)."""
+    global _knmi_vis_features, _vis_cache_ready
     req = urllib.request.Request(
         BUIENRADAR_URL,
         headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
@@ -3133,7 +3136,9 @@ def fetch_knmi_data():
     stations = data.get("actual", {}).get("stationmeasurements", [])
     now = datetime.now(timezone.utc)
 
-    features = []
+    features    = []   # temp/wind-laag: vereist temperatuur, geen offshore platforms
+    vis_list    = []   # zicht-laag: alle stations met vv (ook offshore, geen temp-eis)
+
     for s in stations:
         lat = s.get("lat")
         lon = s.get("lon")
@@ -3142,37 +3147,51 @@ def fetch_knmi_data():
         if lat < 50.5 or lat > 55.5 or lon < 2.5 or lon > 8.0:
             continue
 
-        naam = s.get("stationname", "").replace("Meetstation ", "")
-
-        # Sla offshore/zee-platforms over (Lichteiland, Europlatform, K13, etc.)
+        naam   = s.get("stationname", "").replace("Meetstation ", "")
         naam_l = naam.lower()
+        ts     = s.get("timestamp", now.isoformat())
+        sid    = str(s.get("stationid", ""))
+
+        def fval(key, _s=s):
+            v = _s.get(key)
+            return round(float(v), 2) if v is not None and v != "" else None
+
+        def ival(key, _s=s):
+            v = _s.get(key)
+            return int(v) if v is not None and v != "" else None
+
+        temp   = fval("temperature")
+        vv_m   = fval("visibility")
+        vv     = round(vv_m / 1000, 2) if vv_m is not None else None
+
+        # ── Zicht-laag: alle stations met zichtdata, ook offshore platforms ──
+        if vv is not None:
+            vis_list.append({
+                "type":     "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {
+                    "code":    f"knmi.vis.{sid}",
+                    "naam":    naam,
+                    "bron":    "Buienradar/KNMI",
+                    "tijdstip": ts,
+                    "vv":      vv,
+                    "ta":      temp,
+                },
+            })
+
+        # ── Temp/wind-laag: geen offshore platforms, temperatuur verplicht ──
         if any(kw in naam_l for kw in (
             "lichteiland", "europlatform", "k13", "meetpost", "platform",
             "roughness", "north sea", "noordzee",
         )):
             continue
-        ts   = s.get("timestamp", now.isoformat())
-
-        def fval(key):
-            v = s.get(key)
-            return round(float(v), 2) if v is not None and v != "" else None
-
-        def ival(key):
-            v = s.get(key)
-            return int(v) if v is not None and v != "" else None
-
-        # Sla stations zonder temperatuurdata over
-        temp = fval("temperature")
         if temp is None:
             continue
 
         dd_raw = ival("winddirectiondegrees")
         dd     = None if dd_raw in (0, 990) else dd_raw
-        vv_m   = fval("visibility")
-        vv     = round(vv_m / 1000, 2) if vv_m is not None else None
         rh     = fval("rainFallLastHour")
 
-        sid = str(s.get("stationid", ""))
         features.append({
             "type":     "Feature",
             "geometry": {"type": "Point", "coordinates": [lon, lat]},
@@ -3200,7 +3219,9 @@ def fetch_knmi_data():
             },
         })
 
-    print(f"[KNMI/BR] {len(features)} stations geladen")
+    _knmi_vis_features = vis_list
+    _vis_cache_ready   = True
+    print(f"[KNMI/BR] {len(features)} temp-stations, {len(vis_list)} zicht-stations geladen")
     return {
         "type":           "FeatureCollection",
         "features":       features,
@@ -3419,10 +3440,12 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
         # ── /api/visibility ──────────────────────────────────────────────
         elif path == "/api/visibility":
             try:
-                knmi = get_knmi_data()
-                knmi_vis = [f for f in knmi.get("features", [])
-                            if f["properties"].get("vv") is not None]
-                features = knmi_vis + _ndbc_vis_features + _ocean_vis_features
+                if not _vis_cache_ready:
+                    self.send_response(200)
+                    self._send_json(json.dumps({"type": "FeatureCollection", "features": [],
+                                                "aantalStations": 0, "laden": True}).encode())
+                    return
+                features = _knmi_vis_features + _ndbc_vis_features + _ocean_vis_features
                 data = {
                     "type": "FeatureCollection",
                     "features": features,
@@ -3449,9 +3472,7 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
                     raise ValueError("code parameter verplicht")
 
                 # Zoek lat/lon op in alle zicht-caches
-                knmi_vis = [f for f in get_knmi_data().get("features", [])
-                            if f["properties"].get("vv") is not None]
-                all_vis  = knmi_vis + _ndbc_vis_features + _ocean_vis_features
+                all_vis = _knmi_vis_features + _ndbc_vis_features + _ocean_vis_features
                 lat = lon = None
                 for f in all_vis:
                     if f["properties"].get("code") == code:
