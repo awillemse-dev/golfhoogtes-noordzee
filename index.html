@@ -1605,6 +1605,11 @@ async function fetchZichtData() {
     const resp = await fetchWithTimeout(zichtUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
+    if (geojson.laden) {
+      if (activeLayer === 'zicht') setStatus('loading', 'Zichtdata wordt geladen…');
+      setTimeout(() => { if (activeLayer === 'zicht') fetchZichtData().then(startCountdown); }, 5000);
+      return;
+    }
     renderZichtMarkers(geojson);
     _markFetched('zicht');
     if (activeLayer === 'zicht') {
