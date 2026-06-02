@@ -1816,27 +1816,27 @@ function selectLayer(layer) {
   if (layer === 'golf') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastWaveGeoJSON && _isFresh('golf')) { _hideAllGroups(); _waveGroup.addTo(map); _statusFromGeoJSON(_lastWaveGeoJSON); startCountdown(); }
+    if (_lastWaveGeoJSON && _isFresh('golf')) { renderMarkers(_lastWaveGeoJSON); _statusFromGeoJSON(_lastWaveGeoJSON); startCountdown(); }
     else fetchWaveData().then(startCountdown);
   } else if (layer === 'temp') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastTempGeoJSON && _isFresh('temp')) { _hideAllGroups(); _tempGroup.addTo(map); _statusFromGeoJSON(_lastTempGeoJSON); startCountdown(); }
+    if (_lastTempGeoJSON && _isFresh('temp')) { renderTempMarkers(_lastTempGeoJSON); _statusFromGeoJSON(_lastTempGeoJSON); startCountdown(); }
     else fetchTempData().then(startCountdown);
   } else if (layer === 'wind') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastWindGeoJSON && _isFresh('wind')) { _hideAllGroups(); _windGroup.addTo(map); _statusFromGeoJSON(_lastWindGeoJSON); startCountdown(); }
+    if (_lastWindGeoJSON && _isFresh('wind')) { renderWindMarkers(_lastWindGeoJSON); _statusFromGeoJSON(_lastWindGeoJSON); startCountdown(); }
     else fetchWindData().then(startCountdown);
   } else if (layer === 'zicht') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastZichtGeoJSON && _isFresh('zicht')) { _hideAllGroups(); _zichtGroup.addTo(map); _statusFromGeoJSON(_lastZichtGeoJSON); startCountdown(); }
+    if (_lastZichtGeoJSON && _isFresh('zicht')) { renderZichtMarkers(_lastZichtGeoJSON); _statusFromGeoJSON(_lastZichtGeoJSON); startCountdown(); }
     else fetchZichtData().then(startCountdown);
   } else if (layer === 'metar') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastMetarGeoJSON && _isFresh('metar')) { _hideAllGroups(); _metarGroup.addTo(map); _statusFromGeoJSON(_lastMetarGeoJSON); startCountdown(); }
+    if (_lastMetarGeoJSON && _isFresh('metar')) { renderMetarMarkers(_lastMetarGeoJSON); _statusFromGeoJSON(_lastMetarGeoJSON); startCountdown(); }
     else fetchMetarData().then(startCountdown);
   } else if (layer === 'bliksem') {
     mapEl.style.display      = '';
