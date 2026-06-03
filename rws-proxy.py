@@ -1074,7 +1074,6 @@ def fetch_ndbc_wind_history(station_id):
 
 _ndbc_wind_features = []   # gevuld door fetch_ndbc_data(), gebruikt door get_wind_data()
 _ndbc_vis_features  = []   # gevuld door fetch_ndbc_data(), gebruikt door /api/visibility
-_ndbc_wave_bg       = []   # achtergrond-cache: NDBC golfstations (blokkeert _do_refresh NIET)
 _ocean_vis_features = []   # gevuld door _refresh_ocean_vis_bg(), gebruikt door /api/visibility
 
 def fetch_ndbc_data():
@@ -1525,8 +1524,6 @@ FMI_WFS = ("https://opendata.fmi.fi/wfs?service=WFS&version=2.0.0"
            "&request=getFeature&storedquery_id=fmi::observations::wave::simple"
            "&bbox=-30,-90,50,90&maxlocations=500")
 
-_fmi_wave_bg = []   # achtergrond-cache: FMI golfstations (blokkeert _do_refresh NIET)
-
 _FMI_NS = {
     "wfs":   "http://www.opengis.net/wfs/2.0",
     "BsWfs": "http://xml.fmi.fi/schema/wfs/2.0",
@@ -1919,29 +1916,6 @@ def fetch_socib_wind_data():
     return features
 
 
-def _refresh_ndbc_bg():
-    """Vul _ndbc_wave_bg + _ndbc_wind/vis_features vanuit NOAA NDBC.
-    Blokkeert _do_refresh() NIET — grote file kan traag zijn op Render."""
-    global _ndbc_wave_bg
-    try:
-        waves = fetch_ndbc_data()   # zet ook _ndbc_wind_features en _ndbc_vis_features
-        _ndbc_wave_bg = waves
-        print(f"[NDBC bg] {len(waves)} golfstations geladen")
-    except Exception as e:
-        print(f"[NDBC bg] Fout: {e}")
-
-
-def _refresh_fmi_bg():
-    """Vul _fmi_wave_bg vanuit FMI (XML-download, kan variabel traag zijn)."""
-    global _fmi_wave_bg
-    try:
-        data = fetch_fmi_data()
-        _fmi_wave_bg = data
-        print(f"[FMI bg] {len(data)} stations geladen")
-    except Exception as e:
-        print(f"[FMI bg] Fout: {e}")
-
-
 def _refresh_cdip_bg():
     """Vul _cdip_bg vanuit CDIP THREDDS (kan 50s duren, blokkeert _do_refresh NIET)."""
     global _cdip_bg
@@ -2225,16 +2199,17 @@ def _do_refresh():
             _stations = []
 
     from concurrent.futures import wait as _wait
-    # NDBC en FMI komen uit de achtergrond-cache (_ndbc_wave_bg / _fmi_wave_bg)
-    # zodat _do_refresh nooit blokkeert op trage downloads.
-    ex = ThreadPoolExecutor(max_workers=5)
-    fut_rws     = ex.submit(fetch_latest_values, _stations)
-    fut_bsh     = ex.submit(fetch_bsh_data)
-    fut_cefas   = ex.submit(fetch_cefas_data)
-    fut_labouee = ex.submit(fetch_labouee_data)
-    fut_mvb     = ex.submit(fetch_mvb_data)
-    _wait([fut_rws, fut_bsh, fut_cefas, fut_labouee, fut_mvb], timeout=40)
-    ex.shutdown(wait=False)   # trage stragglers lopen door in achtergrond, blokkeren niet
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        fut_rws     = ex.submit(fetch_latest_values, _stations)
+        fut_bsh     = ex.submit(fetch_bsh_data)
+        fut_cefas   = ex.submit(fetch_cefas_data)
+        fut_labouee = ex.submit(fetch_labouee_data)
+        fut_ndbc    = ex.submit(fetch_ndbc_data)
+        fut_fmi     = ex.submit(fetch_fmi_data)
+        fut_mvb     = ex.submit(fetch_mvb_data)
+        # Wacht max 35s op alle snelle bronnen; daarna doorgaan met wat klaar is
+        _wait([fut_rws, fut_bsh, fut_cefas, fut_labouee, fut_ndbc, fut_fmi, fut_mvb], timeout=35)
+    # with-blok: resterende taken gecanceld, lopende threads netjes afgewacht
 
     try:
         waarnemingen = fut_rws.result() if fut_rws.done() else []
@@ -2244,7 +2219,8 @@ def _do_refresh():
     rws_geojson = build_geojson(_stations, waarnemingen)
 
     for fut, label in [(fut_bsh, "BSH"), (fut_cefas, "CEFAS"),
-                       (fut_labouee, "LaBouée"), (fut_mvb, "MVB")]:
+                       (fut_labouee, "LaBouée"), (fut_ndbc, "NDBC"),
+                       (fut_fmi, "FMI"), (fut_mvb, "MVB")]:
         if fut.done():
             try:
                 rws_geojson["features"].extend(fut.result())
@@ -2253,9 +2229,7 @@ def _do_refresh():
         else:
             print(f"[{label}] Timeout — overgeslagen")
 
-    # NDBC, FMI, CDIP en SOCIB uit achtergrond-cache (nooit blokkerend)
-    rws_geojson["features"].extend(_ndbc_wave_bg)
-    rws_geojson["features"].extend(_fmi_wave_bg)
+    # CDIP en SOCIB uit achtergrond-cache (nooit blokkerend)
     rws_geojson["features"].extend(_cdip_bg)
     rws_geojson["features"].extend(_socib_wave_bg)
 
@@ -3004,8 +2978,10 @@ def get_nl_border():
 
 # ── Nederland actuele waarnemingen (Buienradar/KNMI) ─────────────────────────
 
-_knmi_cache = None
-_knmi_time  = 0
+_knmi_cache        = None
+_knmi_time         = 0
+_knmi_vis_features = []   # alle KNMI-stations met vv (geen temp-eis, incl. offshore)
+_vis_cache_ready   = False
 
 def _load_coastal_stations():
     """Bouw eenmalig een dict van kust-ICAO codes vanuit OurAirports CSV (elev ≤ 10m / 33ft)."""
@@ -3149,6 +3125,7 @@ def get_metar_data():
 
 def fetch_knmi_data():
     """Haalt actuele waarnemingen op van Buienradar (elke 10 min, geen API key)."""
+    global _knmi_vis_features, _vis_cache_ready
     req = urllib.request.Request(
         BUIENRADAR_URL,
         headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
@@ -3159,7 +3136,9 @@ def fetch_knmi_data():
     stations = data.get("actual", {}).get("stationmeasurements", [])
     now = datetime.now(timezone.utc)
 
-    features = []
+    features    = []   # temp/wind-laag: vereist temperatuur, geen offshore platforms
+    vis_list    = []   # zicht-laag: alle stations met vv (ook offshore, geen temp-eis)
+
     for s in stations:
         lat = s.get("lat")
         lon = s.get("lon")
@@ -3168,37 +3147,51 @@ def fetch_knmi_data():
         if lat < 50.5 or lat > 55.5 or lon < 2.5 or lon > 8.0:
             continue
 
-        naam = s.get("stationname", "").replace("Meetstation ", "")
-
-        # Sla offshore/zee-platforms over (Lichteiland, Europlatform, K13, etc.)
+        naam   = s.get("stationname", "").replace("Meetstation ", "")
         naam_l = naam.lower()
+        ts     = s.get("timestamp", now.isoformat())
+        sid    = str(s.get("stationid", ""))
+
+        def fval(key, _s=s):
+            v = _s.get(key)
+            return round(float(v), 2) if v is not None and v != "" else None
+
+        def ival(key, _s=s):
+            v = _s.get(key)
+            return int(v) if v is not None and v != "" else None
+
+        temp   = fval("temperature")
+        vv_m   = fval("visibility")
+        vv     = round(vv_m / 1000, 2) if vv_m is not None else None
+
+        # ── Zicht-laag: alle stations met zichtdata, ook offshore platforms ──
+        if vv is not None:
+            vis_list.append({
+                "type":     "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {
+                    "code":    f"knmi.vis.{sid}",
+                    "naam":    naam,
+                    "bron":    "Buienradar/KNMI",
+                    "tijdstip": ts,
+                    "vv":      vv,
+                    "ta":      temp,
+                },
+            })
+
+        # ── Temp/wind-laag: geen offshore platforms, temperatuur verplicht ──
         if any(kw in naam_l for kw in (
             "lichteiland", "europlatform", "k13", "meetpost", "platform",
             "roughness", "north sea", "noordzee",
         )):
             continue
-        ts   = s.get("timestamp", now.isoformat())
-
-        def fval(key):
-            v = s.get(key)
-            return round(float(v), 2) if v is not None and v != "" else None
-
-        def ival(key):
-            v = s.get(key)
-            return int(v) if v is not None and v != "" else None
-
-        # Sla stations zonder temperatuurdata over
-        temp = fval("temperature")
         if temp is None:
             continue
 
         dd_raw = ival("winddirectiondegrees")
         dd     = None if dd_raw in (0, 990) else dd_raw
-        vv_m   = fval("visibility")
-        vv     = round(vv_m / 1000, 2) if vv_m is not None else None
         rh     = fval("rainFallLastHour")
 
-        sid = str(s.get("stationid", ""))
         features.append({
             "type":     "Feature",
             "geometry": {"type": "Point", "coordinates": [lon, lat]},
@@ -3226,7 +3219,9 @@ def fetch_knmi_data():
             },
         })
 
-    print(f"[KNMI/BR] {len(features)} stations geladen")
+    _knmi_vis_features = vis_list
+    _vis_cache_ready   = True
+    print(f"[KNMI/BR] {len(features)} temp-stations, {len(vis_list)} zicht-stations geladen")
     return {
         "type":           "FeatureCollection",
         "features":       features,
@@ -3445,10 +3440,12 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
         # ── /api/visibility ──────────────────────────────────────────────
         elif path == "/api/visibility":
             try:
-                knmi = get_knmi_data()
-                knmi_vis = [f for f in knmi.get("features", [])
-                            if f["properties"].get("vv") is not None]
-                features = knmi_vis + _ndbc_vis_features + _ocean_vis_features
+                if not _vis_cache_ready:
+                    self.send_response(200)
+                    self._send_json(json.dumps({"type": "FeatureCollection", "features": [],
+                                                "aantalStations": 0, "laden": True}).encode())
+                    return
+                features = _knmi_vis_features + _ndbc_vis_features + _ocean_vis_features
                 data = {
                     "type": "FeatureCollection",
                     "features": features,
@@ -3475,9 +3472,7 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
                     raise ValueError("code parameter verplicht")
 
                 # Zoek lat/lon op in alle zicht-caches
-                knmi_vis = [f for f in get_knmi_data().get("features", [])
-                            if f["properties"].get("vv") is not None]
-                all_vis  = knmi_vis + _ndbc_vis_features + _ocean_vis_features
+                all_vis = _knmi_vis_features + _ndbc_vis_features + _ocean_vis_features
                 lat = lon = None
                 for f in all_vis:
                     if f["properties"].get("code") == code:
@@ -4003,7 +3998,6 @@ if __name__ == "__main__":
         print("[CACHE] Fase 2: alle bronnen sequentieel laden…")
         _fase2_taken = (
             _refresh_temp_bg, get_knmi_data, _refresh_metar_bg,
-            _refresh_ndbc_bg, _refresh_fmi_bg,   # vóór get_wind_data zodat NDBC wind beschikbaar is
             get_wind_data, _refresh_ocean_vis_bg, _refresh_socib_bg, _refresh_cdip_bg,
         )
         for _taak in _fase2_taken:
