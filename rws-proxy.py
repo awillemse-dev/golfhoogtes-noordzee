@@ -2199,7 +2199,7 @@ def _do_refresh():
             _stations = []
 
     from concurrent.futures import wait as _wait
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    with ThreadPoolExecutor(max_workers=7) as ex:
         fut_rws     = ex.submit(fetch_latest_values, _stations)
         fut_bsh     = ex.submit(fetch_bsh_data)
         fut_cefas   = ex.submit(fetch_cefas_data)
@@ -2207,8 +2207,9 @@ def _do_refresh():
         fut_ndbc    = ex.submit(fetch_ndbc_data)
         fut_fmi     = ex.submit(fetch_fmi_data)
         fut_mvb     = ex.submit(fetch_mvb_data)
-        # Wacht max 35s op alle snelle bronnen; daarna doorgaan met wat klaar is
-        _wait([fut_rws, fut_bsh, fut_cefas, fut_labouee, fut_ndbc, fut_fmi, fut_mvb], timeout=35)
+        # Alle 7 taken starten tegelijk (max_workers=7) zodat FMI/NDBC/LaBouée
+        # niet hoeven te wachten op RWS/CEFAS/BSH voor ze kunnen beginnen.
+        _wait([fut_rws, fut_bsh, fut_cefas, fut_labouee, fut_ndbc, fut_fmi, fut_mvb], timeout=45)
     # with-blok: resterende taken gecanceld, lopende threads netjes afgewacht
 
     try:
