@@ -2204,6 +2204,14 @@ function startCountdown() {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
+// CDN pre-load: toon meteen golfdata uit statische JSON terwijl proxy opstart
+const REPO_RAW = 'https://raw.githubusercontent.com/awillemse-dev/golfhoogtes-noordzee/main';
+if (!LOCAL) {
+  fetch(`${REPO_RAW}/data/waves.json`, { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null)
+    .then(geo => { if (geo && !geo.laden && !_lastWaveGeoJSON) { renderMarkers(geo); if (activeLayer === 'golf') _statusFromGeoJSON(geo); } })
+    .catch(() => {});
+}
 fetchWaveData().then(startCountdown);
 
 // Achtergrond-prefetch: bouw laaggroepen stilletjes voor zodat tabwisseling instant is.

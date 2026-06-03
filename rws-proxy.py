@@ -8,6 +8,7 @@ ze als GeoJSON met CORS-headers zodat de kaartpagina ze kan gebruiken.
 Gebruik:  python3 rws-proxy.py
 Vereist:  Python 3.6+  (geen pip-packages nodig)
 Poort:    3001
+Versie:   2026-06-04
 """
 
 import json
