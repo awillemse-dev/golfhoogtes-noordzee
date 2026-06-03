@@ -1074,6 +1074,7 @@ def fetch_ndbc_wind_history(station_id):
 
 _ndbc_wind_features = []   # gevuld door fetch_ndbc_data(), gebruikt door get_wind_data()
 _ndbc_vis_features  = []   # gevuld door fetch_ndbc_data(), gebruikt door /api/visibility
+_ndbc_wave_bg       = []   # achtergrond-cache: NDBC golfstations (blokkeert _do_refresh NIET)
 _ocean_vis_features = []   # gevuld door _refresh_ocean_vis_bg(), gebruikt door /api/visibility
 
 def fetch_ndbc_data():
@@ -1524,6 +1525,8 @@ FMI_WFS = ("https://opendata.fmi.fi/wfs?service=WFS&version=2.0.0"
            "&request=getFeature&storedquery_id=fmi::observations::wave::simple"
            "&bbox=-30,-90,50,90&maxlocations=500")
 
+_fmi_wave_bg = []   # achtergrond-cache: FMI golfstations (blokkeert _do_refresh NIET)
+
 _FMI_NS = {
     "wfs":   "http://www.opengis.net/wfs/2.0",
     "BsWfs": "http://xml.fmi.fi/schema/wfs/2.0",
@@ -1916,6 +1919,29 @@ def fetch_socib_wind_data():
     return features
 
 
+def _refresh_ndbc_bg():
+    """Vul _ndbc_wave_bg + _ndbc_wind/vis_features vanuit NOAA NDBC.
+    Blokkeert _do_refresh() NIET — grote file kan traag zijn op Render."""
+    global _ndbc_wave_bg
+    try:
+        waves = fetch_ndbc_data()   # zet ook _ndbc_wind_features en _ndbc_vis_features
+        _ndbc_wave_bg = waves
+        print(f"[NDBC bg] {len(waves)} golfstations geladen")
+    except Exception as e:
+        print(f"[NDBC bg] Fout: {e}")
+
+
+def _refresh_fmi_bg():
+    """Vul _fmi_wave_bg vanuit FMI (XML-download, kan variabel traag zijn)."""
+    global _fmi_wave_bg
+    try:
+        data = fetch_fmi_data()
+        _fmi_wave_bg = data
+        print(f"[FMI bg] {len(data)} stations geladen")
+    except Exception as e:
+        print(f"[FMI bg] Fout: {e}")
+
+
 def _refresh_cdip_bg():
     """Vul _cdip_bg vanuit CDIP THREDDS (kan 50s duren, blokkeert _do_refresh NIET)."""
     global _cdip_bg
@@ -2199,18 +2225,16 @@ def _do_refresh():
             _stations = []
 
     from concurrent.futures import wait as _wait
-    with ThreadPoolExecutor(max_workers=7) as ex:
-        fut_rws     = ex.submit(fetch_latest_values, _stations)
-        fut_bsh     = ex.submit(fetch_bsh_data)
-        fut_cefas   = ex.submit(fetch_cefas_data)
-        fut_labouee = ex.submit(fetch_labouee_data)
-        fut_ndbc    = ex.submit(fetch_ndbc_data)
-        fut_fmi     = ex.submit(fetch_fmi_data)
-        fut_mvb     = ex.submit(fetch_mvb_data)
-        # Alle 7 taken starten tegelijk (max_workers=7) zodat FMI/NDBC/LaBouée
-        # niet hoeven te wachten op RWS/CEFAS/BSH voor ze kunnen beginnen.
-        _wait([fut_rws, fut_bsh, fut_cefas, fut_labouee, fut_ndbc, fut_fmi, fut_mvb], timeout=45)
-    # with-blok: resterende taken gecanceld, lopende threads netjes afgewacht
+    # NDBC en FMI komen uit de achtergrond-cache (_ndbc_wave_bg / _fmi_wave_bg)
+    # zodat _do_refresh nooit blokkeert op trage downloads.
+    ex = ThreadPoolExecutor(max_workers=5)
+    fut_rws     = ex.submit(fetch_latest_values, _stations)
+    fut_bsh     = ex.submit(fetch_bsh_data)
+    fut_cefas   = ex.submit(fetch_cefas_data)
+    fut_labouee = ex.submit(fetch_labouee_data)
+    fut_mvb     = ex.submit(fetch_mvb_data)
+    _wait([fut_rws, fut_bsh, fut_cefas, fut_labouee, fut_mvb], timeout=40)
+    ex.shutdown(wait=False)   # trage stragglers lopen door in achtergrond, blokkeren niet
 
     try:
         waarnemingen = fut_rws.result() if fut_rws.done() else []
@@ -2220,8 +2244,7 @@ def _do_refresh():
     rws_geojson = build_geojson(_stations, waarnemingen)
 
     for fut, label in [(fut_bsh, "BSH"), (fut_cefas, "CEFAS"),
-                       (fut_labouee, "LaBouée"), (fut_ndbc, "NDBC"),
-                       (fut_fmi, "FMI"), (fut_mvb, "MVB")]:
+                       (fut_labouee, "LaBouée"), (fut_mvb, "MVB")]:
         if fut.done():
             try:
                 rws_geojson["features"].extend(fut.result())
@@ -2230,7 +2253,9 @@ def _do_refresh():
         else:
             print(f"[{label}] Timeout — overgeslagen")
 
-    # CDIP en SOCIB uit achtergrond-cache (nooit blokkerend)
+    # NDBC, FMI, CDIP en SOCIB uit achtergrond-cache (nooit blokkerend)
+    rws_geojson["features"].extend(_ndbc_wave_bg)
+    rws_geojson["features"].extend(_fmi_wave_bg)
     rws_geojson["features"].extend(_cdip_bg)
     rws_geojson["features"].extend(_socib_wave_bg)
 
@@ -3978,6 +4003,7 @@ if __name__ == "__main__":
         print("[CACHE] Fase 2: alle bronnen sequentieel laden…")
         _fase2_taken = (
             _refresh_temp_bg, get_knmi_data, _refresh_metar_bg,
+            _refresh_ndbc_bg, _refresh_fmi_bg,   # vóór get_wind_data zodat NDBC wind beschikbaar is
             get_wind_data, _refresh_ocean_vis_bg, _refresh_socib_bg, _refresh_cdip_bg,
         )
         for _taak in _fase2_taken:

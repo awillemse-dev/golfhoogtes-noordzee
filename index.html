@@ -1903,7 +1903,7 @@ function renderMarkers(geojson) {
   if (activeLayer === 'golf') { _hideAllGroups(); _waveGroup.addTo(map); }
 }
 
-async function fetchWithTimeout(url, timeoutMs = 90000) {
+async function fetchWithTimeout(url, timeoutMs = 25000) {
   const ctrl = new AbortController();
   const tid  = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
