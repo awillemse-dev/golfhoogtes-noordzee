@@ -1053,6 +1053,10 @@ async function fetchWindData() {
     const resp = await fetchWithTimeout(windUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
+    if (geojson.laden) {
+      setTimeout(fetchWindData, 3000);
+      return;
+    }
     renderWindMarkers(geojson);
     _markFetched('wind');
     if (activeLayer === 'wind') {
@@ -1064,7 +1068,7 @@ async function fetchWindData() {
   } catch (err) {
     console.error(err);
     if (activeLayer === 'wind') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'wind') fetchWindData().then(startCountdown); }, 5000);
+    setTimeout(fetchWindData, 3000);
   }
 }
 
@@ -1237,7 +1241,7 @@ async function fetchMetarData() {
     const geojson = await resp.json();
     if (geojson.laden) {
       if (activeLayer === 'metar') setStatus('loading', 'METAR data wordt geladen…');
-      setTimeout(() => { if (activeLayer === 'metar') fetchMetarData().then(startCountdown); }, 5000);
+      setTimeout(fetchMetarData, 3000);
       return;
     }
     renderMetarMarkers(geojson);
@@ -1251,7 +1255,7 @@ async function fetchMetarData() {
   } catch (err) {
     console.error(err);
     if (activeLayer === 'metar') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'metar') fetchMetarData().then(startCountdown); }, 5000);
+    setTimeout(fetchMetarData, 3000);
   }
 }
 
@@ -1559,6 +1563,10 @@ async function fetchZichtData() {
     const resp = await fetchWithTimeout(zichtUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
+    if (geojson.laden) {
+      setTimeout(fetchZichtData, 3000);
+      return;
+    }
     renderZichtMarkers(geojson);
     _markFetched('zicht');
     if (activeLayer === 'zicht') {
@@ -1570,7 +1578,7 @@ async function fetchZichtData() {
   } catch (err) {
     console.error(err);
     if (activeLayer === 'zicht') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'zicht') fetchZichtData().then(startCountdown); }, 5000);
+    setTimeout(fetchZichtData, 3000);
   }
 }
 
@@ -1691,7 +1699,7 @@ async function fetchTempData() {
     const geojson = await resp.json();
     if (geojson.laden) {
       if (activeLayer === 'temp') setStatus('loading', 'temperatuurdata wordt geladen…');
-      setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
+      setTimeout(fetchTempData, 3000);
       return;
     }
     renderTempMarkers(geojson);
@@ -1705,7 +1713,7 @@ async function fetchTempData() {
   } catch (err) {
     console.error(err);
     if (activeLayer === 'temp') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'temp') fetchTempData().then(startCountdown); }, 5000);
+    setTimeout(fetchTempData, 3000);
   }
 }
 
@@ -1889,7 +1897,7 @@ async function fetchWaveData() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     if (geojson.laden) {
-      setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
+      setTimeout(fetchWaveData, 3000);
       return;
     }
     renderMarkers(geojson);
@@ -1903,7 +1911,7 @@ async function fetchWaveData() {
   } catch (err) {
     console.error(err);
     if (activeLayer === 'golf') setStatus('error', 'Opnieuw laden…');
-    setTimeout(() => { if (activeLayer === 'golf') fetchWaveData().then(startCountdown); }, 5000);
+    setTimeout(fetchWaveData, 3000);
   }
 }
 
@@ -2159,6 +2167,14 @@ function startCountdown() {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
+// CDN pre-load: toon meteen golfdata uit statische JSON terwijl proxy opstart
+const REPO_RAW = 'https://raw.githubusercontent.com/awillemse-dev/golfhoogtes-noordzee/main';
+if (!LOCAL) {
+  fetch(`${REPO_RAW}/data/waves.json`, { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null)
+    .then(geo => { if (geo && !geo.laden && !_lastWaveGeoJSON) { renderMarkers(geo); if (activeLayer === 'golf') _statusFromGeoJSON(geo); } })
+    .catch(() => {});
+}
 fetchWaveData().then(startCountdown);
 
 // Achtergrond-prefetch: bouw laaggroepen stilletjes voor zodat tabwisseling instant is.
