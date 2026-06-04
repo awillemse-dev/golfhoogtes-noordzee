@@ -2180,8 +2180,8 @@ const _nlTempGroup     = L.layerGroup();
 function _ensureNlMap() {
   if (_nlMap) return;
   _nlMap = L.map('nl-map', {
-    center:             [52.2, 5.3],
-    zoom:               7,
+    center:             [52.0, 5.3],
+    zoom:               8,
     zoomControl:        false,
     scrollWheelZoom:    false,
     doubleClickZoom:    false,
@@ -2190,11 +2190,11 @@ function _ensureNlMap() {
     keyboard:           false,
     dragging:           false,
     attributionControl: false,
-    minZoom:            7,
-    maxZoom:            7,
+    minZoom:            8,
+    maxZoom:            8,
   });
   L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    subdomains: 'abcd', maxZoom: 7,
+    subdomains: 'abcd', maxZoom: 8,
   }).addTo(_nlMap);
 }
 
