@@ -2105,7 +2105,10 @@ async function openTempChart(code, naam, huidigTemp, tijdstip) {
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
 
   try {
-    const resp = await fetch(tempHistoryUrl(code), { cache: 'no-store' });
+    const histUrl = code.startsWith('knmi.vis.')
+      ? `${REPO_RAW}/data/temp-history/${code.replace(/\./g, '-')}.json`
+      : tempHistoryUrl(code);
+    const resp = await fetch(histUrl, { cache: 'no-store' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const json = await resp.json();
     if (!json.data || json.data.length === 0) {
