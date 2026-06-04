@@ -2308,8 +2308,8 @@ async function _renderNlHeatmap(features) {
     });
   if (!pts.length) return;
 
-  // IDW interpolatie → pixel buffer
-  const temps = new Float32Array(cW * cH);
+  // IDW interpolatie → temps buffer + imgData
+  const temps   = new Float32Array(cW * cH);
   const imgData = ctx.createImageData(cW, cH);
   for (let y = 0; y < cH; y++) {
     for (let x = 0; x < cW; x++) {
@@ -2321,50 +2321,64 @@ async function _renderNlHeatmap(features) {
         const w = 1 / d2;
         sw += w; st += w * pt.t;
       }
-      const t = st / sw;
-      temps[y * cW + x] = t;
-      const [r, g, b] = nlTempToRgb(t);
-      const i = (y * cW + x) * 4;
-      imgData.data[i]   = r;
-      imgData.data[i+1] = g;
-      imgData.data[i+2] = b;
-      imgData.data[i+3] = 175;
+      temps[y * cW + x] = st / sw;
     }
+  }
+
+  // Masker via apart canvas: teken gemeente-polygonen wit op zwart
+  // dan lees pixels terug → 1 bit per pixel of het land is
+  const border = await _fetchNlBorder();
+  let landMask = null;
+  if (border) {
+    const mc = document.createElement('canvas');
+    mc.width = cW; mc.height = cH;
+    const mCtx = mc.getContext('2d');
+    mCtx.fillStyle = '#000';
+    mCtx.fillRect(0, 0, cW, cH);
+    const rings = _borderToCanvasPaths(border, scale);
+    if (rings.length) {
+      mCtx.fillStyle = '#fff';
+      mCtx.beginPath();
+      rings.forEach(ring => {
+        if (!ring.length) return;
+        mCtx.moveTo(ring[0][0], ring[0][1]);
+        ring.slice(1).forEach(([x, y]) => mCtx.lineTo(x, y));
+        mCtx.closePath();
+      });
+      mCtx.fill('evenodd');
+    }
+    const md = mCtx.getImageData(0, 0, cW, cH).data;
+    landMask = new Uint8Array(cW * cH);
+    for (let i = 0; i < cW * cH; i++) landMask[i] = md[i * 4] > 128 ? 1 : 0;
+  }
+
+  // Vul imgData: kleur op land, transparant op water
+  for (let idx = 0; idx < cW * cH; idx++) {
+    const onLand = !landMask || landMask[idx];
+    if (onLand) {
+      const [r, g, b] = nlTempToRgb(temps[idx]);
+      imgData.data[idx*4]   = r;
+      imgData.data[idx*4+1] = g;
+      imgData.data[idx*4+2] = b;
+      imgData.data[idx*4+3] = 175;
+    }
+    // water: alpha blijft 0
   }
   ctx.putImageData(imgData, 0, 0);
 
-  // Masker: alleen binnen NL-grenzen
-  const border = await _fetchNlBorder();
-  if (border) {
-    const rings = _borderToCanvasPaths(border, scale);
-    if (rings.length) {
-      ctx.globalCompositeOperation = 'destination-in';
-      ctx.beginPath();
-      rings.forEach(ring => {
-        if (!ring.length) return;
-        ctx.moveTo(ring[0][0], ring[0][1]);
-        ring.slice(1).forEach(([x, y]) => ctx.lineTo(x, y));
-        ctx.closePath();
-      });
-      ctx.fillStyle = 'rgba(0,0,0,1)';
-      ctx.fill('evenodd');
-      ctx.globalCompositeOperation = 'source-over';
-    }
-  }
-
-  // Contourlijnen per graad
-  ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+  // Contourlijnen per graad (alleen op land)
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
   ctx.lineWidth   = 1;
   for (let y = 0; y < cH - 1; y++) {
     for (let x = 0; x < cW - 1; x++) {
+      if (landMask && !landMask[y * cW + x]) continue;
       const t0 = temps[y * cW + x];
       const tR = temps[y * cW + x + 1];
       const tD = temps[(y+1) * cW + x];
-      const f0 = Math.floor(t0), fR = Math.floor(tR), fD = Math.floor(tD);
-      if (f0 !== fR) {
+      if (Math.floor(t0) !== Math.floor(tR) && (!landMask || landMask[y * cW + x + 1])) {
         ctx.beginPath(); ctx.moveTo(x + 0.5, y); ctx.lineTo(x + 0.5, y + 1); ctx.stroke();
       }
-      if (f0 !== fD) {
+      if (Math.floor(t0) !== Math.floor(tD) && (!landMask || landMask[(y+1) * cW + x])) {
         ctx.beginPath(); ctx.moveTo(x, y + 0.5); ctx.lineTo(x + 1, y + 0.5); ctx.stroke();
       }
     }
