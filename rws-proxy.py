@@ -1644,18 +1644,19 @@ def get_knmi_temp_history(code):
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
     data   = {ts: v for ts, v in buf.items() if ts[:19] + "Z" >= cutoff and v is not None}
 
-    # Lees opgeslagen bestand als fallback (gevuld door GitHub Actions)
+    # Lees opgeslagen bestand via GitHub CDN (gevuld door GitHub Actions elke 10 min)
     fname = code.replace(".", "-").replace("/", "-") + ".json"
-    fpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "temp-history", fname)
-    if os.path.exists(fpath):
-        try:
-            saved = json.loads(open(fpath).read()).get("data", [])
-            for pt in saved:
-                ts = pt["t"]
-                if ts[:19] + "Z" >= cutoff and ts not in data:
-                    data[ts] = pt["v"]
-        except Exception:
-            pass
+    try:
+        url = f"{GITHUB_RAW}/data/temp-history/{fname}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            saved = json.loads(r.read()).get("data", [])
+        for pt in saved:
+            ts = pt["t"]
+            if ts[:19] + "Z" >= cutoff and ts not in data:
+                data[ts] = pt["v"]
+    except Exception:
+        pass
 
     result = sorted([{"t": ts, "v": v} for ts, v in data.items()], key=lambda x: x["t"])
     return {"code": code, "naam": code, "data": result}
