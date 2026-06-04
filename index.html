@@ -2240,31 +2240,62 @@ function nlTempColor(t) {
   return `rgb(${r},${g},${b})`;
 }
 
-let _nlHeatCanvas = null;
+let _nlHeatCanvas  = null;
+let _nlBorderCache = null;
 
-function _renderNlHeatmap(features) {
+async function _fetchNlBorder() {
+  if (_nlBorderCache) return _nlBorderCache;
+  try {
+    const r = await fetch(`${PROXY_URL}/api/nl-border`, { cache: 'no-store' });
+    if (!r.ok) return null;
+    _nlBorderCache = await r.json();
+  } catch (e) { return null; }
+  return _nlBorderCache;
+}
+
+// Zet GeoJSON MultiPolygon/Polygon rings om naar canvas-paden
+function _borderToCanvasPaths(geojson, scale) {
+  const rings = [];
+  const collect = (coords) => {
+    if (!coords || !coords.length) return;
+    const ring = coords.map(([lon, lat]) => {
+      const p = _nlMap.latLngToContainerPoint([lat, lon]);
+      return [p.x * scale, p.y * scale];
+    });
+    rings.push(ring);
+  };
+  (geojson.features || [geojson]).forEach(feat => {
+    const geom = feat.geometry || feat;
+    if (!geom) return;
+    if (geom.type === 'Polygon') {
+      geom.coordinates.forEach(collect);
+    } else if (geom.type === 'MultiPolygon') {
+      geom.coordinates.forEach(poly => poly.forEach(collect));
+    }
+  });
+  return rings;
+}
+
+async function _renderNlHeatmap(features) {
   if (!_nlMap) return;
   const mapDiv = document.getElementById('nl-map');
   const W = mapDiv.offsetWidth, H = mapDiv.offsetHeight;
   if (!W || !H) return;
 
-  // Canvas aanmaken en positioneren
   if (!_nlHeatCanvas) {
     _nlHeatCanvas = document.createElement('canvas');
     _nlHeatCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:400;';
     mapDiv.appendChild(_nlHeatCanvas);
   }
 
-  // Render op lagere resolutie voor performance, CSS schaalt op
-  const scale = 0.35;
+  const scale = 0.4;
   const cW = Math.round(W * scale), cH = Math.round(H * scale);
   _nlHeatCanvas.width  = cW;
   _nlHeatCanvas.height = cH;
 
   const ctx = _nlHeatCanvas.getContext('2d');
-  const imgData = ctx.createImageData(cW, cH);
 
-  // Stations: pixel-coördinaten op schaalresolutie
+  // Stations naar pixelcoördinaten
   const pts = features
     .filter(f => f.properties.ta !== null)
     .map(f => {
@@ -2272,10 +2303,11 @@ function _renderNlHeatmap(features) {
       const p = _nlMap.latLngToContainerPoint([lat, lon]);
       return { x: p.x * scale, y: p.y * scale, t: f.properties.ta };
     });
-
   if (!pts.length) return;
 
-  // IDW interpolatie (power=2)
+  // IDW interpolatie → pixel buffer
+  const temps = new Float32Array(cW * cH);
+  const imgData = ctx.createImageData(cW, cH);
   for (let y = 0; y < cH; y++) {
     for (let x = 0; x < cW; x++) {
       let sw = 0, st = 0;
@@ -2286,15 +2318,54 @@ function _renderNlHeatmap(features) {
         const w = 1 / d2;
         sw += w; st += w * pt.t;
       }
-      const [r, g, b] = nlTempToRgb(st / sw);
+      const t = st / sw;
+      temps[y * cW + x] = t;
+      const [r, g, b] = nlTempToRgb(t);
       const i = (y * cW + x) * 4;
       imgData.data[i]   = r;
       imgData.data[i+1] = g;
       imgData.data[i+2] = b;
-      imgData.data[i+3] = 155;
+      imgData.data[i+3] = 175;
     }
   }
   ctx.putImageData(imgData, 0, 0);
+
+  // Masker: alleen binnen NL-grenzen
+  const border = await _fetchNlBorder();
+  if (border) {
+    const rings = _borderToCanvasPaths(border, scale);
+    if (rings.length) {
+      ctx.globalCompositeOperation = 'destination-in';
+      ctx.beginPath();
+      rings.forEach(ring => {
+        if (!ring.length) return;
+        ctx.moveTo(ring[0][0], ring[0][1]);
+        ring.slice(1).forEach(([x, y]) => ctx.lineTo(x, y));
+        ctx.closePath();
+      });
+      ctx.fillStyle = 'rgba(0,0,0,1)';
+      ctx.fill('evenodd');
+      ctx.globalCompositeOperation = 'source-over';
+    }
+  }
+
+  // Contourlijnen per graad
+  ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+  ctx.lineWidth   = 1;
+  for (let y = 0; y < cH - 1; y++) {
+    for (let x = 0; x < cW - 1; x++) {
+      const t0 = temps[y * cW + x];
+      const tR = temps[y * cW + x + 1];
+      const tD = temps[(y+1) * cW + x];
+      const f0 = Math.floor(t0), fR = Math.floor(tR), fD = Math.floor(tD);
+      if (f0 !== fR) {
+        ctx.beginPath(); ctx.moveTo(x + 0.5, y); ctx.lineTo(x + 0.5, y + 1); ctx.stroke();
+      }
+      if (f0 !== fD) {
+        ctx.beginPath(); ctx.moveTo(x, y + 0.5); ctx.lineTo(x + 1, y + 0.5); ctx.stroke();
+      }
+    }
+  }
 }
 
 function makeNlTempIcon(t) {
@@ -2336,7 +2407,7 @@ function renderNlTempMarkers(geojson) {
     _nlTempGroup.addLayer(marker);
   });
   if (_activeNlLayer === 'nl-temp' && activeSection === 'nederland') {
-    _renderNlHeatmap(geojson.features || []);
+    _renderNlHeatmap(geojson.features || []);  // async, tekent op canvas
     _nlTempGroup.addTo(_nlMap);
   }
 }
