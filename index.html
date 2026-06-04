@@ -2242,6 +2242,7 @@ function nlTempColor(t) {
 
 let _nlHeatCanvas  = null;
 let _nlBorderCache = null;
+let _nlWaterCache  = null;
 
 async function _fetchNlBorder() {
   if (_nlBorderCache) return _nlBorderCache;
@@ -2254,6 +2255,16 @@ async function _fetchNlBorder() {
     _nlBorderCache = await r.json();
   } catch (e) { return null; }
   return _nlBorderCache;
+}
+
+async function _fetchNlWater() {
+  if (_nlWaterCache) return _nlWaterCache;
+  try {
+    const r = await fetch(`${REPO_RAW}/data/nl-water.geojson`, { cache: 'force-cache' });
+    if (!r.ok) return null;
+    _nlWaterCache = await r.json();
+  } catch (e) { return null; }
+  return _nlWaterCache;
 }
 
 // Zet GeoJSON MultiPolygon/Polygon rings om naar canvas-paden
@@ -2325,27 +2336,45 @@ async function _renderNlHeatmap(features) {
     }
   }
 
-  // Masker via apart canvas: teken gemeente-polygonen wit op zwart
-  // dan lees pixels terug → 1 bit per pixel of het land is
-  const border = await _fetchNlBorder();
+  // Masker: land wit, water zwart uitsnijden
+  const [border, water] = await Promise.all([_fetchNlBorder(), _fetchNlWater()]);
   let landMask = null;
-  if (border) {
+  {
     const mc = document.createElement('canvas');
     mc.width = cW; mc.height = cH;
     const mCtx = mc.getContext('2d');
+    // Alles zwart
     mCtx.fillStyle = '#000';
     mCtx.fillRect(0, 0, cW, cH);
-    const rings = _borderToCanvasPaths(border, scale);
-    if (rings.length) {
-      mCtx.fillStyle = '#fff';
-      mCtx.beginPath();
-      rings.forEach(ring => {
-        if (!ring.length) return;
-        mCtx.moveTo(ring[0][0], ring[0][1]);
-        ring.slice(1).forEach(([x, y]) => mCtx.lineTo(x, y));
-        mCtx.closePath();
-      });
-      mCtx.fill('evenodd');
+    // Land wit
+    if (border) {
+      const rings = _borderToCanvasPaths(border, scale);
+      if (rings.length) {
+        mCtx.fillStyle = '#fff';
+        mCtx.beginPath();
+        rings.forEach(ring => {
+          if (!ring.length) return;
+          mCtx.moveTo(ring[0][0], ring[0][1]);
+          ring.slice(1).forEach(([x, y]) => mCtx.lineTo(x, y));
+          mCtx.closePath();
+        });
+        mCtx.fill('evenodd');
+      }
+    }
+    // Water zwart uitsnijden
+    if (water) {
+      const wRings = _borderToCanvasPaths(water, scale);
+      if (wRings.length) {
+        mCtx.fillStyle = '#000';
+        mCtx.beginPath();
+        wRings.forEach(ring => {
+          if (!ring.length) return;
+          mCtx.moveTo(ring[0][0], ring[0][1]);
+          ring.slice(1).forEach(([x, y]) => mCtx.lineTo(x, y));
+          mCtx.closePath();
+        });
+        mCtx.fill('evenodd');
+      }
     }
     const md = mCtx.getImageData(0, 0, cW, cH).data;
     landMask = new Uint8Array(cW * cH);
