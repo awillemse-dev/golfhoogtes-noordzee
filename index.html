@@ -642,6 +642,17 @@
     </button>
   </nav>
 
+  <!-- ── Sub-nav: Waarnemingen NL ──────────────────────────────────────── -->
+  <nav id="nl-nav" style="display:none">
+    <button class="nav-btn active" id="nav-nl-temp" onclick="selectNlLayer('nl-temp')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>
+      </svg>
+      Temperatuur
+    </button>
+  </nav>
+
   <div id="status" class="loading">
     <div class="status-dot"></div>
     <span>laden…</span>
@@ -660,6 +671,14 @@
         <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/>
       </svg>
       <span class="tab-label">Waar&shy;nemingen</span>
+    </div>
+    <div class="sidebar-tab" id="tab-nederland" onclick="selectSection('nederland')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
+        <circle cx="12" cy="9" r="2.5"/>
+      </svg>
+      <span class="tab-label">Waar&shy;nemingen NL</span>
     </div>
   </div>
 
@@ -811,6 +830,16 @@ const LEGEND_CONTENT = {
     <div class="legend-row"><div class="legend-dot" style="background:#1e1e1e;border:1px solid #555"></div>Cat 5 &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">≥ 137 kt</span></div>
     <div class="legend-row" style="margin-top:5px"><div style="width:28px;height:8px;background:rgba(150,150,150,0.25);border:1px dashed #888;border-radius:2px;flex-shrink:0"></div>Onzekerheidscone</div>
     <div class="legend-sub">Bron: NOAA NHC · JTWC · JMA</div>`,
+  'nl-temp': `
+    <h4>Luchttemperatuur (°C)</h4>
+    <div class="legend-row"><div class="legend-dot" style="background:#93c5fd"></div>&lt; 0 °C</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#60a5fa"></div>0 – 5 °C</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#34d399"></div>5 – 10 °C</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#a3e635"></div>10 – 15 °C</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#fbbf24"></div>15 – 20 °C</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#f97316"></div>20 – 25 °C</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ef4444"></div>&gt; 25 °C</div>
+    <div class="legend-sub">Bron: KNMI / Buienradar</div>`,
 };
 
 let legendEl = null;
@@ -1717,18 +1746,38 @@ function selectSection(section) {
   const mapEl      = document.getElementById('map');
   const comingSoon = document.getElementById('coming-soon');
 
+  const nlNav = document.getElementById('nl-nav');
+
   if (section === 'waarnemingen') {
     nav.style.display        = '';
+    nlNav.style.display      = 'none';
     comingSoon.style.display = 'none';
+    _hideNlGroups();
     const layer = activeLayer;
     activeLayer = '';
     selectLayer(layer);
+  } else if (section === 'nederland') {
+    nav.style.display        = 'none';
+    nlNav.style.display      = '';
+    comingSoon.style.display = 'none';
+    mapEl.style.display      = '';
+    document.getElementById('chart-panel').classList.remove('open');
+    document.getElementById('radar-panel').classList.remove('active');
+    stopRadar();
+    clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem(); stopStormen();
+    activeLayer = '';
+    map.setView([52.3, 5.3], 8);
+    const nlLayer = _activeNlLayer;
+    _activeNlLayer = '';
+    selectNlLayer(nlLayer || 'nl-temp');
   } else {
     nav.style.display        = 'none';
+    nlNav.style.display      = 'none';
     mapEl.style.display      = 'none';
     comingSoon.style.display = 'flex';
     document.getElementById('coming-soon-label').textContent = section;
     clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
+    _hideNlGroups();
     setStatus('', '–');
     document.getElementById('status').className = '';
     document.getElementById('countdown').textContent = '';
@@ -1826,6 +1875,7 @@ map.on('zoomend', () => {
   else if (_lastWindGeoJSON && activeLayer === 'wind') renderWindMarkers(_lastWindGeoJSON);
   else if (_lastZichtGeoJSON && activeLayer === 'zicht') renderZichtMarkers(_lastZichtGeoJSON);
   else if (_lastMetarGeoJSON && activeLayer === 'metar') renderMetarMarkers(_lastMetarGeoJSON);
+  else if (_lastNlTempGeoJSON && _activeNlLayer === 'nl-temp' && activeSection === 'nederland') renderNlTempMarkers(_lastNlTempGeoJSON);
   // bliksem: canvas renderer herschaalt automatisch
 });
 
@@ -1839,6 +1889,7 @@ function _hideAllGroups() {
   map.removeLayer(_metarGroup);
   map.removeLayer(_bliksemGroup);
   map.removeLayer(_stormGroup);
+  map.removeLayer(_nlTempGroup);
 }
 
 function formatTijdstip(iso) {
@@ -2092,7 +2143,7 @@ const UPDATE_SEC = 10 * 60;
 let secondsLeft  = 0;
 let _countdownTid = null;
 
-// ── Tab-datacache: sla fetchtijd op per laag ──────────────────────────────────
+/// ── Tab-datacache: sla fetchtijd op per laag ──────────────────────────────────
 const _layerFetchedAt = {};
 const _CACHE_FRESH_MS = 5 * 60 * 1000; // 5 minuten
 
@@ -2102,6 +2153,116 @@ function _isFresh(layer) {
 
 function _markFetched(layer) {
   _layerFetchedAt[layer] = Date.now();
+}
+
+// ── Waarnemingen Nederland ────────────────────────────────────────────────────
+let _activeNlLayer    = 'nl-temp';
+let _lastNlTempGeoJSON = null;
+const _nlTempGroup    = L.layerGroup();
+
+function _hideNlGroups() {
+  map.removeLayer(_nlTempGroup);
+}
+
+function nlTempColor(t) {
+  if (t === null || isNaN(t)) return '#3d5167';
+  if (t < 0)  return '#93c5fd';
+  if (t < 5)  return '#60a5fa';
+  if (t < 10) return '#34d399';
+  if (t < 15) return '#a3e635';
+  if (t < 20) return '#fbbf24';
+  if (t < 25) return '#f97316';
+  return '#ef4444';
+}
+
+function makeNlTempIcon(t) {
+  const sc    = iconScale();
+  const color = nlTempColor(t);
+  const w = Math.round(44 * sc), h = Math.round(26 * sc);
+  const fs = Math.max(7, Math.round(11 * sc));
+  const r  = Math.max(2, Math.round(5 * sc));
+  const label = t !== null ? t.toFixed(1) : '–';
+  return L.divIcon({
+    className:   '',
+    iconSize:    [w, h],
+    iconAnchor:  [w / 2, h / 2],
+    popupAnchor: [0, -(h / 2 + 6)],
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">
+      <rect x="1" y="1" width="${w-2}" height="${h-2}" rx="${r}"
+        fill="${color}" fill-opacity="0.9"/>
+      <rect x="1" y="1" width="${w-2}" height="${h-2}" rx="${r}"
+        fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+      <text x="${w/2}" y="${h/2+3.8}" text-anchor="middle"
+        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fs}"
+        font-weight="700" fill="white">${label}</text>
+    </svg>`,
+  });
+}
+
+function renderNlTempMarkers(geojson) {
+  _lastNlTempGeoJSON = geojson;
+  _nlTempGroup.clearLayers();
+  (geojson.features || []).forEach(f => {
+    const [lon, lat] = f.geometry.coordinates;
+    const p = f.properties;
+    const t = p.ta;
+    const marker = L.marker([lat, lon], { icon: makeNlTempIcon(t) });
+    marker.bindTooltip(
+      `<b>${p.naam}</b><br>${t !== null ? t.toFixed(1) + ' °C' : '–'}<br><span style="color:#7a91a8;font-size:0.8em">${p.weatherdescription || ''}</span>`,
+      { direction: 'top', offset: [0, -8] }
+    );
+    _nlTempGroup.addLayer(marker);
+  });
+  if (_activeNlLayer === 'nl-temp' && activeSection === 'nederland') {
+    _hideAllGroups(); _hideNlGroups();
+    _nlTempGroup.addTo(map);
+  }
+}
+
+async function fetchNlTempData() {
+  if (activeSection === 'nederland') setStatus('loading', 'laden…');
+  try {
+    const resp = await fetch(`${PROXY_URL}/api/knmi`, { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const geojson = await resp.json();
+    renderNlTempMarkers(geojson);
+    _markFetched('nl-temp');
+    if (activeSection === 'nederland' && _activeNlLayer === 'nl-temp') {
+      const t = geojson.opgehaald
+        ? new Date(geojson.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+        : '–';
+      setStatus('ok', `${geojson.aantalStations} stations · ${t}`);
+    }
+  } catch (err) {
+    console.error('[nl-temp]', err);
+    if (activeSection === 'nederland') setStatus('error', 'Opnieuw laden…');
+    setTimeout(fetchNlTempData, 3000);
+  }
+}
+
+function selectNlLayer(layer) {
+  if (layer === _activeNlLayer && _lastNlTempGeoJSON) return;
+  stopCountdown();
+  _activeNlLayer = layer;
+
+  document.querySelectorAll('#nl-nav .nav-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById(`nav-${layer}`);
+  if (btn) btn.classList.add('active');
+  updateLegend(layer);
+
+  if (layer === 'nl-temp') {
+    if (_lastNlTempGeoJSON && _isFresh('nl-temp')) {
+      _hideAllGroups(); _hideNlGroups();
+      _nlTempGroup.addTo(map);
+      const t = _lastNlTempGeoJSON.opgehaald
+        ? new Date(_lastNlTempGeoJSON.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+        : '–';
+      setStatus('ok', `${_lastNlTempGeoJSON.aantalStations} stations · ${t}`);
+      startCountdown();
+    } else {
+      fetchNlTempData().then(startCountdown);
+    }
+  }
 }
 
 // ── Keep-alive ping (voorkomt slaapstand op Render free tier) ─────────────────
