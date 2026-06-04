@@ -2204,37 +2204,118 @@ function _hideNlGroups() {
   if (_nlMap) _nlMap.removeLayer(_nlTempGroup);
 }
 
+// Kleurstops voor vloeiende interpolatie
+const _NL_STOPS = [
+  [-5,  [147, 197, 253]],
+  [ 0,  [ 96, 165, 250]],
+  [ 5,  [ 52, 211, 153]],
+  [10,  [163, 230,  53]],
+  [15,  [251, 191,  36]],
+  [20,  [249, 115,  22]],
+  [25,  [239,  68,  68]],
+  [30,  [185,  28,  28]],
+];
+
+function nlTempToRgb(t) {
+  if (t <= _NL_STOPS[0][0]) return _NL_STOPS[0][1];
+  if (t >= _NL_STOPS[_NL_STOPS.length-1][0]) return _NL_STOPS[_NL_STOPS.length-1][1];
+  for (let i = 0; i < _NL_STOPS.length - 1; i++) {
+    const [t0, c0] = _NL_STOPS[i];
+    const [t1, c1] = _NL_STOPS[i+1];
+    if (t >= t0 && t <= t1) {
+      const f = (t - t0) / (t1 - t0);
+      return [
+        Math.round(c0[0] + f * (c1[0] - c0[0])),
+        Math.round(c0[1] + f * (c1[1] - c0[1])),
+        Math.round(c0[2] + f * (c1[2] - c0[2])),
+      ];
+    }
+  }
+  return [128, 128, 128];
+}
+
 function nlTempColor(t) {
   if (t === null || isNaN(t)) return '#3d5167';
-  if (t < 0)  return '#93c5fd';
-  if (t < 5)  return '#60a5fa';
-  if (t < 10) return '#34d399';
-  if (t < 15) return '#a3e635';
-  if (t < 20) return '#fbbf24';
-  if (t < 25) return '#f97316';
-  return '#ef4444';
+  const [r, g, b] = nlTempToRgb(t);
+  return `rgb(${r},${g},${b})`;
+}
+
+let _nlHeatCanvas = null;
+
+function _renderNlHeatmap(features) {
+  if (!_nlMap) return;
+  const mapDiv = document.getElementById('nl-map');
+  const W = mapDiv.offsetWidth, H = mapDiv.offsetHeight;
+  if (!W || !H) return;
+
+  // Canvas aanmaken en positioneren
+  if (!_nlHeatCanvas) {
+    _nlHeatCanvas = document.createElement('canvas');
+    _nlHeatCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:400;';
+    mapDiv.appendChild(_nlHeatCanvas);
+  }
+
+  // Render op lagere resolutie voor performance, CSS schaalt op
+  const scale = 0.35;
+  const cW = Math.round(W * scale), cH = Math.round(H * scale);
+  _nlHeatCanvas.width  = cW;
+  _nlHeatCanvas.height = cH;
+
+  const ctx = _nlHeatCanvas.getContext('2d');
+  const imgData = ctx.createImageData(cW, cH);
+
+  // Stations: pixel-coördinaten op schaalresolutie
+  const pts = features
+    .filter(f => f.properties.ta !== null)
+    .map(f => {
+      const [lon, lat] = f.geometry.coordinates;
+      const p = _nlMap.latLngToContainerPoint([lat, lon]);
+      return { x: p.x * scale, y: p.y * scale, t: f.properties.ta };
+    });
+
+  if (!pts.length) return;
+
+  // IDW interpolatie (power=2)
+  for (let y = 0; y < cH; y++) {
+    for (let x = 0; x < cW; x++) {
+      let sw = 0, st = 0;
+      for (const pt of pts) {
+        const dx = x - pt.x, dy = y - pt.y;
+        const d2 = dx*dx + dy*dy;
+        if (d2 < 0.5) { sw = 1; st = pt.t; break; }
+        const w = 1 / d2;
+        sw += w; st += w * pt.t;
+      }
+      const [r, g, b] = nlTempToRgb(st / sw);
+      const i = (y * cW + x) * 4;
+      imgData.data[i]   = r;
+      imgData.data[i+1] = g;
+      imgData.data[i+2] = b;
+      imgData.data[i+3] = 155;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
 }
 
 function makeNlTempIcon(t) {
-  const sc    = iconScale();
   const color = nlTempColor(t);
-  const w = Math.round(44 * sc), h = Math.round(26 * sc);
-  const fs = Math.max(7, Math.round(11 * sc));
-  const r  = Math.max(2, Math.round(5 * sc));
+  const [r, g, b] = t !== null ? nlTempToRgb(t) : [61, 81, 103];
+  // Donkere tekstkleur voor lichte tinten (groen/geel)
+  const textColor = (r*0.299 + g*0.587 + b*0.114) > 155 ? '#1e293b' : 'white';
   const label = t !== null ? t.toFixed(1) : '–';
   return L.divIcon({
     className:   '',
-    iconSize:    [w, h],
-    iconAnchor:  [w / 2, h / 2],
-    popupAnchor: [0, -(h / 2 + 6)],
-    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">
-      <rect x="1" y="1" width="${w-2}" height="${h-2}" rx="${r}"
-        fill="${color}" fill-opacity="0.9"/>
-      <rect x="1" y="1" width="${w-2}" height="${h-2}" rx="${r}"
-        fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
-      <text x="${w/2}" y="${h/2+3.8}" text-anchor="middle"
-        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fs}"
-        font-weight="700" fill="white">${label}</text>
+    iconSize:    [58, 32],
+    iconAnchor:  [29, 16],
+    popupAnchor: [0, -22],
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="58" height="32">
+      <rect x="1" y="1" width="56" height="30" rx="6"
+        fill="${color}" fill-opacity="0.95"/>
+      <rect x="1" y="1" width="56" height="30" rx="6"
+        fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="1.5"/>
+      <text x="29" y="21" text-anchor="middle"
+        font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="14"
+        font-weight="700" fill="${textColor}">${label}</text>
     </svg>`,
   });
 }
@@ -2249,12 +2330,13 @@ function renderNlTempMarkers(geojson) {
     const t = p.ta;
     const marker = L.marker([lat, lon], { icon: makeNlTempIcon(t) });
     marker.bindTooltip(
-      `<b>${p.naam}</b><br>${t !== null ? t.toFixed(1) + ' °C' : '–'}<br><span style="color:#7a91a8;font-size:0.8em">${p.weatherdescription || ''}</span>`,
+      `<b>${p.naam}</b><br>${t !== null ? t.toFixed(1) + ' °C' : '–'}<br><span style="color:#4a5568;font-size:0.8em">${p.weatherdescription || ''}</span>`,
       { direction: 'top', offset: [0, -8] }
     );
     _nlTempGroup.addLayer(marker);
   });
   if (_activeNlLayer === 'nl-temp' && activeSection === 'nederland') {
+    _renderNlHeatmap(geojson.features || []);
     _nlTempGroup.addTo(_nlMap);
   }
 }
