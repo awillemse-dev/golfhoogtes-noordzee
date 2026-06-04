@@ -1732,8 +1732,9 @@ async function fetchTempData() {
 }
 
 // ── Navigatie ─────────────────────────────────────────────────────────────────
-let activeSection = 'waarnemingen';
-let activeLayer   = 'golf';
+let activeSection  = 'waarnemingen';
+let activeLayer    = 'golf';
+let _lastWaarLayer = 'golf';  // onthoudt actieve laag bij verlaten Waarnemingen
 
 function selectSection(section) {
   if (section === activeSection) return;
@@ -1753,10 +1754,11 @@ function selectSection(section) {
     nlNav.style.display      = 'none';
     comingSoon.style.display = 'none';
     _hideNlGroups();
-    const layer = activeLayer;
+    const layer = _lastWaarLayer;
     activeLayer = '';
     selectLayer(layer);
   } else if (section === 'nederland') {
+    if (activeLayer) _lastWaarLayer = activeLayer;
     nav.style.display        = 'none';
     nlNav.style.display      = '';
     comingSoon.style.display = 'none';
