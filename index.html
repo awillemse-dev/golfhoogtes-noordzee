@@ -2246,7 +2246,10 @@ let _nlBorderCache = null;
 async function _fetchNlBorder() {
   if (_nlBorderCache) return _nlBorderCache;
   try {
-    const r = await fetch(`${PROXY_URL}/api/nl-land`, { cache: 'no-store' });
+    const url = LOCAL
+      ? `${PROXY_URL}/api/nl-land`
+      : `${REPO_RAW}/data/nl-land.geojson`;
+    const r = await fetch(url, { cache: 'force-cache' });
     if (!r.ok) return null;
     _nlBorderCache = await r.json();
   } catch (e) { return null; }
