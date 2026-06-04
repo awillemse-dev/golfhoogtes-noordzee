@@ -189,6 +189,16 @@
     #main { flex: 1; display: flex; overflow: hidden; }
     #map  { flex: 1; }
 
+    /* ── NL-paneel ───────────────────────────────────────────────────────── */
+    #nl-panel {
+      display: none;
+      flex: 1;
+      background: var(--bg);
+      overflow: hidden;
+    }
+    #nl-panel.active { display: flex; }
+    #nl-map { flex: 1; }
+
     /* ── Radarpaneel ─────────────────────────────────────────────────────── */
     #radar-panel {
       display: none;
@@ -694,6 +704,11 @@
       </div>
       <div id="coming-soon-label">Verwachtingen</div>
       <div class="coming-soon-sub">Data volgt binnenkort</div>
+    </div>
+
+    <!-- NL-paneel -->
+    <div id="nl-panel">
+      <div id="nl-map"></div>
     </div>
 
     <!-- Radarpaneel -->
@@ -1753,7 +1768,8 @@ function selectSection(section) {
     nav.style.display        = '';
     nlNav.style.display      = 'none';
     comingSoon.style.display = 'none';
-    _hideNlGroups();
+    document.getElementById('nl-panel').classList.remove('active');
+    mapEl.style.display      = '';
     const layer = _lastWaarLayer;
     activeLayer = '';
     selectLayer(layer);
@@ -1762,13 +1778,13 @@ function selectSection(section) {
     nav.style.display        = 'none';
     nlNav.style.display      = '';
     comingSoon.style.display = 'none';
-    mapEl.style.display      = '';
+    mapEl.style.display      = 'none';
+    document.getElementById('nl-panel').classList.add('active');
     document.getElementById('chart-panel').classList.remove('open');
     document.getElementById('radar-panel').classList.remove('active');
     stopRadar();
     clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem(); stopStormen();
     activeLayer = '';
-    map.setView([52.3, 5.3], 8);
     const nlLayer = _activeNlLayer;
     _activeNlLayer = '';
     selectNlLayer(nlLayer || 'nl-temp');
@@ -1779,7 +1795,7 @@ function selectSection(section) {
     comingSoon.style.display = 'flex';
     document.getElementById('coming-soon-label').textContent = section;
     clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem();
-    _hideNlGroups();
+    document.getElementById('nl-panel').classList.remove('active');
     setStatus('', '–');
     document.getElementById('status').className = '';
     document.getElementById('countdown').textContent = '';
@@ -1877,7 +1893,6 @@ map.on('zoomend', () => {
   else if (_lastWindGeoJSON && activeLayer === 'wind') renderWindMarkers(_lastWindGeoJSON);
   else if (_lastZichtGeoJSON && activeLayer === 'zicht') renderZichtMarkers(_lastZichtGeoJSON);
   else if (_lastMetarGeoJSON && activeLayer === 'metar') renderMetarMarkers(_lastMetarGeoJSON);
-  else if (_lastNlTempGeoJSON && _activeNlLayer === 'nl-temp' && activeSection === 'nederland') renderNlTempMarkers(_lastNlTempGeoJSON);
   // bliksem: canvas renderer herschaalt automatisch
 });
 
@@ -1891,7 +1906,6 @@ function _hideAllGroups() {
   map.removeLayer(_metarGroup);
   map.removeLayer(_bliksemGroup);
   map.removeLayer(_stormGroup);
-  map.removeLayer(_nlTempGroup);
 }
 
 function formatTijdstip(iso) {
@@ -2158,12 +2172,34 @@ function _markFetched(layer) {
 }
 
 // ── Waarnemingen Nederland ────────────────────────────────────────────────────
-let _activeNlLayer    = 'nl-temp';
+let _activeNlLayer     = 'nl-temp';
 let _lastNlTempGeoJSON = null;
-const _nlTempGroup    = L.layerGroup();
+let _nlMap             = null;
+const _nlTempGroup     = L.layerGroup();
+
+function _ensureNlMap() {
+  if (_nlMap) return;
+  _nlMap = L.map('nl-map', {
+    center:            [52.3, 5.3],
+    zoom:              8,
+    zoomControl:       false,
+    scrollWheelZoom:   false,
+    doubleClickZoom:   false,
+    touchZoom:         false,
+    boxZoom:           false,
+    keyboard:          false,
+    dragging:          false,
+    attributionControl: false,
+    minZoom:           8,
+    maxZoom:           8,
+  });
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    subdomains: 'abcd', maxZoom: 8,
+  }).addTo(_nlMap);
+}
 
 function _hideNlGroups() {
-  map.removeLayer(_nlTempGroup);
+  if (_nlMap) _nlMap.removeLayer(_nlTempGroup);
 }
 
 function nlTempColor(t) {
@@ -2203,6 +2239,7 @@ function makeNlTempIcon(t) {
 
 function renderNlTempMarkers(geojson) {
   _lastNlTempGeoJSON = geojson;
+  _ensureNlMap();
   _nlTempGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
@@ -2216,8 +2253,7 @@ function renderNlTempMarkers(geojson) {
     _nlTempGroup.addLayer(marker);
   });
   if (_activeNlLayer === 'nl-temp' && activeSection === 'nederland') {
-    _hideAllGroups(); _hideNlGroups();
-    _nlTempGroup.addTo(map);
+    _nlTempGroup.addTo(_nlMap);
   }
 }
 
@@ -2254,8 +2290,8 @@ function selectNlLayer(layer) {
 
   if (layer === 'nl-temp') {
     if (_lastNlTempGeoJSON && _isFresh('nl-temp')) {
-      _hideAllGroups(); _hideNlGroups();
-      _nlTempGroup.addTo(map);
+      _ensureNlMap();
+      _nlTempGroup.addTo(_nlMap);
       const t = _lastNlTempGeoJSON.opgehaald
         ? new Date(_lastNlTempGeoJSON.opgehaald).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
         : '–';
