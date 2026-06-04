@@ -2180,8 +2180,6 @@ const _nlTempGroup     = L.layerGroup();
 function _ensureNlMap() {
   if (_nlMap) return;
   _nlMap = L.map('nl-map', {
-    center:             [52.0, 5.3],
-    zoom:               8,
     zoomControl:        false,
     scrollWheelZoom:    false,
     doubleClickZoom:    false,
@@ -2190,12 +2188,16 @@ function _ensureNlMap() {
     keyboard:           false,
     dragging:           false,
     attributionControl: false,
-    minZoom:            8,
-    maxZoom:            8,
+    zoomSnap:           0.1,
   });
   L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    subdomains: 'abcd', maxZoom: 8,
+    subdomains: 'abcd', maxZoom: 10,
   }).addTo(_nlMap);
+  // Pas kaart aan zodat NL + Luik net zichtbaar zijn, daarna zoom vergrendelen
+  _nlMap.fitBounds([[50.6, 3.2], [53.6, 7.3]], { padding: [16, 16] });
+  const _lockedZoom = _nlMap.getZoom();
+  _nlMap.setMinZoom(_lockedZoom);
+  _nlMap.setMaxZoom(_lockedZoom);
 }
 
 function _hideNlGroups() {
