@@ -1880,6 +1880,7 @@ function selectLayer(layer) {
 // ── Kaartdata ─────────────────────────────────────────────────────────────────
 const LOCAL     = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const PROXY_URL = LOCAL ? 'http://localhost:3001' : 'https://noordzee-proxy.onrender.com';
+const REPO_RAW  = 'https://raw.githubusercontent.com/awillemse-dev/golfhoogtes-noordzee/main';
 
 function wavesUrl()       { return `${PROXY_URL}/api/waves`; }
 function historyUrl(code) { return `${PROXY_URL}/api/history?code=${encodeURIComponent(code)}`; }
