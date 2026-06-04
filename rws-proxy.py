@@ -2976,6 +2976,36 @@ def get_nl_border():
             print(f"[NL-border] Fout: {e}")
     return None
 
+# ── Nederland provinciegrenzen – land only, sluit water uit (PDOK) ────────────
+
+_nl_land_cache = None
+_nl_land_time  = 0
+
+def get_nl_land():
+    """Haalt provinciegrenzen op: land-only polygonen, geen grote waterlichamen."""
+    global _nl_land_cache, _nl_land_time
+    if _nl_land_cache and (time.time() - _nl_land_time) < 86400:
+        return _nl_land_cache
+    url = (
+        "https://service.pdok.nl/kadaster/bestuurlijkegebieden/wfs/v1_0"
+        "?service=WFS&version=2.0.0&request=GetFeature"
+        "&typeName=bestuurlijkegebieden:Provincie"
+        "&srsName=EPSG:4326&outputFormat=application/json"
+    )
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        print(f"[NL-land] {len(data.get('features', []))} provincies geladen")
+        _nl_land_cache = data
+        _nl_land_time  = time.time()
+        return data
+    except Exception as e:
+        print(f"[NL-land] Fout: {e}")
+        return None
+
 # ── Nederland actuele waarnemingen (Buienradar/KNMI) ─────────────────────────
 
 _knmi_cache        = None
@@ -3606,6 +3636,23 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
                 self.send_cors()
                 self.end_headers()
                 self.wfile.write(body)
+
+        # ── /api/nl-land (provinciegrenzen, land only) ───────────────────
+        elif path == "/api/nl-land":
+            data = get_nl_land()
+            if data:
+                body = _safe_json(data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type",   "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control",  "public, max-age=86400")
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(503)
+                self.send_cors()
+                self.end_headers()
 
         # ── /api/nl-border ───────────────────────────────────────────────
         elif path == "/api/nl-border":

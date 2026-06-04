@@ -2246,7 +2246,7 @@ let _nlBorderCache = null;
 async function _fetchNlBorder() {
   if (_nlBorderCache) return _nlBorderCache;
   try {
-    const r = await fetch(`${PROXY_URL}/api/nl-border`, { cache: 'no-store' });
+    const r = await fetch(`${PROXY_URL}/api/nl-land`, { cache: 'no-store' });
     if (!r.ok) return null;
     _nlBorderCache = await r.json();
   } catch (e) { return null; }
