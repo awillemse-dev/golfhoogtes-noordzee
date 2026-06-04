@@ -1639,12 +1639,25 @@ def _record_knmi_temp(code, tijdstip, temp_c):
 
 
 def get_knmi_temp_history(code):
-    """Geef 24-uursgeschiedenis terug vanuit de KNMI ring buffer."""
+    """Geef 24-uursgeschiedenis terug: ring buffer + bestanden als fallback."""
     buf    = _knmi_temp_hist.get(code, {})
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    data   = [{"t": ts, "v": v} for ts, v in buf.items() if ts >= cutoff and v is not None]
-    data.sort(key=lambda x: x["t"])
-    return {"code": code, "naam": code, "data": data}
+    data   = {ts: v for ts, v in buf.items() if ts >= cutoff and v is not None}
+
+    # Lees opgeslagen bestand als fallback (gevuld door GitHub Actions)
+    fname = code.replace(".", "-").replace("/", "-") + ".json"
+    fpath = os.path.join(os.path.dirname(__file__), "data", "temp-history", fname)
+    if os.path.exists(fpath):
+        try:
+            saved = json.loads(open(fpath).read()).get("data", [])
+            for pt in saved:
+                if pt["t"] >= cutoff and pt["t"] not in data:
+                    data[pt["t"]] = pt["v"]
+        except Exception:
+            pass
+
+    result = sorted([{"t": ts, "v": v} for ts, v in data.items()], key=lambda x: x["t"])
+    return {"code": code, "naam": code, "data": result}
 
 
 

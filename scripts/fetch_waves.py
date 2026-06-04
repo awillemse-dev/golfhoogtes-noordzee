@@ -728,6 +728,33 @@ def main():
     (DATA_DIR / "temp.json").write_text(json.dumps(temp_geojson, ensure_ascii=False))
     print(f"[KLAAR temp] {len(temp_features)} stations → data/temp.json")
 
+    # ── KNMI luchttemperatuur geschiedenis (Buienradar) ──────────────────────
+    try:
+        br_url = "https://data.buienradar.nl/2.0/feed/json"
+        req = urllib.request.Request(br_url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            br_data = json.loads(r.read().decode("utf-8"))
+        stations = br_data.get("actual", {}).get("stationmeasurements", [])
+        knmi_count = 0
+        for s in stations:
+            lat = s.get("lat"); lon = s.get("lon")
+            if lat is None or lon is None: continue
+            if lat < 50.5 or lat > 55.5 or lon < 2.5 or lon > 8.0: continue
+            naam_l = s.get("stationname", "").lower()
+            if any(kw in naam_l for kw in ("lichteiland", "europlatform", "k13", "meetpost", "platform")):
+                continue
+            temp = s.get("temperature")
+            if temp is None or temp == "": continue
+            sid  = str(s.get("stationid", ""))
+            code = f"knmi.vis.{sid}"
+            naam = s.get("stationname", "").replace("Meetstation ", "")
+            ts   = s.get("timestamp", now.isoformat())
+            append_to_temp_history(code, naam, ts, round(float(temp), 2))
+            knmi_count += 1
+        print(f"[KLAAR KNMI] {knmi_count} stations → data/temp-history/knmi-*.json")
+    except Exception as e:
+        print(f"[KNMI temp] Fout: {e}")
+
 
 if __name__ == "__main__":
     main()
