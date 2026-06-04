@@ -1600,6 +1600,7 @@ _temp_time      = 0
 _temp_bg        = None   # achtergrond-cache voor /api/temp (24u TTL)
 _temp_bg_time   = 0
 _rws_temp_hist  = {}   # code → {tijdstip_iso: temp_c}  (ring buffer, net als BSH)
+_knmi_temp_hist = {}   # code → {tijdstip_iso: temp_c}  (ring buffer voor KNMI luchttemp)
 
 
 def _record_rws_temp(code, tijdstip, temp_c):
@@ -1618,6 +1619,28 @@ def _record_rws_temp(code, tijdstip, temp_c):
 def get_rws_temp_history(code):
     """Geef 24-uursgeschiedenis terug vanuit de RWS ring buffer."""
     buf    = _rws_temp_hist.get(code, {})
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    data   = [{"t": ts, "v": v} for ts, v in buf.items() if ts >= cutoff and v is not None]
+    data.sort(key=lambda x: x["t"])
+    return {"code": code, "naam": code, "data": data}
+
+
+def _record_knmi_temp(code, tijdstip, temp_c):
+    """Sla KNMI luchttemperatuur op in ring buffer (max 25 uur)."""
+    if tijdstip is None or temp_c is None:
+        return
+    if code not in _knmi_temp_hist:
+        _knmi_temp_hist[code] = {}
+    _knmi_temp_hist[code][tijdstip] = temp_c
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    _knmi_temp_hist[code] = {
+        ts: v for ts, v in _knmi_temp_hist[code].items() if ts >= cutoff
+    }
+
+
+def get_knmi_temp_history(code):
+    """Geef 24-uursgeschiedenis terug vanuit de KNMI ring buffer."""
+    buf    = _knmi_temp_hist.get(code, {})
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     data   = [{"t": ts, "v": v} for ts, v in buf.items() if ts >= cutoff and v is not None]
     data.sort(key=lambda x: x["t"])
@@ -3222,11 +3245,13 @@ def fetch_knmi_data():
         dd     = None if dd_raw in (0, 990) else dd_raw
         rh     = fval("rainFallLastHour")
 
+        code = f"knmi.vis.{sid}"
+        _record_knmi_temp(code, ts, temp)
         features.append({
             "type":     "Feature",
             "geometry": {"type": "Point", "coordinates": [lon, lat]},
             "properties": {
-                "code":       f"knmi.vis.{sid}",
+                "code":       code,
                 "naam":       naam,
                 "station_id": sid,
                 "bron":       "Buienradar/KNMI",
@@ -3900,6 +3925,17 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
                             source     = feat["properties"].get("cefas_source", "INT")
                             break
                     data = fetch_cefas_temp_history(station_id, source)
+                elif code.startswith("knmi.vis."):
+                    # KNMI: in-memory ring buffer (gevuld bij elke fetch_knmi_data aanroep)
+                    naam = code
+                    cached = _knmi_cache
+                    if cached:
+                        for feat in cached.get("features", []):
+                            if feat["properties"].get("code") == code:
+                                naam = feat["properties"].get("naam", code)
+                                break
+                    data = get_knmi_temp_history(code)
+                    data["naam"] = naam
                 else:
                     # RWS: in-memory ring buffer (groeit elke 10 min)
                     data = get_rws_temp_history(code)
