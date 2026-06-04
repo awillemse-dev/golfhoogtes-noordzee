@@ -1641,18 +1641,19 @@ def _record_knmi_temp(code, tijdstip, temp_c):
 def get_knmi_temp_history(code):
     """Geef 24-uursgeschiedenis terug: ring buffer + bestanden als fallback."""
     buf    = _knmi_temp_hist.get(code, {})
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    data   = {ts: v for ts, v in buf.items() if ts >= cutoff and v is not None}
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    data   = {ts: v for ts, v in buf.items() if ts[:19] + "Z" >= cutoff and v is not None}
 
     # Lees opgeslagen bestand als fallback (gevuld door GitHub Actions)
     fname = code.replace(".", "-").replace("/", "-") + ".json"
-    fpath = os.path.join(os.path.dirname(__file__), "data", "temp-history", fname)
+    fpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "temp-history", fname)
     if os.path.exists(fpath):
         try:
             saved = json.loads(open(fpath).read()).get("data", [])
             for pt in saved:
-                if pt["t"] >= cutoff and pt["t"] not in data:
-                    data[pt["t"]] = pt["v"]
+                ts = pt["t"]
+                if ts[:19] + "Z" >= cutoff and ts not in data:
+                    data[ts] = pt["v"]
         except Exception:
             pass
 
