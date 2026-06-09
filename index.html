@@ -1657,12 +1657,15 @@ async function openWindChart(code, naam, huidigWind, tijdstip) {
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
 
   try {
-    // rws.wind.* → direct van GitHub CDN; rest via proxy
-    const windHistUrl = code.startsWith('rws.wind.')
-      ? `${REPO_RAW}/data/wind-history/${code.replace(/\./g, '-')}.json`
-      : windHistoryUrl(code);
-    const resp = await fetch(windHistUrl, { cache: 'no-store' });
-    if (resp.status === 404) { loadingEl.textContent = 'Nog geen historische data beschikbaar.'; return; }
+    // rws.wind.* → eerst GitHub CDN proberen, bij 404 fallback naar proxy
+    let resp;
+    if (code.startsWith('rws.wind.')) {
+      const cdnUrl = `${REPO_RAW}/data/wind-history/${code.replace(/\./g, '-')}.json`;
+      resp = await fetch(cdnUrl, { cache: 'no-store' });
+      if (resp.status === 404) resp = await fetch(windHistoryUrl(code), { cache: 'no-store' });
+    } else {
+      resp = await fetch(windHistoryUrl(code), { cache: 'no-store' });
+    }
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const json = await resp.json();
     if (!json.data || json.data.length === 0) {
