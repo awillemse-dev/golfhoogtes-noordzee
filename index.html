@@ -1026,53 +1026,61 @@ function makeWindIcon(w, dir) {
   const arrowPx = Math.round((16 + (wVal / 20) * 24) * zoomSc);
   const color    = windColor(w);
   const kt       = msToKt(w);
-  const speedTxt = kt !== null ? Math.round(kt) + ' kt' : '–';
-  const fs       = Math.max(7, Math.round(8 * zoomSc));
+  const speedTxt  = kt !== null ? Math.round(kt) + ' kt' : '–';
+  const compass   = degToCompass(dir);
+  const dirTxt    = compass || '';
+  const fs        = Math.max(7, Math.round(8 * zoomSc));
 
   // Rotatie: wind komt UIT dir → pijl wijst NAAR (dir+180)
   const hasDir   = dir !== null && dir !== undefined && !isNaN(dir);
   const rotation = hasDir ? (Number(dir) + 180) % 360 : 0;
 
-  const cx = arrowPx / 2;
-  const cy = arrowPx / 2;
+  // Label: "17 kt  W" in één balkje
+  const labelTxt  = dirTxt ? `${speedTxt}  ${dirTxt}` : speedTxt;
+  const labelFs   = Math.max(8, Math.round(9 * zoomSc));
+  const labelPad  = Math.round(4 * zoomSc);
+  const labelH    = labelFs + labelPad * 2;
+  const labelW    = Math.max(arrowPx, Math.round(labelTxt.length * labelFs * 0.62) + labelPad * 2);
+  const totalW    = labelW;
+  const pcx       = totalW / 2;   // horizontaal middelpunt pijl
+  const cy        = arrowPx / 2;
 
-  // Pijlvorm gecentreerd in arrowPx×arrowPx, wijst omhoog (north)
-  const m   = arrowPx * 0.08;          // marge rondom
-  const len = arrowPx - 2 * m;         // totale pijllengte
-  const hw  = len * 0.52;              // breedte pijlpunt
-  const hh  = len * 0.44;              // hoogte pijlpunt
-  const sw  = len * 0.22;              // breedte schacht
+  // Pijlvorm gecentreerd op pcx, wijst omhoog (north)
+  const m   = arrowPx * 0.08;
+  const len = arrowPx - 2 * m;
+  const hw  = len * 0.52;
+  const hh  = len * 0.44;
+  const sw  = len * 0.22;
   const tipY      = m;
   const shoulderY = m + hh;
   const baseY     = m + len;
 
-  const path = `M ${cx},${tipY}
-    L ${cx + hw/2},${shoulderY}
-    L ${cx + sw/2},${shoulderY}
-    L ${cx + sw/2},${baseY}
-    L ${cx - sw/2},${baseY}
-    L ${cx - sw/2},${shoulderY}
-    L ${cx - hw/2},${shoulderY} Z`;
+  const path = `M ${pcx},${tipY}
+    L ${pcx + hw/2},${shoulderY} L ${pcx + sw/2},${shoulderY}
+    L ${pcx + sw/2},${baseY}     L ${pcx - sw/2},${baseY}
+    L ${pcx - sw/2},${shoulderY} L ${pcx - hw/2},${shoulderY} Z`;
 
-  const totalH = arrowPx + fs + 3;
+  const labelY = arrowPx + 4;
+  const totalH = labelY + labelH + 2;
 
   return L.divIcon({
     className:   '',
-    iconSize:    [arrowPx, totalH],
-    iconAnchor:  [cx, cy],
+    iconSize:    [totalW, totalH],
+    iconAnchor:  [pcx, cy],
     popupAnchor: [0, -(cy + 4)],
-    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${arrowPx}" height="${totalH}" style="overflow:visible;cursor:pointer">
-      <rect x="0" y="0" width="${arrowPx}" height="${totalH}" fill="transparent"/>
-      <g transform="rotate(${rotation},${cx},${cy})">
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" style="overflow:visible;cursor:pointer">
+      <rect x="0" y="0" width="${totalW}" height="${totalH}" fill="transparent"/>
+      <g transform="rotate(${rotation},${pcx},${cy})">
         <path d="${path}" fill="${color}" fill-opacity="0.92"
           stroke="rgba(0,0,0,0.30)" stroke-width="1" stroke-linejoin="round"/>
       </g>
-      <text x="${cx}" y="${arrowPx + fs}" text-anchor="middle"
+      <rect x="${pcx - labelW/2}" y="${labelY}" width="${labelW}" height="${labelH}"
+        rx="${Math.round(labelH/2)}"
+        fill="${color}" fill-opacity="0.92" stroke="rgba(0,0,0,0.25)" stroke-width="1"/>
+      <text x="${pcx}" y="${labelY + labelH/2 + 0.5}" text-anchor="middle" dominant-baseline="middle"
         font-family="Inter,Segoe UI,system-ui,sans-serif"
-        font-size="${fs}" font-weight="700" fill="${color}"
-        paint-order="stroke" stroke="rgba(0,0,0,0.65)"
-        stroke-width="2.5" stroke-linecap="round"
-        stroke-linejoin="round">${speedTxt}</text>
+        font-size="${labelFs}" font-weight="700" fill="white"
+        letter-spacing="0.5">${labelTxt}</text>
     </svg>`,
   });
 }
