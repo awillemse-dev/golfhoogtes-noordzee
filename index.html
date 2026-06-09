@@ -1022,42 +1022,46 @@ function degToCompass(deg) {
 function makeWindIcon(w, dir) {
   const zoomSc = iconScale();
   const wVal   = (w !== null && !isNaN(w)) ? Math.min(w, 20) : 0;
-  // Pijllengte: 18px (windstil) → 42px (≥20 m/s)
-  const arrowLen = Math.round((18 + (wVal / 20) * 24) * zoomSc);
-  const sw       = Math.max(2, Math.round((1.5 + (wVal / 20) * 2) * zoomSc)); // schachtdikte
+  // Pijlgrootte: 16px (windstil) → 40px (≥20 m/s), geschaald met zoom
+  const arrowPx = Math.round((16 + (wVal / 20) * 24) * zoomSc);
   const color    = windColor(w);
   const kt       = msToKt(w);
-  const speedTxt = kt !== null ? Math.round(kt) + ' kt' : '–';
-  const compass  = degToCompass(dir);
-  const dirTxt   = compass || '';
-  const labelTxt = dirTxt ? `${speedTxt} ${dirTxt}` : speedTxt;
+  const speedTxt  = kt !== null ? Math.round(kt) + ' kt' : '–';
+  const compass   = degToCompass(dir);
+  const dirTxt    = compass || '';
+  const fs        = Math.max(7, Math.round(8 * zoomSc));
 
+  // Rotatie: wind komt UIT dir → pijl wijst NAAR (dir+180)
   const hasDir   = dir !== null && dir !== undefined && !isNaN(dir);
   const rotation = hasDir ? (Number(dir) + 180) % 360 : 0;
 
-  // Pijl: schacht van boven naar beneden, pijlpunt boven (wijst omhoog = Noord)
-  const W    = arrowLen;
-  const H    = arrowLen;
-  const cx   = W / 2;
-  const cy   = H / 2;
-  const hs   = sw / 2;           // halve schachtbreedte
-  const hw   = arrowLen * 0.28;  // halve pijlpuntbreedte
-  const hh   = arrowLen * 0.32;  // hoogte pijlpunt
-  const top  = 1;
-  const bot  = H - 1;
+  // Label: "17 kt  W" in één balkje
+  const labelTxt  = dirTxt ? `${speedTxt}  ${dirTxt}` : speedTxt;
+  const labelFs   = Math.max(8, Math.round(9 * zoomSc));
+  const labelPad  = Math.round(4 * zoomSc);
+  const labelH    = labelFs + labelPad * 2;
+  const labelW    = Math.max(arrowPx, Math.round(labelTxt.length * labelFs * 0.62) + labelPad * 2);
+  const totalW    = labelW;
+  const pcx       = totalW / 2;
+  const cy        = arrowPx / 2;
 
-  // Simpele pijl: driehoekspunt + rechte schacht
-  const arrowPath = `M ${cx},${top} L ${cx+hw},${top+hh} L ${cx+hs},${top+hh}
-    L ${cx+hs},${bot} L ${cx-hs},${bot} L ${cx-hs},${top+hh} L ${cx-hw},${top+hh} Z`;
+  // Pijlvorm gecentreerd op pcx, wijst omhoog (north)
+  const m   = arrowPx * 0.08;
+  const len = arrowPx - 2 * m;
+  const hw  = len * 0.52;
+  const hh  = len * 0.44;
+  const sw  = len * 0.22;
+  const tipY      = m;
+  const shoulderY = m + hh;
+  const baseY     = m + len;
 
-  const labelFs  = Math.max(9, Math.round(9.5 * zoomSc));
-  const labelPad = Math.round(3.5 * zoomSc);
-  const labelH   = labelFs + labelPad * 2;
-  const labelW   = Math.round(labelTxt.length * labelFs * 0.58) + labelPad * 2;
-  const totalW   = Math.max(W, labelW);
-  const pcx      = totalW / 2;
-  const labelY   = H + 3;
-  const totalH   = labelY + labelH + 1;
+  const path = `M ${pcx},${tipY}
+    L ${pcx + hw/2},${shoulderY} L ${pcx + sw/2},${shoulderY}
+    L ${pcx + sw/2},${baseY}     L ${pcx - sw/2},${baseY}
+    L ${pcx - sw/2},${shoulderY} L ${pcx - hw/2},${shoulderY} Z`;
+
+  const labelY = arrowPx + 4;
+  const totalH = labelY + labelH + 2;
 
   return L.divIcon({
     className:   '',
@@ -1066,15 +1070,17 @@ function makeWindIcon(w, dir) {
     popupAnchor: [0, -(cy + 4)],
     html: `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" style="overflow:visible;cursor:pointer">
       <rect x="0" y="0" width="${totalW}" height="${totalH}" fill="transparent"/>
-      <g transform="translate(${pcx - cx},0) rotate(${rotation},${cx},${cy})">
-        <path d="${arrowPath}" fill="${color}"
-          stroke="white" stroke-width="0.8" stroke-linejoin="round"/>
+      <g transform="rotate(${rotation},${pcx},${cy})">
+        <path d="${path}" fill="${color}" fill-opacity="0.92"
+          stroke="rgba(0,0,0,0.30)" stroke-width="1" stroke-linejoin="round"/>
       </g>
       <rect x="${pcx - labelW/2}" y="${labelY}" width="${labelW}" height="${labelH}"
-        rx="3" fill="rgba(15,23,42,0.72)" stroke="${color}" stroke-width="1"/>
+        rx="${Math.round(labelH/2)}"
+        fill="${color}" fill-opacity="0.92" stroke="rgba(0,0,0,0.25)" stroke-width="1"/>
       <text x="${pcx}" y="${labelY + labelH/2 + 0.5}" text-anchor="middle" dominant-baseline="middle"
         font-family="Inter,Segoe UI,system-ui,sans-serif"
-        font-size="${labelFs}" font-weight="700" fill="${color}">${labelTxt}</text>
+        font-size="${labelFs}" font-weight="700" fill="white"
+        letter-spacing="0.5">${labelTxt}</text>
     </svg>`,
   });
 }
