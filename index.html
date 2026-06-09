@@ -1061,7 +1061,8 @@ function makeWindIcon(w, dir) {
     iconSize:    [arrowPx, totalH],
     iconAnchor:  [cx, cy],
     popupAnchor: [0, -(cy + 4)],
-    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${arrowPx}" height="${totalH}">
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${arrowPx}" height="${totalH}" style="overflow:visible;cursor:pointer">
+      <rect x="0" y="0" width="${arrowPx}" height="${totalH}" fill="transparent"/>
       <g transform="rotate(${rotation},${cx},${cy})">
         <path d="${path}" fill="${color}" fill-opacity="0.92"
           stroke="rgba(0,0,0,0.30)" stroke-width="1" stroke-linejoin="round"/>
