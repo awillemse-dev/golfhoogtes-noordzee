@@ -812,7 +812,12 @@ const LEGEND_CONTENT = {
     <div class="legend-row"><div class="legend-dot" style="background:#eab308"></div>11 – 16 kt &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 4</span></div>
     <div class="legend-row"><div class="legend-dot" style="background:#f97316"></div>16 – 21 kt &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 5</span></div>
     <div class="legend-row"><div class="legend-dot" style="background:#ef4444"></div>21 – 27 kt &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 6</span></div>
-    <div class="legend-row"><div class="legend-dot" style="background:#7f1d1d"></div>&gt; 27 kt &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 7+</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#dc2626"></div>27 – 33 kt &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 7</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#b91c1c"></div>33 – 40 kt &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 8</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#7f1d1d"></div>40 – 48 kt &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 9</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#6b21a8"></div>48 – 55 kt &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 10</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#4c1d95"></div>55 – 64 kt &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 11</span></div>
+    <div class="legend-row"><div class="legend-dot" style="background:#1e1b4b"></div>&gt; 64 kt &nbsp;<span style="color:var(--text-muted);font-size:0.62rem">Bft 12</span></div>
     <div class="legend-sub">Bron: RWS</div>`,
   zicht: `
     <h4>Zicht (km)</h4>
@@ -1005,12 +1010,17 @@ function msToKt(w) { return w !== null && w !== undefined ? w * 1.94384 : null; 
 
 function windColor(w) {   // w in m/s
   if (w === null || isNaN(w)) return '#3d5167';
-  if (w < 3.4)  return '#22c55e';   // Bft 0-2
-  if (w < 5.5)  return '#84cc16';   // Bft 3
-  if (w < 8.0)  return '#eab308';   // Bft 4-5
-  if (w < 10.8) return '#f97316';   // Bft 6
-  if (w < 13.9) return '#ef4444';   // Bft 7-8
-  return '#7f1d1d';                  // Bft 9+
+  if (w < 3.4)  return '#22c55e';   // Bft 0-2  < 7 kt
+  if (w < 5.5)  return '#84cc16';   // Bft 3    7-11 kt
+  if (w < 8.0)  return '#eab308';   // Bft 4    11-16 kt
+  if (w < 10.8) return '#f97316';   // Bft 5    16-21 kt
+  if (w < 13.9) return '#ef4444';   // Bft 6    21-27 kt
+  if (w < 17.2) return '#dc2626';   // Bft 7    27-33 kt
+  if (w < 20.8) return '#b91c1c';   // Bft 8    33-40 kt
+  if (w < 24.5) return '#7f1d1d';   // Bft 9    40-48 kt
+  if (w < 28.5) return '#6b21a8';   // Bft 10   48-55 kt
+  if (w < 32.7) return '#4c1d95';   // Bft 11   55-64 kt
+  return '#1e1b4b';                  // Bft 12   ≥ 64 kt
 }
 
 function degToCompass(deg) {
