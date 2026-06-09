@@ -1640,7 +1640,11 @@ async function openWindChart(code, naam, huidigWind, tijdstip) {
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
 
   try {
-    const resp = await fetch(windHistoryUrl(code), { cache: 'no-store' });
+    // rws.wind.* → direct van GitHub CDN; rest via proxy
+    const windHistUrl = code.startsWith('rws.wind.')
+      ? `${REPO_RAW}/data/wind-history/${code.replace(/\./g, '-')}.json`
+      : windHistoryUrl(code);
+    const resp = await fetch(windHistUrl, { cache: 'no-store' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const json = await resp.json();
     if (!json.data || json.data.length === 0) {
@@ -1655,7 +1659,9 @@ async function openWindChart(code, naam, huidigWind, tijdstip) {
     const maxVal = Math.max(...values);
 
     // Windrichting dataset (rechter as)
-    const dirPoints = (json.dir_data || []).map(d => ({ x: new Date(d.t), y: d.v }));
+    // Ondersteunt zowel oud proxy-formaat {dir_data:[{t,v}]} als nieuw CDN-formaat {data:[{t,v,d}]}
+    const rawDir = json.dir_data || json.data.filter(d => d.d !== undefined).map(d => ({ t: d.t, v: d.d }));
+    const dirPoints = rawDir.map(d => ({ x: new Date(d.t), y: d.v }));
     const dirColor  = 'rgba(148,163,184,0.85)';
 
     const opts = CHART_OPTS(color);

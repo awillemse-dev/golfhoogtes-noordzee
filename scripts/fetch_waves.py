@@ -17,9 +17,11 @@ from pathlib import Path
 DATA_DIR      = Path("data")
 HISTORY_DIR   = DATA_DIR / "history"
 TEMP_HIST_DIR = DATA_DIR / "temp-history"
+WIND_HIST_DIR = DATA_DIR / "wind-history"
 DATA_DIR.mkdir(exist_ok=True)
 HISTORY_DIR.mkdir(exist_ok=True)
 TEMP_HIST_DIR.mkdir(exist_ok=True)
+WIND_HIST_DIR.mkdir(exist_ok=True)
 
 # ── API-basisadressen ─────────────────────────────────────────────────────────
 
@@ -126,6 +128,43 @@ def append_to_temp_history(code, naam, tijdstip, temp_c):
     if tijdstip not in timestamps:
         existing.append({"t": tijdstip, "v": temp_c})
     save_temp_history(code, naam, existing)
+
+
+# ── Wind geschiedenis ─────────────────────────────────────────────────────────
+
+def load_wind_history(code):
+    path = WIND_HIST_DIR / f"{code_to_filename(code)}.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text()).get("data", [])
+        except Exception:
+            pass
+    return []
+
+
+def save_wind_history(code, naam, data_points):
+    now    = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(hours=25)).isoformat()
+    pruned = sorted(
+        [pt for pt in data_points if pt["t"] >= cutoff],
+        key=lambda x: x["t"],
+    )
+    path = WIND_HIST_DIR / f"{code_to_filename(code)}.json"
+    path.write_text(json.dumps({"code": code, "naam": naam, "data": pruned}, ensure_ascii=False))
+
+
+def append_to_wind_history(code, naam, tijdstip, speed_ms, direction=None):
+    """Voeg windmeting toe; v = snelheid m/s, d = richting graden (optioneel)."""
+    if tijdstip is None or speed_ms is None:
+        return
+    existing   = load_wind_history(code)
+    timestamps = {pt["t"] for pt in existing}
+    if tijdstip not in timestamps:
+        entry = {"t": tijdstip, "v": round(float(speed_ms), 1)}
+        if direction is not None:
+            entry["d"] = int(round(direction)) % 360
+        existing.append(entry)
+    save_wind_history(code, naam, existing)
 
 
 # ── RWS: catalogus en laatste waarnemingen ────────────────────────────────────
@@ -659,6 +698,108 @@ def fetch_cefas_history(station_id, source, code, naam):
         print(f"[CEFAS history] {station_id}: {e}")
 
 
+# ── RWS: wind geschiedenis ────────────────────────────────────────────────────
+
+WIND_INLAND = [
+    "ijsselmeer", "markermeer", "markerwaard", "slotermeer", "woudsend",
+    "waddenzee", "grevelingen", "haringvliet", "hollands diep",
+]
+
+def fetch_rws_wind_current(catalog):
+    """Haal actuele RWS windwaarnemingen op en append naar wind-history bestanden."""
+    meta      = catalog.get("AquoMetadataLijst", [])
+    locs      = catalog.get("LocatieLijst", [])
+    meta_locs = catalog.get("AquoMetadataLocatieLijst", [])
+
+    wind_meta_ids = {
+        m["AquoMetadata_MessageID"] for m in meta
+        if m.get("Grootheid", {}).get("Code") == "WINDSHD"
+        and m.get("Compartiment", {}).get("Code") == "LT"
+    }
+    wind_loc_ids = {
+        r["Locatie_MessageID"] for r in meta_locs
+        if r.get("AquoMetaData_MessageID") in wind_meta_ids
+    }
+    stations = [
+        l for l in locs
+        if l.get("Locatie_MessageID") in wind_loc_ids
+        and l.get("Lat") is not None and l.get("Lon") is not None
+        and not any(kw in (l.get("Code","") + l.get("Naam","")).lower() for kw in WIND_INLAND)
+    ]
+    print(f"[RWS wind hist] {len(stations)} stations gevonden")
+
+    BATCH = 20
+    now = datetime.now(timezone.utc)
+    station_map = {s["Code"]: s for s in stations}
+    count = 0
+
+    for i in range(0, len(stations), BATCH):
+        batch = stations[i:i + BATCH]
+        loc_list = [{"Code": s["Code"]} for s in batch]
+        try:
+            resp_spd = rws_post(
+                "/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen",
+                {"AquoPlusWaarnemingMetadataLijst": [{"AquoMetadata": {
+                    "Compartiment": {"Code": "LT"},
+                    "Eenheid": {"Code": "m/s"},
+                    "Grootheid": {"Code": "WINDSHD"},
+                }}], "LocatieLijst": loc_list},
+            )
+        except Exception as e:
+            print(f"[RWS wind hist] snelheid batch {i}: {e}")
+            continue
+        try:
+            resp_dir = rws_post(
+                "/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen",
+                {"AquoPlusWaarnemingMetadataLijst": [{"AquoMetadata": {
+                    "Compartiment": {"Code": "LT"},
+                    "Eenheid": {"Code": "graad"},
+                    "Grootheid": {"Code": "WINDRTG"},
+                }}], "LocatieLijst": loc_list},
+            )
+        except Exception:
+            resp_dir = {}
+
+        # Richting per locatie
+        dir_by_loc = {}
+        for w in resp_dir.get("WaarnemingenLijst", []):
+            loc_code = (w.get("Locatie") or {}).get("Code")
+            metingen = w.get("MetingenLijst") or []
+            waarde   = (metingen[0].get("Meetwaarde") or {}).get("Waarde_Numeriek") if metingen else None
+            if loc_code and waarde is not None:
+                dir_by_loc[loc_code] = int(round(waarde)) % 360
+
+        for w in resp_spd.get("WaarnemingenLijst", []):
+            loc_code = (w.get("Locatie") or {}).get("Code")
+            if not loc_code:
+                continue
+            station  = station_map.get(loc_code) or {}
+            naam     = (w.get("Locatie") or {}).get("Naam") or station.get("Naam") or loc_code
+            metingen = w.get("MetingenLijst") or []
+            if not metingen:
+                continue
+            waarde   = (metingen[0].get("Meetwaarde") or {}).get("Waarde_Numeriek")
+            tijdstip = metingen[0].get("Tijdstip")
+            if waarde is None or tijdstip is None:
+                continue
+            wind_ms = round(float(waarde), 1)
+            if not (0 <= wind_ms <= 60):
+                continue
+            try:
+                dt = datetime.fromisoformat(tijdstip)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if (now - dt).total_seconds() > 6 * 3600:
+                    continue
+            except Exception:
+                pass
+            code = f"rws.wind.{loc_code.lower()}"
+            append_to_wind_history(code, naam, tijdstip, wind_ms, dir_by_loc.get(loc_code))
+            count += 1
+
+    print(f"[RWS wind hist] {count} metingen opgeslagen → data/wind-history/")
+
+
 # ── Hoofdprogramma ────────────────────────────────────────────────────────────
 
 def main():
@@ -754,6 +895,12 @@ def main():
         print(f"[KLAAR KNMI] {knmi_count} stations → data/temp-history/knmi-*.json")
     except Exception as e:
         print(f"[KNMI temp] Fout: {e}")
+
+    # ── RWS windgeschiedenis ─────────────────────────────────────────────────
+    try:
+        fetch_rws_wind_current(catalog)
+    except Exception as e:
+        print(f"[RWS wind hist] Fout: {e}")
 
 
 if __name__ == "__main__":
