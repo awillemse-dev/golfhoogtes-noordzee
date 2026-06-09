@@ -1021,56 +1021,57 @@ function degToCompass(deg) {
 
 function makeWindIcon(w, dir) {
   const zoomSc = iconScale();
-  // Windsnelheids-schaal: 0.70 bij windstil, 1.0 bij ≥15 m/s (= Bft 7)
-  const wVal   = (w !== null && !isNaN(w)) ? Math.min(w, 15) : 0;
-  const windSc = 0.70 + (wVal / 15) * 0.30;
-  const sc     = zoomSc * windSc;
-  const color   = windColor(w);
-  const kt      = msToKt(w);
-  const bft     = msToBft(w);
-  const compass = degToCompass(dir);
-  const hasDir  = compass !== null;
+  const wVal   = (w !== null && !isNaN(w)) ? Math.min(w, 20) : 0;
+  // Pijlgrootte: 16px (windstil) → 40px (≥20 m/s), geschaald met zoom
+  const arrowPx = Math.round((16 + (wVal / 20) * 24) * zoomSc);
+  const color    = windColor(w);
+  const kt       = msToKt(w);
+  const speedTxt = kt !== null ? Math.round(kt) + ' kt' : '–';
+  const fs       = Math.max(7, Math.round(8 * zoomSc));
 
-  // Hoofdtekst: bijv "17 kt"  Subtekst: "(Bft 4)"
-  const speedLabel = kt !== null ? Math.round(kt) + ' kt' : '–';
-  const bftLabel   = bft !== null ? `${bft} bft` : '';
+  // Rotatie: wind komt UIT dir → pijl wijst NAAR (dir+180)
+  const hasDir   = dir !== null && dir !== undefined && !isNaN(dir);
+  const rotation = hasDir ? (Number(dir) + 180) % 360 : 0;
 
-  // Iets groter dan voorheen: basisblok 30px hoog, breed genoeg voor alle tekst
-  const ht   = Math.round(30 * sc);
-  const dirW = hasDir ? Math.round(24 * sc) : 0;
-  const valW = Math.round(52 * sc);   // snelheid + bft sectie
-  const ww   = dirW + valW;
-  const fsMain = Math.max(8,  Math.round(11 * sc));
-  const fsSub  = Math.max(6,  Math.round(8  * sc));
-  const rx   = Math.max(2, Math.round(5 * sc));
+  const cx = arrowPx / 2;
+  const cy = arrowPx / 2;
 
-  const dirSection = hasDir ? `
-    <text x="${dirW / 2}" y="${ht * 0.62}" text-anchor="middle"
-      font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fsMain}"
-      font-weight="700" fill="white">${compass}</text>
-    <line x1="${dirW}" y1="3" x2="${dirW}" y2="${ht - 3}"
-      stroke="rgba(255,255,255,0.35)" stroke-width="1"/>` : '';
+  // Pijlvorm gecentreerd in arrowPx×arrowPx, wijst omhoog (north)
+  const m   = arrowPx * 0.08;          // marge rondom
+  const len = arrowPx - 2 * m;         // totale pijllengte
+  const hw  = len * 0.52;              // breedte pijlpunt
+  const hh  = len * 0.44;              // hoogte pijlpunt
+  const sw  = len * 0.22;              // breedte schacht
+  const tipY      = m;
+  const shoulderY = m + hh;
+  const baseY     = m + len;
 
-  const cx = dirW + valW / 2;
-  const valSection = `
-    <text x="${cx}" y="${ht * 0.50}" text-anchor="middle" dominant-baseline="middle"
-      font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fsMain}"
-      font-weight="700" fill="white">${speedLabel}</text>
-    <text x="${cx}" y="${ht * 0.85}" text-anchor="middle" dominant-baseline="middle"
-      font-family="Inter,Segoe UI,system-ui,sans-serif" font-size="${fsSub}"
-      font-weight="400" fill="rgba(255,255,255,0.75)">${bftLabel}</text>`;
+  const path = `M ${cx},${tipY}
+    L ${cx + hw/2},${shoulderY}
+    L ${cx + sw/2},${shoulderY}
+    L ${cx + sw/2},${baseY}
+    L ${cx - sw/2},${baseY}
+    L ${cx - sw/2},${shoulderY}
+    L ${cx - hw/2},${shoulderY} Z`;
+
+  const totalH = arrowPx + fs + 3;
 
   return L.divIcon({
     className:   '',
-    iconSize:    [ww, ht],
-    iconAnchor:  [ww / 2, ht / 2],
-    popupAnchor: [0, -(ht / 2 + 6)],
-    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${ww}" height="${ht}">
-      <rect x="1" y="1" width="${ww-2}" height="${ht-2}" rx="${rx}"
-        fill="${color}" fill-opacity="0.88"/>
-      <rect x="1" y="1" width="${ww-2}" height="${ht-2}" rx="${rx}"
-        fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>
-      ${dirSection}${valSection}
+    iconSize:    [arrowPx, totalH],
+    iconAnchor:  [cx, cy],
+    popupAnchor: [0, -(cy + 4)],
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="${arrowPx}" height="${totalH}">
+      <g transform="rotate(${rotation},${cx},${cy})">
+        <path d="${path}" fill="${color}" fill-opacity="0.92"
+          stroke="rgba(0,0,0,0.30)" stroke-width="1" stroke-linejoin="round"/>
+      </g>
+      <text x="${cx}" y="${arrowPx + fs}" text-anchor="middle"
+        font-family="Inter,Segoe UI,system-ui,sans-serif"
+        font-size="${fs}" font-weight="700" fill="${color}"
+        paint-order="stroke" stroke="rgba(0,0,0,0.65)"
+        stroke-width="2.5" stroke-linecap="round"
+        stroke-linejoin="round">${speedTxt}</text>
     </svg>`,
   });
 }
