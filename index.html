@@ -3037,11 +3037,12 @@ function _updateRouteChart(idx) {
 
   const datasets = [
     { label: 'Wind (kt)', data: windData, yAxisID: 'yWind',
-      borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.07)',
-      fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, spanGaps: true },
+      borderColor: '#e2e8f0', backgroundColor: 'transparent',
+      fill: false, tension: 0.3, pointRadius: 0, borderWidth: 2, spanGaps: true },
     { label: 'Golven (m)', data: waveData, yAxisID: 'yWave',
-      borderColor: '#22d3ee', backgroundColor: 'rgba(34,211,238,0.07)',
-      fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, spanGaps: true },
+      borderColor: '#e2e8f0', backgroundColor: 'transparent',
+      borderDash: [5, 4],
+      fill: false, tension: 0.3, pointRadius: 0, borderWidth: 2, spanGaps: true },
   ];
   if (limitWind) datasets.push({
     label: '', data: labels.map(() => limitWind), yAxisID: 'yWind',
@@ -3097,14 +3098,14 @@ function _updateRouteChart(idx) {
         yWind: {
           position: 'left',
           grid: { color: 'rgba(255,255,255,0.05)' },
-          ticks: { color: '#60a5fa', font: { size: 9 }, maxTicksLimit: 5,
+          ticks: { color: '#e2e8f0', font: { size: 9 }, maxTicksLimit: 5,
             callback: v => v + ' kt' },
           border: { display: false },
         },
         yWave: {
           position: 'right',
           grid: { drawOnChartArea: false },
-          ticks: { color: '#22d3ee', font: { size: 9 }, maxTicksLimit: 5,
+          ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 5,
             callback: v => v + ' m' },
           border: { display: false },
         },
