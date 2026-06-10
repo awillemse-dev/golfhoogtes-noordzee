@@ -460,6 +460,45 @@
       width: calc(100% - 32px);
     }
     #route-clear-btn:hover { border-color: #ef4444; color: #ef4444; }
+
+    /* ── Route forecast kaartjes ─────────────────────────────────────────── */
+    .route-fc-card {
+      margin: 0 10px 6px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .route-fc-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.03);
+    }
+    .route-fc-badge {
+      width: 22px; height: 22px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem; font-weight: 700; color: white;
+      flex-shrink: 0;
+    }
+    .route-fc-card-title { font-size: 0.78rem; font-weight: 600; color: #e2e8f0; flex: 1; }
+    .route-fc-card-time  { font-size: 0.68rem; color: var(--text-muted); }
+    .route-fc-metrics {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 1px;
+      background: var(--border);
+    }
+    .route-fc-metric {
+      background: var(--bg);
+      padding: 8px 10px;
+      text-align: center;
+    }
+    .route-fc-metric-val { font-size: 0.9rem; font-weight: 700; }
+    .route-fc-metric-lbl { font-size: 0.6rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+    .route-fc-loading { padding: 24px; text-align: center; color: var(--text-muted); font-size: 0.78rem; }
     #route-click-hint {
       font-size: 0.72rem;
       color: var(--text-muted);
@@ -873,6 +912,13 @@
           </div>
         </div>
 
+        <div class="route-section">
+          <label>Vertrekdatum &amp; -tijd (UTC)</label>
+          <div class="route-input-row">
+            <input id="route-departure" type="datetime-local" style="flex:1">
+          </div>
+        </div>
+
         <div class="route-section" style="border-bottom:none">
           <label>Waypoints</label>
           <div id="route-click-hint">Klik op de kaart om waypoints toe te voegen langs je route.</div>
@@ -880,18 +926,35 @@
 
         <div id="route-waypoints-list"></div>
 
-        <div style="padding:0 16px 6px;display:flex;flex-direction:column;gap:8px;">
+        <div style="padding:0 16px 12px;display:flex;flex-direction:column;gap:8px;">
           <div id="route-total-info" style="font-size:0.75rem;color:var(--text-muted);min-height:1.2em"></div>
-          <button id="route-save-btn" onclick="routeSave()" style="background:#1d4ed8;color:white;border:none;border-radius:6px;font-size:0.8rem;font-weight:700;padding:9px;cursor:pointer;">Route opslaan</button>
+          <button id="route-save-btn" onclick="routeSave()" style="background:#1d4ed8;color:white;border:none;border-radius:6px;font-size:0.8rem;font-weight:700;padding:9px;cursor:pointer;">Route opslaan &amp; voorspelling berekenen</button>
           <button id="route-clear-btn" onclick="routeClearAll()">Alles wissen</button>
         </div>
       </div>
 
-      <!-- Opgeslagen route overlay (vervangt sidebar) -->
-      <div id="route-saved-overlay" style="display:none; position:absolute; top:12px; right:12px; z-index:1000; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; min-width:220px; max-width:280px;">
-        <div style="font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px">Opgeslagen route</div>
-        <div id="route-saved-info" style="font-size:0.8rem;color:#e2e8f0;line-height:1.7;"></div>
-        <button onclick="routeEdit()" style="margin-top:12px;width:100%;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-muted);font-size:0.75rem;padding:7px;cursor:pointer;">Route bewerken</button>
+      <!-- Forecast paneel (naast kaart, vervangt sidebar) -->
+      <div id="route-forecast-panel" style="display:none;width:320px;flex-shrink:0;background:var(--surface);border-left:1px solid var(--border);flex-direction:column;overflow:hidden;">
+        <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;">
+          <button onclick="routeHideForecast()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:0.8rem;padding:0;line-height:1">← Sluiten</button>
+          <span style="font-size:0.82rem;font-weight:700;color:var(--text-dim);flex:1">Weersvoorspelling</span>
+          <button onclick="routeEdit()" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--text-muted);cursor:pointer;font-size:0.72rem;padding:3px 8px;">Bewerken</button>
+        </div>
+        <div id="route-fc-summary" style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:0.75rem;color:var(--text-muted);line-height:1.6;flex-shrink:0;"></div>
+        <div id="route-fc-results" style="flex:1;overflow-y:auto;padding:8px 0;"></div>
+        <div style="padding:4px 14px 12px;font-size:0.65rem;color:var(--text-muted);line-height:1.4;flex-shrink:0;">
+          Weerdata: Open-Meteo (ECMWF &amp; GFS) · Golfdata: ECMWF WAM
+        </div>
+      </div>
+
+      <!-- Opgeslagen route overlay (compact, op kaart) -->
+      <div id="route-saved-overlay" style="display:none; position:absolute; top:12px; right:12px; z-index:1000; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 14px; min-width:200px; max-width:260px;">
+        <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Route opgeslagen</div>
+        <div id="route-saved-info" style="font-size:0.78rem;color:#e2e8f0;line-height:1.7;margin-bottom:10px;"></div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <button onclick="routeShowForecast()" style="background:#1d4ed8;color:white;border:none;border-radius:6px;font-size:0.75rem;font-weight:600;padding:7px;cursor:pointer;">Weersvoorspelling tonen</button>
+          <button onclick="routeEdit()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-muted);font-size:0.75rem;padding:7px;cursor:pointer;">Route bewerken</button>
+        </div>
       </div>
     </div>
 
@@ -2561,31 +2624,28 @@ function routeClearAll() {
   _routeWaypoints = [];
   if (_routeLine)  { _routeMap.removeLayer(_routeLine); _routeLine = null; }
   _renderWaypointList();
-  document.getElementById('route-saved-overlay').style.display = 'none';
+  document.getElementById('route-saved-overlay').style.display  = 'none';
+  document.getElementById('route-forecast-panel').style.display = 'none';
   document.getElementById('route-sidebar').style.display = '';
   setTimeout(() => _routeMap.invalidateSize(), 50);
 }
 
 function routeSave() {
-  const pts = _routeAllPoints();
+  const pts   = _routeAllPoints();
   if (pts.length < 2) return;
   const speed = parseFloat(document.getElementById('route-speed').value) || null;
+  if (!speed) { alert('Vul eerst een scheepssnelheid in (kt).'); return; }
 
-  // Bereken totaal
   let totalNm = 0;
   for (let i = 1; i < pts.length; i++)
     totalNm += _routeDistNm(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
-
-  const speedStr = speed ? `${speed} kt` : '–';
-  const timeStr  = speed ? `~${(totalNm/speed).toFixed(1)} u` : '–';
 
   document.getElementById('route-saved-info').innerHTML =
     `<b>Van:</b> ${pts[0].lat.toFixed(4)}, ${pts[0].lon.toFixed(4)}<br>` +
     `<b>Naar:</b> ${pts[pts.length-1].lat.toFixed(4)}, ${pts[pts.length-1].lon.toFixed(4)}<br>` +
     `<b>Waypoints:</b> ${_routeWaypoints.length}<br>` +
     `<b>Afstand:</b> ${totalNm.toFixed(1)} nm<br>` +
-    `<b>Snelheid:</b> ${speedStr}<br>` +
-    `<b>Reistijd:</b> ${timeStr}`;
+    `<b>Snelheid:</b> ${speed} kt · ~${(totalNm/speed).toFixed(1)} u`;
 
   document.getElementById('route-sidebar').style.display = 'none';
   document.getElementById('route-saved-overlay').style.display = '';
@@ -2593,9 +2653,173 @@ function routeSave() {
 }
 
 function routeEdit() {
-  document.getElementById('route-saved-overlay').style.display = 'none';
+  document.getElementById('route-saved-overlay').style.display  = 'none';
+  document.getElementById('route-forecast-panel').style.display = 'none';
   document.getElementById('route-sidebar').style.display = '';
   setTimeout(() => _routeMap.invalidateSize(), 50);
+}
+
+function routeHideForecast() {
+  document.getElementById('route-forecast-panel').style.display = 'none';
+  document.getElementById('route-saved-overlay').style.display  = '';
+  setTimeout(() => _routeMap.invalidateSize(), 50);
+}
+
+function routeShowForecast() {
+  const fcPanel = document.getElementById('route-forecast-panel');
+  fcPanel.style.display = 'flex';
+  document.getElementById('route-saved-overlay').style.display = 'none';
+  setTimeout(() => _routeMap.invalidateSize(), 50);
+  _fetchRouteForecast();
+}
+
+async function _fetchRouteForecast() {
+  const pts      = _routeAllPoints();
+  const speed    = parseFloat(document.getElementById('route-speed').value);
+  const depInput = document.getElementById('route-departure').value;
+  const depTime  = depInput ? new Date(depInput + ':00Z') : new Date();
+
+  const resultsEl = document.getElementById('route-fc-results');
+  const summaryEl = document.getElementById('route-fc-summary');
+  resultsEl.innerHTML = '<div class="route-fc-loading">Weerdata ophalen…</div>';
+
+  let totalNm = 0;
+  for (let i = 1; i < pts.length; i++)
+    totalNm += _routeDistNm(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
+  const totalHours = totalNm / speed;
+  const eta = new Date(depTime.getTime() + totalHours * 3600000);
+
+  summaryEl.innerHTML =
+    `Vertrek: <b>${depTime.toUTCString().slice(0,22)} UTC</b><br>` +
+    `ETA: <b>${eta.toUTCString().slice(0,22)} UTC</b> · ${totalNm.toFixed(1)} nm · ~${totalHours.toFixed(1)} u`;
+
+  // Per waypoint: bereken ETA en haal weer op
+  let distAccum = 0;
+  const cards = [];
+
+  for (let i = 0; i < pts.length; i++) {
+    if (i > 0) distAccum += _routeDistNm(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
+    const eta_i  = new Date(depTime.getTime() + (distAccum / speed) * 3600000);
+    cards.push({ pt: pts[i], eta: eta_i, dist: distAccum });
+  }
+
+  // Fetch Open-Meteo voor alle punten parallel
+  // Marine API voor golven + atmosferisch voor wind
+  const fetchPoint = async (card) => {
+    const { lat, lon } = card.pt;
+    const isoDate = card.eta.toISOString().slice(0, 10);
+    const hour    = card.eta.toISOString().slice(11, 13);
+
+    const marineUrl = `https://marine-api.open-meteo.com/v1/marine?` +
+      `latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}` +
+      `&hourly=wave_height,wave_direction,wave_period,wind_wave_height` +
+      `&start_date=${isoDate}&end_date=${isoDate}` +
+      `&models=best_match`;
+
+    const windUrl = `https://api.open-meteo.com/v1/forecast?` +
+      `latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}` +
+      `&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
+      `&wind_speed_unit=kn` +
+      `&start_date=${isoDate}&end_date=${isoDate}` +
+      `&models=best_match`;
+
+    const [marineResp, windResp] = await Promise.all([
+      fetch(marineUrl).then(r => r.json()).catch(() => null),
+      fetch(windUrl).then(r => r.json()).catch(() => null),
+    ]);
+
+    // Zoek het dichtstbijzijnde uur
+    const h = parseInt(hour);
+    const getHourVal = (obj, key) => {
+      if (!obj || !obj.hourly) return null;
+      const times = obj.hourly.time || [];
+      const vals  = obj.hourly[key] || [];
+      let best = 0;
+      let bestDiff = Infinity;
+      times.forEach((t, idx) => {
+        const th = parseInt(t.slice(11, 13));
+        const diff = Math.abs(th - h);
+        if (diff < bestDiff) { bestDiff = diff; best = idx; }
+      });
+      return vals[best] ?? null;
+    };
+
+    return {
+      waveHm0:  getHourVal(marineResp, 'wave_height'),
+      waveDir:  getHourVal(marineResp, 'wave_direction'),
+      wavePer:  getHourVal(marineResp, 'wave_period'),
+      windKt:   getHourVal(windResp,   'wind_speed_10m'),
+      windDir:  getHourVal(windResp,   'wind_direction_10m'),
+      windGust: getHourVal(windResp,   'wind_gusts_10m'),
+    };
+  };
+
+  let results;
+  try {
+    results = await Promise.all(cards.map(fetchPoint));
+  } catch(e) {
+    resultsEl.innerHTML = `<div class="route-fc-loading" style="color:#ef4444">Fout: ${e.message}</div>`;
+    return;
+  }
+
+  const colors = ['#22c55e', '#ef4444'];
+  const fmtDir = d => {
+    if (d === null) return '–';
+    const dirs = ['N','NO','O','ZO','Z','ZW','W','NW'];
+    return dirs[Math.round(((d % 360) + 360) % 360 / 45) % 8];
+  };
+  const fmtVal = (v, dec=1) => v !== null && v !== undefined ? v.toFixed(dec) : '–';
+  const waveColor  = h => h === null ? '#3d5167' : h < 0.5 ? '#22c55e' : h < 1.0 ? '#84cc16' : h < 1.5 ? '#eab308' : h < 2.5 ? '#f97316' : '#ef4444';
+  const windColKt  = k => k === null ? '#3d5167' : k < 7 ? '#22c55e' : k < 11 ? '#84cc16' : k < 16 ? '#eab308' : k < 21 ? '#f97316' : k < 27 ? '#ef4444' : '#7f1d1d';
+
+  resultsEl.innerHTML = '';
+  cards.forEach((card, i) => {
+    const r  = results[i];
+    const lbl = card.pt.label;
+    const bg  = lbl === 'A' ? '#22c55e' : lbl === 'B' ? '#ef4444' : '#3b82f6';
+    const timeStr = card.eta.toISOString().slice(11, 16) + ' UTC';
+    const dateStr = card.eta.toISOString().slice(0, 10);
+
+    const el = document.createElement('div');
+    el.className = 'route-fc-card';
+    el.innerHTML = `
+      <div class="route-fc-card-header">
+        <div class="route-fc-badge" style="background:${bg}">${lbl}</div>
+        <div class="route-fc-card-title">${card.pt.lat.toFixed(3)}, ${card.pt.lon.toFixed(3)}</div>
+        <div class="route-fc-card-time">${dateStr}<br>${timeStr}</div>
+      </div>
+      <div style="padding:6px 10px 2px;font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.05em">Wind</div>
+      <div class="route-fc-metrics">
+        <div class="route-fc-metric">
+          <div class="route-fc-metric-val" style="color:${windColKt(r.windKt)}">${fmtVal(r.windKt, 0)} kt</div>
+          <div class="route-fc-metric-lbl">Snelheid</div>
+        </div>
+        <div class="route-fc-metric">
+          <div class="route-fc-metric-val" style="color:#94a3b8">${fmtDir(r.windDir)}</div>
+          <div class="route-fc-metric-lbl">Richting</div>
+        </div>
+        <div class="route-fc-metric">
+          <div class="route-fc-metric-val" style="color:#64748b">${fmtVal(r.windGust, 0)} kt</div>
+          <div class="route-fc-metric-lbl">Windstoten</div>
+        </div>
+      </div>
+      <div style="padding:6px 10px 2px;font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.05em">Golven</div>
+      <div class="route-fc-metrics" style="margin-bottom:0">
+        <div class="route-fc-metric">
+          <div class="route-fc-metric-val" style="color:${waveColor(r.waveHm0)}">${fmtVal(r.waveHm0)} m</div>
+          <div class="route-fc-metric-lbl">Hm0</div>
+        </div>
+        <div class="route-fc-metric">
+          <div class="route-fc-metric-val" style="color:#94a3b8">${fmtDir(r.waveDir)}</div>
+          <div class="route-fc-metric-lbl">Richting</div>
+        </div>
+        <div class="route-fc-metric">
+          <div class="route-fc-metric-val" style="color:#64748b">${fmtVal(r.wavePer)} s</div>
+          <div class="route-fc-metric-lbl">Periode</div>
+        </div>
+      </div>`;
+    resultsEl.appendChild(el);
+  });
 }
 
 // ── Waarnemingen Nederland ────────────────────────────────────────────────────
