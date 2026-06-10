@@ -341,6 +341,132 @@
     }
 
 
+    /* ── Route Forecast ─────────────────────────────────────────────────── */
+    #route-panel {
+      display: none;
+      flex: 1;
+      overflow: hidden;
+      position: relative;
+    }
+    #route-panel.active { display: flex; }
+    #route-map { flex: 1; }
+
+    #route-sidebar {
+      width: 300px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    #route-sidebar h3 {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text-dim);
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      margin: 0;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .route-section {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .route-section label {
+      display: block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .route-input-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .route-input-row input {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: #e2e8f0;
+      font-size: 0.8rem;
+      padding: 6px 9px;
+      outline: none;
+      font-family: inherit;
+    }
+    .route-input-row input:focus { border-color: #3b82f6; }
+    .route-input-row input::placeholder { color: var(--text-muted); }
+    .route-set-btn {
+      background: #1d4ed8;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 6px 10px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .route-set-btn:hover { background: #2563eb; }
+    .route-coord-hint {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      margin-top: 5px;
+    }
+    #route-waypoints-list {
+      padding: 10px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .route-wp-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 9px;
+    }
+    .route-wp-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .route-wp-coords { flex: 1; font-family: monospace; font-size: 0.7rem; }
+    .route-wp-del {
+      background: none; border: none;
+      color: var(--text-muted); cursor: pointer;
+      font-size: 0.85rem; padding: 0 2px;
+      line-height: 1;
+    }
+    .route-wp-del:hover { color: #ef4444; }
+    #route-clear-btn {
+      margin: 0 16px 14px;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      padding: 7px;
+      cursor: pointer;
+      width: calc(100% - 32px);
+    }
+    #route-clear-btn:hover { border-color: #ef4444; color: #ef4444; }
+    #route-click-hint {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      padding: 10px 16px 0;
+      line-height: 1.5;
+    }
+
     #coming-soon {
       flex: 1;
       display: none;
@@ -709,6 +835,42 @@
     <!-- NL-paneel -->
     <div id="nl-panel">
       <div id="nl-map"></div>
+    </div>
+
+    <!-- Route Forecast paneel -->
+    <div id="route-panel">
+      <div id="route-map"></div>
+      <div id="route-sidebar">
+        <h3>Route Forecast</h3>
+
+        <div class="route-section">
+          <label>Vertrekhaven</label>
+          <div class="route-input-row">
+            <input id="route-start-lat" type="number" placeholder="Lat" step="0.0001">
+            <input id="route-start-lon" type="number" placeholder="Lon" step="0.0001">
+            <button class="route-set-btn" onclick="routeSetStart()">Zet</button>
+          </div>
+          <div class="route-coord-hint">Bijv. 52.3702, 4.8952 (Amsterdam)</div>
+        </div>
+
+        <div class="route-section">
+          <label>Bestemmingshaven</label>
+          <div class="route-input-row">
+            <input id="route-end-lat" type="number" placeholder="Lat" step="0.0001">
+            <input id="route-end-lon" type="number" placeholder="Lon" step="0.0001">
+            <button class="route-set-btn" onclick="routeSetEnd()">Zet</button>
+          </div>
+          <div class="route-coord-hint">Bijv. 51.9244, 4.4777 (Rotterdam)</div>
+        </div>
+
+        <div class="route-section" style="border-bottom:none">
+          <label>Waypoints</label>
+          <div id="route-click-hint">Klik op de kaart om waypoints toe te voegen langs je route.</div>
+        </div>
+
+        <div id="route-waypoints-list"></div>
+        <button id="route-clear-btn" onclick="routeClearAll()">Alles wissen</button>
+      </div>
     </div>
 
     <!-- Radarpaneel -->
@@ -1792,6 +1954,7 @@ function selectSection(section) {
     nlNav.style.display      = 'none';
     comingSoon.style.display = 'none';
     document.getElementById('nl-panel').classList.remove('active');
+    document.getElementById('route-panel').classList.remove('active');
     mapEl.style.display      = '';
     const layer = _lastWaarLayer;
     activeLayer = '';
@@ -1800,15 +1963,16 @@ function selectSection(section) {
     if (activeLayer) _lastWaarLayer = activeLayer;
     nav.style.display        = 'none';
     nlNav.style.display      = 'none';
-    comingSoon.style.display = '';
-    comingSoon.textContent   = 'Route Forecast — binnenkort beschikbaar';
+    comingSoon.style.display = 'none';
     mapEl.style.display      = 'none';
     document.getElementById('nl-panel').classList.remove('active');
+    document.getElementById('route-panel').classList.add('active');
     document.getElementById('chart-panel').classList.remove('open');
     document.getElementById('radar-panel').classList.remove('active');
     stopRadar();
     clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem(); stopStormen();
     activeLayer = '';
+    setTimeout(() => _ensureRouteMap(), 50);
   } else {
     nav.style.display        = 'none';
     nlNav.style.display      = 'none';
@@ -2197,6 +2361,146 @@ function _isFresh(layer) {
 
 function _markFetched(layer) {
   _layerFetchedAt[layer] = Date.now();
+}
+
+// ── Route Forecast ────────────────────────────────────────────────────────────
+
+let _routeMap       = null;
+let _routeStart     = null;   // { lat, lon, marker }
+let _routeEnd       = null;   // { lat, lon, marker }
+let _routeWaypoints = [];     // [{ lat, lon, marker }, ...]
+let _routeLine      = null;
+
+function _ensureRouteMap() {
+  if (_routeMap) { _routeMap.invalidateSize(); return; }
+  _routeMap = L.map('route-map', {
+    zoomControl: true, scrollWheelZoom: true,
+    attributionControl: false,
+  });
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    subdomains: 'abcd', maxZoom: 18,
+  }).addTo(_routeMap);
+  _routeMap.setView([53.0, 5.0], 6);
+
+  _routeMap.on('click', e => {
+    const { lat, lng } = e.latlng;
+    _addRouteWaypoint(lat, lng);
+  });
+}
+
+function _routeMarker(lat, lon, color, label) {
+  const icon = L.divIcon({
+    className: '',
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28">
+      <circle cx="14" cy="14" r="11" fill="${color}" stroke="white" stroke-width="2"/>
+      <text x="14" y="18" text-anchor="middle"
+        font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="700" fill="white">${label}</text>
+    </svg>`,
+  });
+  return L.marker([lat, lon], { icon, draggable: true });
+}
+
+function _redrawRouteLine() {
+  if (_routeLine) { _routeMap.removeLayer(_routeLine); _routeLine = null; }
+  const pts = [];
+  if (_routeStart)  pts.push([_routeStart.lat,  _routeStart.lon]);
+  _routeWaypoints.forEach(wp => pts.push([wp.lat, wp.lon]));
+  if (_routeEnd)    pts.push([_routeEnd.lat,    _routeEnd.lon]);
+  if (pts.length >= 2) {
+    _routeLine = L.polyline(pts, {
+      color: '#3b82f6', weight: 3, opacity: 0.85,
+      dashArray: '6 5',
+    }).addTo(_routeMap);
+  }
+}
+
+function _renderWaypointList() {
+  const list = document.getElementById('route-waypoints-list');
+  list.innerHTML = '';
+  _routeWaypoints.forEach((wp, i) => {
+    const el = document.createElement('div');
+    el.className = 'route-wp-item';
+    el.innerHTML = `
+      <div class="route-wp-dot" style="background:#3b82f6"></div>
+      <span class="route-wp-coords">${wp.lat.toFixed(4)}, ${wp.lon.toFixed(4)}</span>
+      <button class="route-wp-del" onclick="routeRemoveWaypoint(${i})" title="Verwijder">✕</button>`;
+    list.appendChild(el);
+  });
+}
+
+function routeSetStart() {
+  const lat = parseFloat(document.getElementById('route-start-lat').value);
+  const lon = parseFloat(document.getElementById('route-start-lon').value);
+  if (isNaN(lat) || isNaN(lon)) return;
+  if (_routeStart) _routeMap.removeLayer(_routeStart.marker);
+  const marker = _routeMarker(lat, lon, '#22c55e', 'A');
+  marker.addTo(_routeMap);
+  marker.on('dragend', e => {
+    const p = e.target.getLatLng();
+    _routeStart.lat = p.lat; _routeStart.lon = p.lng;
+    _redrawRouteLine();
+  });
+  _routeStart = { lat, lon, marker };
+  _redrawRouteLine();
+  _routeMap.setView([lat, lon], Math.max(_routeMap.getZoom(), 7));
+}
+
+function routeSetEnd() {
+  const lat = parseFloat(document.getElementById('route-end-lat').value);
+  const lon = parseFloat(document.getElementById('route-end-lon').value);
+  if (isNaN(lat) || isNaN(lon)) return;
+  if (_routeEnd) _routeMap.removeLayer(_routeEnd.marker);
+  const marker = _routeMarker(lat, lon, '#ef4444', 'B');
+  marker.addTo(_routeMap);
+  marker.on('dragend', e => {
+    const p = e.target.getLatLng();
+    _routeEnd.lat = p.lat; _routeEnd.lon = p.lng;
+    _redrawRouteLine();
+  });
+  _routeEnd = { lat, lon, marker };
+  _redrawRouteLine();
+}
+
+function _addRouteWaypoint(lat, lon) {
+  const idx = _routeWaypoints.length;
+  const marker = _routeMarker(lat, lon, '#3b82f6', idx + 1);
+  marker.addTo(_routeMap);
+  marker.on('dragend', e => {
+    const p = e.target.getLatLng();
+    _routeWaypoints[idx].lat = p.lat; _routeWaypoints[idx].lon = p.lng;
+    _redrawRouteLine(); _renderWaypointList();
+  });
+  _routeWaypoints.push({ lat, lon, marker });
+  _redrawRouteLine();
+  _renderWaypointList();
+}
+
+function routeRemoveWaypoint(i) {
+  _routeMap.removeLayer(_routeWaypoints[i].marker);
+  _routeWaypoints.splice(i, 1);
+  // Hernummer resterende markers
+  _routeWaypoints.forEach((wp, j) => {
+    _routeMap.removeLayer(wp.marker);
+    wp.marker = _routeMarker(wp.lat, wp.lon, '#3b82f6', j + 1);
+    wp.marker.addTo(_routeMap);
+    wp.marker.on('dragend', e => {
+      const p = e.target.getLatLng();
+      _routeWaypoints[j].lat = p.lat; _routeWaypoints[j].lon = p.lng;
+      _redrawRouteLine(); _renderWaypointList();
+    });
+  });
+  _redrawRouteLine(); _renderWaypointList();
+}
+
+function routeClearAll() {
+  if (_routeStart) { _routeMap.removeLayer(_routeStart.marker); _routeStart = null; }
+  if (_routeEnd)   { _routeMap.removeLayer(_routeEnd.marker);   _routeEnd   = null; }
+  _routeWaypoints.forEach(wp => _routeMap.removeLayer(wp.marker));
+  _routeWaypoints = [];
+  if (_routeLine)  { _routeMap.removeLayer(_routeLine); _routeLine = null; }
+  _renderWaypointList();
 }
 
 // ── Waarnemingen Nederland ────────────────────────────────────────────────────
