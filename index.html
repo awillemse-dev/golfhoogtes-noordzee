@@ -2764,6 +2764,17 @@ const _routeVLinePlugin = {
   }
 };
 
+const _chartBgPlugin = {
+  id: 'chartBg',
+  beforeDraw(chart) {
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.fillStyle = '#0d1625';
+    ctx.fillRect(0, 0, chart.width, chart.height);
+    ctx.restore();
+  }
+};
+
 function routeShowForecast() {
   const fcPanel = document.getElementById('route-forecast-panel');
   fcPanel.style.display = 'flex';
@@ -3041,27 +3052,27 @@ function _updateRouteChart(idx) {
   const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
 
   const labels   = _routeFcStops.map(s => s.eta);
-  const windData = _routeFcData.map(d => d ? d.windKt   : null);
-  const waveData = _routeFcData.map(d => d ? d.waveHm0  : null);
+  const windData = _routeFcData.map(d => d ? d.windKt  : null);
+  const waveData = _routeFcData.map(d => d ? d.waveHm0 : null);
 
   const datasets = [
     { label: 'Wind (kt)', data: windData, yAxisID: 'yWind',
-      borderColor: '#e2e8f0', backgroundColor: 'transparent',
-      fill: false, tension: 0.3, pointRadius: 0, borderWidth: 2, spanGaps: true },
+      borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.08)',
+      fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2.5, spanGaps: true },
     { label: 'Golven (m)', data: waveData, yAxisID: 'yWave',
-      borderColor: '#e2e8f0', backgroundColor: 'transparent',
-      borderDash: [5, 4],
-      fill: false, tension: 0.3, pointRadius: 0, borderWidth: 2, spanGaps: true },
+      borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.08)',
+      borderDash: [6, 4],
+      fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2.5, spanGaps: true },
   ];
   if (limitWind) datasets.push({
-    label: '', data: labels.map(() => limitWind), yAxisID: 'yWind',
-    borderColor: 'rgba(239,68,68,0.65)', backgroundColor: 'transparent',
-    borderWidth: 1, borderDash: [4, 4], pointRadius: 0, spanGaps: true,
+    label: 'Windlimiet', data: labels.map(() => limitWind), yAxisID: 'yWind',
+    borderColor: 'rgba(239,68,68,0.8)', backgroundColor: 'transparent',
+    borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, spanGaps: true,
   });
   if (limitWave) datasets.push({
-    label: '', data: labels.map(() => limitWave), yAxisID: 'yWave',
-    borderColor: 'rgba(249,115,22,0.65)', backgroundColor: 'transparent',
-    borderWidth: 1, borderDash: [4, 4], pointRadius: 0, spanGaps: true,
+    label: 'Golflimiet', data: labels.map(() => limitWave), yAxisID: 'yWave',
+    borderColor: 'rgba(249,115,22,0.8)', backgroundColor: 'transparent',
+    borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, spanGaps: true,
   });
 
   if (_routeFcChart) {
@@ -3074,12 +3085,20 @@ function _updateRouteChart(idx) {
 
   _routeFcChart = new Chart(canvas, {
     type: 'line',
-    plugins: [_routeVLinePlugin],
+    plugins: [_chartBgPlugin, _routeVLinePlugin],
     data: { labels, datasets },
     options: {
       animation: false, responsive: true, maintainAspectRatio: false,
       plugins: {
-        legend: { display: false },
+        legend: {
+          display: true,
+          position: 'top',
+          align: 'end',
+          labels: {
+            color: '#94a3b8', font: { size: 9 }, boxWidth: 24, boxHeight: 2,
+            usePointStyle: false, padding: 12,
+          },
+        },
         tooltip: {
           mode: 'index', intersect: false,
           backgroundColor: 'rgba(13,22,37,0.95)',
@@ -3101,21 +3120,21 @@ function _updateRouteChart(idx) {
           type: 'time',
           time: { unit: 'hour', displayFormats: { hour: 'HH:mm', day: 'dd/MM' } },
           grid: { color: 'rgba(255,255,255,0.05)' },
-          ticks: { color: '#475569', font: { size: 9 }, maxTicksLimit: 7 },
+          ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 7 },
           border: { display: false },
         },
         yWind: {
           position: 'left',
           grid: { color: 'rgba(255,255,255,0.05)' },
-          ticks: { color: '#e2e8f0', font: { size: 9 }, maxTicksLimit: 5,
-            callback: v => v + ' kt' },
+          title: { display: true, text: 'Wind (kt)', color: '#3b82f6', font: { size: 9, weight: 'bold' } },
+          ticks: { color: '#3b82f6', font: { size: 9 }, maxTicksLimit: 5, callback: v => v + ' kt' },
           border: { display: false },
         },
         yWave: {
           position: 'right',
           grid: { drawOnChartArea: false },
-          ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 5,
-            callback: v => v + ' m' },
+          title: { display: true, text: 'Golven (m)', color: '#10b981', font: { size: 9, weight: 'bold' } },
+          ticks: { color: '#10b981', font: { size: 9 }, maxTicksLimit: 5, callback: v => v + ' m' },
           border: { display: false },
         },
       }
@@ -3248,8 +3267,9 @@ function downloadRouteForecast() {
     },
   });
 
-  // ── Legenda + footer ──
+  // ── Legenda + footer (pagina 1) ──
   const pageH = doc.internal.pageSize.height;
+  const pageW = doc.internal.pageSize.width;
   doc.setFontSize(7);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(148, 163, 184);
@@ -3261,6 +3281,76 @@ function downloadRouteForecast() {
     doc.setTextColor(100, 116, 139); doc.text('Limiet overschreden', lx + 5, pageH - 10.5);
     doc.setFillColor(254, 215, 170); doc.rect(lx, pageH - 8, 3.5, 3.5, 'F');
     doc.text('Nadert limiet (>80%)', lx + 5, pageH - 5.5);
+  }
+
+  // ── Grafiek pagina ──
+  if (_routeFcChart) {
+    doc.addPage();
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.setTextColor(15, 23, 42);
+    doc.text('Grafiek: Wind & Golven', 15, 17);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(100, 116, 139);
+    const depStr  = _routeFcDep ? _routeFcDep.toISOString().slice(0,16).replace('T',' ') + ' UTC' : '–';
+    const etaStr  = eta ? eta.toISOString().slice(0,16).replace('T',' ') + ' UTC' : '–';
+    doc.text(`Vertrek: ${depStr}  ·  ETA: ${etaStr}  ·  ${totalNm.toFixed(1)} nm  ·  ${_routeFcSpeed || '–'} kt`, 15, 23);
+
+    // Legenda blokjes
+    const lx = 15, ly = 28;
+    doc.setDrawColor(59, 130, 246); doc.setLineWidth(1.5);
+    doc.line(lx, ly + 1.5, lx + 10, ly + 1.5);
+    doc.setFontSize(8); doc.setTextColor(59, 130, 246);
+    doc.text('Wind (kt)  —  linker as', lx + 12, ly + 2.5);
+
+    doc.setDrawColor(16, 185, 129); doc.setLineWidth(1.5);
+    doc.setLineDashPattern([2, 1.5], 0);
+    doc.line(lx + 60, ly + 1.5, lx + 70, ly + 1.5);
+    doc.setLineDashPattern([], 0);
+    doc.setTextColor(16, 185, 129);
+    doc.text('Golven (m)  - - -  rechter as', lx + 72, ly + 2.5);
+
+    if (limitWind) {
+      doc.setDrawColor(239, 68, 68); doc.setLineWidth(1);
+      doc.setLineDashPattern([2, 1.5], 0);
+      doc.line(lx + 140, ly + 1.5, lx + 150, ly + 1.5);
+      doc.setLineDashPattern([], 0);
+      doc.setTextColor(239, 68, 68);
+      doc.text(`Windlimiet ${limitWind} kt`, lx + 152, ly + 2.5);
+    }
+    if (limitWave) {
+      doc.setDrawColor(249, 115, 22); doc.setLineWidth(1);
+      doc.setLineDashPattern([2, 1.5], 0);
+      doc.line(lx + 200, ly + 1.5, lx + 210, ly + 1.5);
+      doc.setLineDashPattern([], 0);
+      doc.setTextColor(249, 115, 22);
+      doc.text(`Golflimiet ${limitWave} m`, lx + 212, ly + 2.5);
+    }
+
+    // Chart canvas → image (met donkere achtergrond via _chartBgPlugin)
+    const srcCanvas = document.getElementById('route-fc-chart');
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width  = srcCanvas.width;
+    tmpCanvas.height = srcCanvas.height;
+    const tmpCtx = tmpCanvas.getContext('2d');
+    tmpCtx.fillStyle = '#0d1625';
+    tmpCtx.fillRect(0, 0, tmpCanvas.width, tmpCanvas.height);
+    tmpCtx.drawImage(srcCanvas, 0, 0);
+    const chartImg = tmpCanvas.toDataURL('image/png');
+
+    const chartX = 15, chartY = 34;
+    const chartW = pageW - 30, chartH = pageH - chartY - 15;
+    doc.setFillColor(13, 22, 37);
+    doc.roundedRect(chartX, chartY, chartW, chartH, 3, 3, 'F');
+    doc.addImage(chartImg, 'PNG', chartX, chartY, chartW, chartH);
+
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(148, 163, 184);
+    doc.text('Zeedata · Open-Meteo (ECMWF + GFS) · Geen garanties op nauwkeurigheid · Gebruik op eigen risico', 15, pageH - 5);
   }
 
   const dateStr = _routeFcDep ? _routeFcDep.toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
