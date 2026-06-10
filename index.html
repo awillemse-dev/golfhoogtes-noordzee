@@ -978,8 +978,13 @@
         </div>
 
         <!-- Weer kaart voor huidig slider moment -->
-        <div id="route-fc-card-wrap" style="flex:1;overflow-y:auto;padding:10px 0 0;">
+        <div id="route-fc-card-wrap" style="flex:0 0 auto;overflow-y:auto;padding:10px 0 0;max-height:230px;">
           <div id="route-fc-loading" class="route-fc-loading">Weerdata ophalen…</div>
+        </div>
+
+        <!-- Wind + golf grafiek over volledige route -->
+        <div id="route-fc-chart-wrap" style="display:none;flex:1 1 0;min-height:120px;padding:8px 10px 6px;border-top:1px solid var(--border);">
+          <canvas id="route-fc-chart"></canvas>
         </div>
 
         <div style="padding:4px 14px 10px;font-size:0.62rem;color:var(--text-muted);line-height:1.4;flex-shrink:0;">
@@ -2731,6 +2736,26 @@ let _routeFcData    = [];   // weather result per stop
 let _routeFcSlider  = null; // current marker on map
 let _routeFcSpeed   = 0;
 let _routeFcDep     = null;
+let _routeFcChart   = null;
+
+const _routeVLinePlugin = {
+  id: 'routeVLine',
+  afterDraw(chart) {
+    if (!chart._vLineIdx && chart._vLineIdx !== 0) return;
+    const meta = chart.getDatasetMeta(0);
+    if (!meta.data || !meta.data[chart._vLineIdx]) return;
+    const x = meta.data[chart._vLineIdx].x;
+    const { top, bottom } = chart.chartArea;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bottom);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
 
 function routeShowForecast() {
   const fcPanel = document.getElementById('route-forecast-panel');
@@ -2745,6 +2770,9 @@ async function _fetchRouteForecast() {
   _routeFcSpeed  = parseFloat(document.getElementById('route-speed').value);
   const depInput = document.getElementById('route-departure').value;
   _routeFcDep    = depInput ? new Date(depInput + ':00Z') : new Date();
+
+  if (_routeFcChart) { _routeFcChart.destroy(); _routeFcChart = null; }
+  document.getElementById('route-fc-chart-wrap').style.display = 'none';
 
   const loadEl   = document.getElementById('route-fc-loading');
   const sliderWrap = document.getElementById('route-fc-slider-wrap');
@@ -2982,6 +3010,8 @@ function routeSliderMove(idx) {
         }).join('')}
       </div>
     </div>`;
+
+  _updateRouteChart(idx);
 }
 
 function _routeFcAlertColor(data, limitWind, limitWave) {
@@ -2993,6 +3023,96 @@ function _routeFcAlertColor(data, limitWind, limitWave) {
   if (windExc || waveExc) return '#ef4444';
   if (windWarn || waveWarn) return '#f97316';
   return '#22c55e';
+}
+
+function _updateRouteChart(idx) {
+  const wrap   = document.getElementById('route-fc-chart-wrap');
+  const canvas = document.getElementById('route-fc-chart');
+  const limitWind = parseFloat(document.getElementById('route-limit-wind').value) || null;
+  const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
+
+  const labels   = _routeFcStops.map(s => s.eta);
+  const windData = _routeFcData.map(d => d ? d.windKt   : null);
+  const waveData = _routeFcData.map(d => d ? d.waveHm0  : null);
+
+  const datasets = [
+    { label: 'Wind (kt)', data: windData, yAxisID: 'yWind',
+      borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.07)',
+      fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, spanGaps: true },
+    { label: 'Golven (m)', data: waveData, yAxisID: 'yWave',
+      borderColor: '#22d3ee', backgroundColor: 'rgba(34,211,238,0.07)',
+      fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, spanGaps: true },
+  ];
+  if (limitWind) datasets.push({
+    label: '', data: labels.map(() => limitWind), yAxisID: 'yWind',
+    borderColor: 'rgba(239,68,68,0.65)', backgroundColor: 'transparent',
+    borderWidth: 1, borderDash: [4, 4], pointRadius: 0, spanGaps: true,
+  });
+  if (limitWave) datasets.push({
+    label: '', data: labels.map(() => limitWave), yAxisID: 'yWave',
+    borderColor: 'rgba(249,115,22,0.65)', backgroundColor: 'transparent',
+    borderWidth: 1, borderDash: [4, 4], pointRadius: 0, spanGaps: true,
+  });
+
+  if (_routeFcChart) {
+    _routeFcChart.data.labels   = labels;
+    _routeFcChart.data.datasets = datasets;
+    _routeFcChart._vLineIdx     = idx;
+    _routeFcChart.update('none');
+    return;
+  }
+
+  _routeFcChart = new Chart(canvas, {
+    type: 'line',
+    plugins: [_routeVLinePlugin],
+    data: { labels, datasets },
+    options: {
+      animation: false, responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index', intersect: false,
+          backgroundColor: 'rgba(13,22,37,0.95)',
+          titleColor: '#94a3b8', bodyColor: '#e2e8f0',
+          borderColor: '#1c2e45', borderWidth: 1,
+          callbacks: {
+            title: items => {
+              const s = _routeFcStops[items[0]?.dataIndex];
+              return s ? s.eta.toISOString().slice(0,10) + ' ' + s.eta.toISOString().slice(11,16) + ' UTC' : '';
+            },
+            label: item => item.dataset.label
+              ? ` ${item.dataset.label}: ${item.raw !== null ? Number(item.raw).toFixed(1) : '–'}`
+              : null,
+          }
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: { unit: 'hour', displayFormats: { hour: 'HH:mm', day: 'dd/MM' } },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          ticks: { color: '#475569', font: { size: 9 }, maxTicksLimit: 7 },
+          border: { display: false },
+        },
+        yWind: {
+          position: 'left',
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          ticks: { color: '#60a5fa', font: { size: 9 }, maxTicksLimit: 5,
+            callback: v => v + ' kt' },
+          border: { display: false },
+        },
+        yWave: {
+          position: 'right',
+          grid: { drawOnChartArea: false },
+          ticks: { color: '#22d3ee', font: { size: 9 }, maxTicksLimit: 5,
+            callback: v => v + ' m' },
+          border: { display: false },
+        },
+      }
+    }
+  });
+  _routeFcChart._vLineIdx = idx;
+  wrap.style.display = '';
 }
 
 // ── Waarnemingen Nederland ────────────────────────────────────────────────────
