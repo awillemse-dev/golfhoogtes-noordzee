@@ -987,8 +987,13 @@
           <canvas id="route-fc-chart"></canvas>
         </div>
 
-        <div style="padding:4px 14px 10px;font-size:0.62rem;color:var(--text-muted);line-height:1.4;flex-shrink:0;">
-          Open-Meteo (ECMWF &amp; GFS) · Golfdata: ECMWF WAM
+        <div style="padding:8px 10px 10px;flex-shrink:0;display:flex;flex-direction:column;gap:6px;">
+          <button id="route-fc-download-btn" onclick="downloadRouteForecast()" style="display:none;width:100%;background:#1d4ed8;color:white;border:none;border-radius:7px;font-size:0.8rem;font-weight:600;padding:9px;cursor:pointer;font-family:inherit;">
+            ↓ Download forecast (PDF)
+          </button>
+          <div style="font-size:0.62rem;color:var(--text-muted);line-height:1.4;text-align:center;">
+            Open-Meteo (ECMWF &amp; GFS) · Golfdata: ECMWF WAM
+          </div>
         </div>
       </div>
 
@@ -1058,6 +1063,8 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.3/dist/jspdf.plugin.autotable.min.js"></script>
 <script>
 // ── Kaart ────────────────────────────────────────────────────────────────────
 const map = L.map('map', { center: [20, 0], zoom: 3, zoomControl: true });
@@ -2773,6 +2780,7 @@ async function _fetchRouteForecast() {
 
   if (_routeFcChart) { _routeFcChart.destroy(); _routeFcChart = null; }
   document.getElementById('route-fc-chart-wrap').style.display = 'none';
+  document.getElementById('route-fc-download-btn').style.display = 'none';
 
   const loadEl   = document.getElementById('route-fc-loading');
   const sliderWrap = document.getElementById('route-fc-slider-wrap');
@@ -2885,6 +2893,7 @@ async function _fetchRouteForecast() {
         document.getElementById('route-fc-slider-eta').textContent =
           eta.toISOString().slice(11,16) + ' UTC ' + eta.toISOString().slice(0,10);
         sliderWrap.style.display = '';
+        document.getElementById('route-fc-download-btn').style.display = '';
         routeSliderMove(0);
       }
     }
@@ -3114,6 +3123,148 @@ function _updateRouteChart(idx) {
   });
   _routeFcChart._vLineIdx = idx;
   wrap.style.display = '';
+}
+
+function downloadRouteForecast() {
+  if (!window.jspdf || !_routeFcStops.length) return;
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+  const limitWind = parseFloat(document.getElementById('route-limit-wind').value) || null;
+  const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
+  const pts = _routeAllPoints();
+
+  let totalNm = 0;
+  for (let i = 1; i < pts.length; i++)
+    totalNm += _routeDistNm(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
+
+  const eta = _routeFcStops[_routeFcStops.length - 1]?.eta;
+  const fmtDir = deg => {
+    if (deg === null || deg === undefined) return '–';
+    const dirs = ['N','NO','O','ZO','Z','ZW','W','NW'];
+    return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+  };
+  const fmtV = (v, dec = 1) => v !== null && v !== undefined ? Number(v).toFixed(dec) : '–';
+
+  // ── Titel ──
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Route Weersvoorspelling', 15, 17);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Gegenereerd: ${new Date().toISOString().slice(0,16).replace('T',' ')} UTC  ·  Bron: Open-Meteo (ECMWF + GFS)`, 15, 23);
+
+  // ── Route samenvatting ──
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Route samenvatting', 15, 32);
+
+  const summaryLines = [
+    `Vertrek:  ${_routeFcDep ? _routeFcDep.toISOString().slice(0,16).replace('T',' ') + ' UTC' : '–'}`,
+    `ETA:  ${eta ? eta.toISOString().slice(0,16).replace('T',' ') + ' UTC' : '–'}`,
+    `Totale afstand:  ${totalNm.toFixed(1)} nm   ·   Scheepssnelheid:  ${_routeFcSpeed || '–'} kt`,
+    (limitWind || limitWave)
+      ? `Limieten:  ${limitWind ? 'Wind ≤ ' + limitWind + ' kt' : ''}${limitWind && limitWave ? '   ·   ' : ''}${limitWave ? 'Golven ≤ ' + limitWave + ' m' : ''}`
+      : 'Geen limieten ingesteld',
+  ];
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(30, 41, 59);
+  summaryLines.forEach((line, i) => doc.text(line, 15, 38 + i * 5));
+
+  const wpY = 38 + summaryLines.length * 5 + 5;
+
+  // ── Waypoints tabel ──
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Waypoints', 15, wpY);
+
+  doc.autoTable({
+    startY: wpY + 3,
+    head: [['Punt', 'Lat', 'Lon', 'Segment (nm)']],
+    body: pts.map((p, i) => [
+      p.label === 'A' ? 'Start' : p.label === 'B' ? 'Einde' : `WP ${p.label}`,
+      p.lat.toFixed(4),
+      p.lon.toFixed(4),
+      i > 0 ? _routeDistNm(pts[i-1].lat, pts[i-1].lon, p.lat, p.lon).toFixed(1) : '–',
+    ]),
+    theme: 'grid',
+    styles: { fontSize: 8, cellPadding: 1.8 },
+    headStyles: { fillColor: [15, 23, 42], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    margin: { left: 15 },
+    tableWidth: 110,
+  });
+
+  // ── Forecast tabel ──
+  const fcY = doc.lastAutoTable.finalY + 8;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Weersvoorspelling per stop', 15, fcY);
+
+  doc.autoTable({
+    startY: fcY + 3,
+    head: [['Datum', 'Tijd (UTC)', 'Positie', 'Nm', 'Wind (kt)', 'W.richting', 'Stoten (kt)', 'Golven (m)', 'G.richting', 'Periode (s)']],
+    body: _routeFcStops.map((stop, i) => {
+      const d = _routeFcData[i];
+      return [
+        stop.eta.toISOString().slice(0, 10),
+        stop.eta.toISOString().slice(11, 16),
+        `${stop.lat.toFixed(2)}, ${stop.lon.toFixed(2)}`,
+        stop.distNm.toFixed(1),
+        d ? fmtV(d.windKt, 0) : '…',
+        d ? fmtDir(d.windDir) : '…',
+        d ? fmtV(d.windGust, 0) : '…',
+        d ? fmtV(d.waveHm0) : '…',
+        d ? fmtDir(d.waveDir) : '…',
+        d ? fmtV(d.wavePer) : '…',
+      ];
+    }),
+    theme: 'grid',
+    styles: { fontSize: 7.5, cellPadding: 1.6, halign: 'center' },
+    columnStyles: { 0: { halign: 'left' }, 2: { halign: 'left' } },
+    headStyles: { fillColor: [15, 23, 42], textColor: 255, fontStyle: 'bold', fontSize: 8, halign: 'center' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    margin: { left: 15, right: 15 },
+    didParseCell(data) {
+      if (data.section !== 'body') return;
+      const d = _routeFcData[data.row.index];
+      if (!d) return;
+      if (data.column.index === 4) {
+        if (limitWind && d.windKt > limitWind)        data.cell.styles.fillColor = [254, 202, 202];
+        else if (limitWind && d.windKt > limitWind * 0.8) data.cell.styles.fillColor = [254, 215, 170];
+      }
+      if (data.column.index === 7) {
+        if (limitWave && d.waveHm0 > limitWave)        data.cell.styles.fillColor = [254, 202, 202];
+        else if (limitWave && d.waveHm0 > limitWave * 0.8) data.cell.styles.fillColor = [254, 215, 170];
+      }
+    },
+  });
+
+  // ── Legenda + footer ──
+  const pageH = doc.internal.pageSize.height;
+  doc.setFontSize(7);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(148, 163, 184);
+  doc.text('Zeedata · Open-Meteo (ECMWF + GFS) · Geen garanties op nauwkeurigheid · Gebruik op eigen risico', 15, pageH - 5);
+
+  if (limitWind || limitWave) {
+    const lx = 200;
+    doc.setFillColor(254, 202, 202); doc.rect(lx, pageH - 13, 3.5, 3.5, 'F');
+    doc.setTextColor(100, 116, 139); doc.text('Limiet overschreden', lx + 5, pageH - 10.5);
+    doc.setFillColor(254, 215, 170); doc.rect(lx, pageH - 8, 3.5, 3.5, 'F');
+    doc.text('Nadert limiet (>80%)', lx + 5, pageH - 5.5);
+  }
+
+  const dateStr = _routeFcDep ? _routeFcDep.toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+  doc.save(`route-forecast-${dateStr}.pdf`);
 }
 
 // ── Waarnemingen Nederland ────────────────────────────────────────────────────
