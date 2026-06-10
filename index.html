@@ -502,6 +502,24 @@
     .route-fc-ok   { color: #22c55e !important; }
     .route-fc-warn { color: #f97316 !important; }
     .route-fc-bad  { color: #ef4444 !important; }
+
+    /* Forecast tabel weergave */
+    #route-fc-table-wrap { flex:1 1 0; min-height:0; overflow-y:auto; }
+    #route-fc-table { width:100%; border-collapse:collapse; font-size:0.72rem; }
+    #route-fc-table thead th {
+      position:sticky; top:0; background:var(--surface-2); color:var(--text-muted);
+      font-size:0.6rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;
+      padding:6px 8px; text-align:center; border-bottom:1px solid var(--border); z-index:1;
+    }
+    #route-fc-table td {
+      padding:4px 8px; text-align:center; border-bottom:1px solid rgba(28,46,69,0.5);
+      white-space:nowrap; color:#cbd5e1;
+    }
+    #route-fc-table td:first-child { text-align:left; color:var(--text-muted); font-size:0.65rem; }
+    #route-fc-table tr:hover td { background:rgba(56,189,248,0.05); }
+    #route-fc-table .fc-tbl-ok   { color:#22c55e; font-weight:600; }
+    #route-fc-table .fc-tbl-warn { color:#f97316; font-weight:600; }
+    #route-fc-table .fc-tbl-bad  { color:#ef4444; font-weight:700; }
     #route-click-hint {
       font-size: 0.72rem;
       color: var(--text-muted);
@@ -959,6 +977,7 @@
         <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;">
           <button onclick="routeHideForecast()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:0.8rem;padding:0;line-height:1">← Sluiten</button>
           <span style="font-size:0.82rem;font-weight:700;color:var(--text-dim);flex:1">Weersvoorspelling</span>
+          <button id="route-fc-view-toggle" onclick="routeFcToggleView()" style="display:none;background:none;border:1px solid var(--border);border-radius:5px;color:var(--text-muted);cursor:pointer;font-size:0.72rem;padding:3px 8px;margin-right:4px;">Tabel</button>
           <button onclick="routeEdit()" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--text-muted);cursor:pointer;font-size:0.72rem;padding:3px 8px;">Bewerken</button>
         </div>
         <div id="route-fc-summary" style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:0.75rem;color:var(--text-muted);line-height:1.6;flex-shrink:0;"></div>
@@ -987,6 +1006,18 @@
         <!-- Wind + golf grafiek over volledige route -->
         <div id="route-fc-chart-wrap" style="display:none;flex:1 1 0;min-height:120px;padding:8px 10px 6px;border-top:1px solid var(--border);">
           <canvas id="route-fc-chart"></canvas>
+        </div>
+
+        <!-- Tabel weergave (toggle) -->
+        <div id="route-fc-table-wrap" style="display:none;">
+          <table id="route-fc-table">
+            <thead><tr>
+              <th>Tijd (UTC)</th><th>Nm</th>
+              <th style="color:#3b82f6">Wind kt</th><th style="color:#3b82f6">Richt.</th>
+              <th style="color:#10b981">Golf m</th><th style="color:#10b981">Richt.</th>
+            </tr></thead>
+            <tbody id="route-fc-table-body"></tbody>
+          </table>
         </div>
 
         <div style="padding:8px 10px 10px;flex-shrink:0;display:flex;flex-direction:column;gap:6px;">
@@ -1067,6 +1098,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.3/dist/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script>
 // ── Kaart ────────────────────────────────────────────────────────────────────
 const map = L.map('map', { center: [20, 0], zoom: 3, zoomControl: true });
@@ -2747,6 +2779,7 @@ let _routeFcSpeed   = 0;
 let _routeFcDep     = null;
 let _routeFcChart   = null;
 let _routeFcLines   = [];   // gekleurde segmenten op kaart
+let _routeFcViewMode = 'chart'; // 'chart' | 'table'
 
 const _routeVLinePlugin = {
   id: 'routeVLine',
@@ -2795,7 +2828,11 @@ async function _fetchRouteForecast() {
   if (_routeFcChart) { _routeFcChart.destroy(); _routeFcChart = null; }
   _routeFcLines.forEach(l => _routeMap.removeLayer(l)); _routeFcLines = [];
   document.getElementById('route-fc-chart-wrap').style.display = 'none';
+  document.getElementById('route-fc-table-wrap').style.display = 'none';
   document.getElementById('route-fc-download-btn').style.display = 'none';
+  document.getElementById('route-fc-view-toggle').style.display = 'none';
+  document.getElementById('route-fc-view-toggle').textContent = 'Tabel';
+  _routeFcViewMode = 'chart';
 
   const loadEl   = document.getElementById('route-fc-loading');
   const sliderWrap = document.getElementById('route-fc-slider-wrap');
@@ -2909,6 +2946,7 @@ async function _fetchRouteForecast() {
           eta.toISOString().slice(11,16) + ' UTC ' + eta.toISOString().slice(0,10);
         sliderWrap.style.display = '';
         document.getElementById('route-fc-download-btn').style.display = '';
+        document.getElementById('route-fc-view-toggle').style.display = '';
         routeSliderMove(0);
       }
     }
@@ -3055,6 +3093,40 @@ function _updateForecastRouteColors() {
   }
 }
 
+function routeFcToggleView() {
+  _routeFcViewMode = _routeFcViewMode === 'chart' ? 'table' : 'chart';
+  const isChart = _routeFcViewMode === 'chart';
+  document.getElementById('route-fc-view-toggle').textContent = isChart ? 'Tabel' : 'Grafiek';
+  document.getElementById('route-fc-card-wrap').style.display  = isChart ? '' : 'none';
+  document.getElementById('route-fc-chart-wrap').style.display = isChart ? '' : 'none';
+  document.getElementById('route-fc-table-wrap').style.display = isChart ? 'none' : '';
+  if (!isChart) _updateFcTable();
+}
+
+function _updateFcTable() {
+  const limitWind = parseFloat(document.getElementById('route-limit-wind').value) || null;
+  const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
+  const fmtDir = d => { if (d == null) return '–'; const dirs=['N','NO','O','ZO','Z','ZW','W','NW']; return dirs[Math.round(((d%360)+360)%360/45)%8]; };
+  const fmtV   = (v, dec=1) => v != null ? Number(v).toFixed(dec) : '–';
+  const cls    = (v, lim) => !lim || v == null ? '' : v > lim ? 'fc-tbl-bad' : v > lim * 0.8 ? 'fc-tbl-warn' : 'fc-tbl-ok';
+
+  const tbody = document.getElementById('route-fc-table-body');
+  tbody.innerHTML = _routeFcStops.map((stop, i) => {
+    const d   = _routeFcData[i];
+    const wCls = cls(d?.windKt, limitWind);
+    const hCls = cls(d?.waveHm0, limitWave);
+    const rowBg = i % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
+    return `<tr style="${rowBg}">
+      <td>${stop.eta.toISOString().slice(0,10)} ${stop.eta.toISOString().slice(11,16)}</td>
+      <td>${stop.distNm.toFixed(1)}</td>
+      <td class="${wCls}">${d ? fmtV(d.windKt,0) : '…'}</td>
+      <td>${d ? fmtDir(d.windDir) : '…'}</td>
+      <td class="${hCls}">${d ? fmtV(d.waveHm0) : '…'}</td>
+      <td>${d ? fmtDir(d.waveDir) : '…'}</td>
+    </tr>`;
+  }).join('');
+}
+
 function _routeFcAlertColor(data, limitWind, limitWave) {
   if (!data) return '#475569';
   const windExc = limitWind && data.windKt && data.windKt > limitWind;
@@ -3194,27 +3266,63 @@ function _pdfFooter(doc, pageH, margin) {
 }
 
 function _pdfWorkabilityBar(doc, x, y, w, limitWind, limitWave) {
-  const barH = 7;
+  const barH = 8;
   const n    = _routeFcData.length;
   const sw   = w / n;
   _routeFcData.forEach((d, i) => {
     doc.setFillColor(..._hexRgb(_routeFcAlertColor(d, limitWind, limitWave)));
-    doc.rect(x + i * sw, y, sw + 0.3, barH, 'F');
+    doc.rect(x + i * sw, y, sw + 0.2, barH, 'F');
   });
-  doc.setDrawColor(180, 190, 200); doc.setLineWidth(0.3); doc.rect(x, y, w, barH);
-  doc.setFontSize(6.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 116, 139);
+  doc.setDrawColor(160, 175, 195); doc.setLineWidth(0.3); doc.rect(x, y, w, barH);
+
+  // Start / eind tijd onder de balk
+  doc.setFontSize(6.5); doc.setFont('helvetica','normal'); doc.setTextColor(120, 130, 145);
   if (_routeFcStops.length) {
-    doc.text(_routeFcStops[0].eta.toISOString().slice(5,10) + ' ' + _routeFcStops[0].eta.toISOString().slice(11,16) + ' UTC', x, y + barH + 4);
-    const last = _routeFcStops[_routeFcStops.length-1].eta;
-    const lastStr = last.toISOString().slice(5,10) + ' ' + last.toISOString().slice(11,16) + ' UTC';
-    doc.text(lastStr, x + w, y + barH + 4, { align: 'right' });
+    const t0 = _routeFcStops[0].eta, t1 = _routeFcStops[_routeFcStops.length-1].eta;
+    doc.text(t0.toISOString().slice(5,10)+' '+t0.toISOString().slice(11,16)+' UTC', x, y+barH+4);
+    const s1 = t1.toISOString().slice(5,10)+' '+t1.toISOString().slice(11,16)+' UTC';
+    doc.text(s1, x+w, y+barH+4, { align:'right' });
   }
-  // Legenda rechts van balk
-  const lx = x + w + 6;
-  [[_hexRgb('#22c55e'),'Ok'],[_hexRgb('#f97316'),'Nadert limiet'],[_hexRgb('#ef4444'),'Overschrijding']].forEach(([rgb,lbl], i) => {
-    doc.setFillColor(...rgb); doc.rect(lx, y + i * 5, 4, 4, 'F');
-    doc.setDrawColor(200,210,220); doc.setLineWidth(0.15); doc.rect(lx, y + i * 5, 4, 4);
-    doc.setTextColor(60, 80, 100); doc.setFontSize(6.5); doc.text(lbl, lx + 5.5, y + 3.5 + i * 5);
+
+  // Legenda gecentreerd onder de balk
+  const items = [[_hexRgb('#22c55e'),'Ok'],[_hexRgb('#f97316'),'Nadert limiet'],[_hexRgb('#ef4444'),'Overschrijding']];
+  doc.setFontSize(6.5);
+  const itemW = items.map(([,l]) => 5 + doc.getTextWidth(l) + 8);
+  const totalW = itemW.reduce((a,b)=>a+b, 0);
+  let lx = x + (w - totalW) / 2;
+  items.forEach(([rgb,lbl], i) => {
+    doc.setFillColor(...rgb); doc.rect(lx, y+barH+6, 3.5, 3.5, 'F');
+    doc.setDrawColor(200,210,220); doc.setLineWidth(0.15); doc.rect(lx, y+barH+6, 3.5, 3.5);
+    doc.setTextColor(60,80,100); doc.text(lbl, lx+5, y+barH+9.3);
+    lx += itemW[i];
+  });
+}
+
+function _pdfDrawRouteOnMap(doc, mapX, mapY, mapW, mapH, limitWind, limitWave) {
+  const el   = document.getElementById('route-map');
+  const pxW  = el.clientWidth, pxH = el.clientHeight;
+  const toPdf = (lat, lon) => {
+    const pt = _routeMap.latLngToContainerPoint([lat, lon]);
+    return { x: mapX + (pt.x / pxW) * mapW, y: mapY + (pt.y / pxH) * mapH };
+  };
+  // Clip to map rectangle
+  doc.saveGraphicsState && doc.saveGraphicsState();
+  // Gekleurde segmenten
+  for (let i = 0; i < _routeFcStops.length - 1; i++) {
+    const a   = toPdf(_routeFcStops[i].lat,   _routeFcStops[i].lon);
+    const b   = toPdf(_routeFcStops[i+1].lat, _routeFcStops[i+1].lon);
+    const col = _hexRgb(_routeFcAlertColor(_routeFcData[i], limitWind, limitWave));
+    doc.setDrawColor(...col); doc.setLineWidth(1.6);
+    doc.line(a.x, a.y, b.x, b.y);
+  }
+  // Waypoints
+  _routeAllPoints().forEach(p => {
+    const { x, y } = toPdf(p.lat, p.lon);
+    const col = p.label==='A' ? [34,197,94] : p.label==='B' ? [239,68,68] : [59,130,246];
+    doc.setFillColor(...col); doc.setDrawColor(255,255,255); doc.setLineWidth(0.5);
+    doc.circle(x, y, 2.2, 'FD');
+    doc.setFontSize(5.5); doc.setFont('helvetica','bold'); doc.setTextColor(15,23,42);
+    doc.text(p.label==='A'?'Start':p.label==='B'?'Einde':`WP${p.label}`, x+3, y+1.5);
   });
 }
 
@@ -3417,8 +3525,16 @@ function _pdfDrawChart(doc, x, y, w, h, limitWind, limitWave) {
   });
 }
 
-function downloadRouteForecast() {
+async function downloadRouteForecast() {
   if (!window.jspdf || !_routeFcStops.length) return;
+  const btn = document.getElementById('route-fc-download-btn');
+  btn.textContent = '⏳ PDF genereren…'; btn.disabled = true;
+  try { await _doGeneratePdf(); }
+  catch(e) { alert('PDF fout: ' + e.message); }
+  finally { btn.textContent = '↓ Download forecast (PDF)'; btn.disabled = false; }
+}
+
+async function _doGeneratePdf() {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
 
@@ -3480,17 +3596,38 @@ function downloadRouteForecast() {
     margin: { left: rightX, right: margin }, tableWidth: rightW,
   });
 
-  // Kaart (links)
-  _pdfDrawMap(doc, mapX, mapY, mapW, mapH, limitWind, limitWave);
+  // Kaart (links) — probeer html2canvas, anders vector fallback
+  let mapCaptured = false;
+  if (window.html2canvas) {
+    try {
+      const mapEl = document.getElementById('route-map');
+      // Fit kaart naar route bounds vóór capture
+      const bounds = L.latLngBounds(_routeFcStops.map(s => [s.lat, s.lon]));
+      _routeMap.fitBounds(bounds.pad(0.15), { animate: false });
+      await new Promise(r => setTimeout(r, 600)); // wacht op tile render
+      const canvas = await html2canvas(mapEl, {
+        useCORS: true, allowTaint: false, scale: 2, logging: false,
+        backgroundColor: null,
+      });
+      const mapImg = canvas.toDataURL('image/png');
+      doc.setDrawColor(180, 200, 220); doc.setLineWidth(0.3);
+      doc.roundedRect(mapX, mapY, mapW, mapH, 2, 2, 'S');
+      doc.addImage(mapImg, 'PNG', mapX, mapY, mapW, mapH, undefined, 'FAST');
+      // Teken gekleurde route segmenten als vectoren bovenop de kaart
+      _pdfDrawRouteOnMap(doc, mapX, mapY, mapW, mapH, limitWind, limitWave);
+      mapCaptured = true;
+    } catch(e) { /* val terug op vector */ }
+  }
+  if (!mapCaptured) _pdfDrawMap(doc, mapX, mapY, mapW, mapH, limitWind, limitWave);
 
   // ── Workability balk ──
   const wbY = Math.max(mapY + mapH, doc.lastAutoTable.finalY) + 7;
   doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(15,23,42);
   doc.text('Route workability', margin, wbY);
-  _pdfWorkabilityBar(doc, margin, wbY + 3, pageW - 2*margin - 40, limitWind, limitWave);
+  _pdfWorkabilityBar(doc, margin, wbY + 3, pageW - 2*margin, limitWind, limitWave);
 
   // ── Forecast tabel ──
-  const fcY = wbY + 22;
+  const fcY = wbY + 28;
   doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(15,23,42);
   doc.text('Weersvoorspelling per stop', margin, fcY);
   doc.autoTable({
