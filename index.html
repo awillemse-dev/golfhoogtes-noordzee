@@ -499,6 +499,9 @@
     .route-fc-metric-val { font-size: 0.9rem; font-weight: 700; }
     .route-fc-metric-lbl { font-size: 0.6rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
     .route-fc-loading { padding: 24px; text-align: center; color: var(--text-muted); font-size: 0.78rem; }
+    .route-fc-ok   { color: #22c55e !important; }
+    .route-fc-warn { color: #f97316 !important; }
+    .route-fc-bad  { color: #ef4444 !important; }
     #route-click-hint {
       font-size: 0.72rem;
       color: var(--text-muted);
@@ -926,6 +929,22 @@
 
         <div id="route-waypoints-list"></div>
 
+        <div class="route-section">
+          <label>Limieten</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div>
+              <div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:4px;">Max wind (kt)</div>
+              <input id="route-limit-wind" type="number" placeholder="bijv. 20" min="1" max="100" step="1"
+                style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;box-sizing:border-box;">
+            </div>
+            <div>
+              <div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:4px;">Max golf (m)</div>
+              <input id="route-limit-wave" type="number" placeholder="bijv. 1.5" min="0.1" max="20" step="0.1"
+                style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;box-sizing:border-box;">
+            </div>
+          </div>
+        </div>
+
         <div style="padding:0 16px 12px;display:flex;flex-direction:column;gap:8px;">
           <div id="route-total-info" style="font-size:0.75rem;color:var(--text-muted);min-height:1.2em"></div>
           <button id="route-save-btn" onclick="routeSave()" style="background:#1d4ed8;color:white;border:none;border-radius:6px;font-size:0.8rem;font-weight:700;padding:9px;cursor:pointer;">Route opslaan &amp; voorspelling berekenen</button>
@@ -941,9 +960,30 @@
           <button onclick="routeEdit()" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--text-muted);cursor:pointer;font-size:0.72rem;padding:3px 8px;">Bewerken</button>
         </div>
         <div id="route-fc-summary" style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:0.75rem;color:var(--text-muted);line-height:1.6;flex-shrink:0;"></div>
-        <div id="route-fc-results" style="flex:1;overflow-y:auto;padding:8px 0;"></div>
-        <div style="padding:4px 14px 12px;font-size:0.65rem;color:var(--text-muted);line-height:1.4;flex-shrink:0;">
-          Weerdata: Open-Meteo (ECMWF &amp; GFS) · Golfdata: ECMWF WAM
+
+        <!-- Slider sectie -->
+        <div id="route-fc-slider-wrap" style="display:none;padding:12px 14px;border-bottom:1px solid var(--border);flex-shrink:0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span id="route-fc-slider-time" style="font-size:0.75rem;font-weight:700;color:#e2e8f0;">–</span>
+            <span id="route-fc-slider-pos"  style="font-size:0.68rem;color:var(--text-muted);">–</span>
+          </div>
+          <input id="route-fc-slider" type="range" min="0" max="100" value="0" step="1"
+            style="width:100%;accent-color:#3b82f6;cursor:pointer;" oninput="routeSliderMove(this.value)">
+          <div style="display:flex;justify-content:space-between;font-size:0.62rem;color:var(--text-muted);margin-top:4px;">
+            <span id="route-fc-slider-dep">Vertrek</span>
+            <span id="route-fc-slider-eta">ETA</span>
+          </div>
+          <!-- Limiet overschrijding banner -->
+          <div id="route-fc-alert" style="display:none;margin-top:8px;background:rgba(239,68,68,0.15);border:1px solid #ef4444;border-radius:6px;padding:6px 10px;font-size:0.72rem;color:#fca5a5;line-height:1.4;"></div>
+        </div>
+
+        <!-- Weer kaart voor huidig slider moment -->
+        <div id="route-fc-card-wrap" style="flex:1;overflow-y:auto;padding:10px 0 0;">
+          <div id="route-fc-loading" class="route-fc-loading">Weerdata ophalen…</div>
+        </div>
+
+        <div style="padding:4px 14px 10px;font-size:0.62rem;color:var(--text-muted);line-height:1.4;flex-shrink:0;">
+          Open-Meteo (ECMWF &amp; GFS) · Golfdata: ECMWF WAM
         </div>
       </div>
 
@@ -2489,17 +2529,38 @@ function _routeMarker(lat, lon, color, label) {
   return L.marker([lat, lon], { icon, draggable: true });
 }
 
+let _routeDistLabels = [];
+
 function _redrawRouteLine() {
   if (_routeLine) { _routeMap.removeLayer(_routeLine); _routeLine = null; }
-  const pts = [];
-  if (_routeStart)  pts.push([_routeStart.lat,  _routeStart.lon]);
-  _routeWaypoints.forEach(wp => pts.push([wp.lat, wp.lon]));
-  if (_routeEnd)    pts.push([_routeEnd.lat,    _routeEnd.lon]);
-  if (pts.length >= 2) {
-    _routeLine = L.polyline(pts, {
+  _routeDistLabels.forEach(l => _routeMap.removeLayer(l));
+  _routeDistLabels = [];
+
+  const allPts = _routeAllPoints();
+  const lls = allPts.map(p => [p.lat, p.lon]);
+
+  if (lls.length >= 2) {
+    _routeLine = L.polyline(lls, {
       color: '#3b82f6', weight: 3, opacity: 0.85,
       dashArray: '6 5',
     }).addTo(_routeMap);
+
+    // Afstandslabels per segment
+    for (let i = 1; i < allPts.length; i++) {
+      const a = allPts[i-1], b = allPts[i];
+      const d = _routeDistNm(a.lat, a.lon, b.lat, b.lon);
+      const midLat = (a.lat + b.lat) / 2;
+      const midLon = (a.lon + b.lon) / 2;
+      const label = L.marker([midLat, midLon], {
+        icon: L.divIcon({
+          className: '',
+          iconSize: null,
+          html: `<div style="background:rgba(15,23,42,0.82);border:1px solid #334155;border-radius:4px;padding:2px 6px;font-size:0.65rem;font-weight:700;color:#94a3b8;white-space:nowrap;pointer-events:none;">${d.toFixed(1)} nm</div>`,
+        }),
+        interactive: false,
+      }).addTo(_routeMap);
+      _routeDistLabels.push(label);
+    }
   }
 }
 
@@ -2665,6 +2726,12 @@ function routeHideForecast() {
   setTimeout(() => _routeMap.invalidateSize(), 50);
 }
 
+let _routeFcStops   = [];   // { lat, lon, eta, distNm }
+let _routeFcData    = [];   // weather result per stop
+let _routeFcSlider  = null; // current marker on map
+let _routeFcSpeed   = 0;
+let _routeFcDep     = null;
+
 function routeShowForecast() {
   const fcPanel = document.getElementById('route-forecast-panel');
   fcPanel.style.display = 'flex';
@@ -2675,151 +2742,259 @@ function routeShowForecast() {
 
 async function _fetchRouteForecast() {
   const pts      = _routeAllPoints();
-  const speed    = parseFloat(document.getElementById('route-speed').value);
+  _routeFcSpeed  = parseFloat(document.getElementById('route-speed').value);
   const depInput = document.getElementById('route-departure').value;
-  const depTime  = depInput ? new Date(depInput + ':00Z') : new Date();
+  _routeFcDep    = depInput ? new Date(depInput + ':00Z') : new Date();
 
-  const resultsEl = document.getElementById('route-fc-results');
+  const loadEl   = document.getElementById('route-fc-loading');
+  const sliderWrap = document.getElementById('route-fc-slider-wrap');
+  const cardWrap = document.getElementById('route-fc-card-wrap');
   const summaryEl = document.getElementById('route-fc-summary');
-  resultsEl.innerHTML = '<div class="route-fc-loading">Weerdata ophalen…</div>';
 
+  sliderWrap.style.display = 'none';
+  cardWrap.innerHTML = '<div id="route-fc-loading" class="route-fc-loading">Weerdata ophalen…</div>';
+
+  // Totale afstand
   let totalNm = 0;
   for (let i = 1; i < pts.length; i++)
     totalNm += _routeDistNm(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
-  const totalHours = totalNm / speed;
-  const eta = new Date(depTime.getTime() + totalHours * 3600000);
+  const totalHours = totalNm / _routeFcSpeed;
+  const eta = new Date(_routeFcDep.getTime() + totalHours * 3600000);
 
   summaryEl.innerHTML =
-    `Vertrek: <b>${depTime.toUTCString().slice(0,22)} UTC</b><br>` +
-    `ETA: <b>${eta.toUTCString().slice(0,22)} UTC</b> · ${totalNm.toFixed(1)} nm · ~${totalHours.toFixed(1)} u`;
+    `Vertrek: <b>${_routeFcDep.toISOString().slice(0,16).replace('T',' ')} UTC</b><br>` +
+    `ETA: <b>${eta.toISOString().slice(0,16).replace('T',' ')} UTC</b> · ${totalNm.toFixed(1)} nm · ~${totalHours.toFixed(1)} u`;
 
-  // Per waypoint: bereken ETA en haal weer op
+  // Genereer stops: elke ~1 uur of minimaal bij elk waypoint
+  // Max 48 stops (Open-Meteo limiet is ver weg maar houd het beheersbaar)
+  const intervalHours = Math.max(0.5, Math.ceil(totalHours / 40));
+  const stops = [];
   let distAccum = 0;
-  const cards = [];
+  let segStart  = 0;
 
-  for (let i = 0; i < pts.length; i++) {
-    if (i > 0) distAccum += _routeDistNm(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
-    const eta_i  = new Date(depTime.getTime() + (distAccum / speed) * 3600000);
-    cards.push({ pt: pts[i], eta: eta_i, dist: distAccum });
+  // Itereer over segmenten en interpoleer stops
+  for (let seg = 1; seg < pts.length; seg++) {
+    const segDist = _routeDistNm(pts[seg-1].lat, pts[seg-1].lon, pts[seg].lat, pts[seg].lon);
+    const segDistStart = distAccum;
+    distAccum += segDist;
+
+    // Stops op dit segment
+    const startH = segDistStart / _routeFcSpeed;
+    const endH   = distAccum   / _routeFcSpeed;
+    const nSteps = Math.max(1, Math.ceil((endH - startH) / intervalHours));
+
+    for (let s = (seg === 1 ? 0 : 1); s <= nSteps; s++) {
+      const frac = s / nSteps;
+      const lat  = pts[seg-1].lat + frac * (pts[seg].lat - pts[seg-1].lat);
+      const lon  = pts[seg-1].lon + frac * (pts[seg].lon - pts[seg-1].lon);
+      const d    = segDistStart + frac * segDist;
+      const t    = new Date(_routeFcDep.getTime() + (d / _routeFcSpeed) * 3600000);
+      if (stops.length === 0 || Math.abs(d - stops[stops.length-1].distNm) > 0.01) {
+        stops.push({ lat, lon, eta: t, distNm: d });
+      }
+    }
   }
 
-  // Fetch Open-Meteo voor alle punten parallel
-  // Marine API voor golven + atmosferisch voor wind
-  const fetchPoint = async (card) => {
-    const { lat, lon } = card.pt;
-    const isoDate = card.eta.toISOString().slice(0, 10);
-    const hour    = card.eta.toISOString().slice(11, 13);
+  _routeFcStops = stops;
+  _routeFcData  = new Array(stops.length).fill(null);
+
+  // Haal weer op voor alle stops parallel (batches van 10 om servers te ontzien)
+  const fetchStop = async (stop) => {
+    const isoDate = stop.eta.toISOString().slice(0, 10);
+    const h       = parseInt(stop.eta.toISOString().slice(11, 13));
 
     const marineUrl = `https://marine-api.open-meteo.com/v1/marine?` +
-      `latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}` +
-      `&hourly=wave_height,wave_direction,wave_period,wind_wave_height` +
-      `&start_date=${isoDate}&end_date=${isoDate}` +
-      `&models=best_match`;
+      `latitude=${stop.lat.toFixed(4)}&longitude=${stop.lon.toFixed(4)}` +
+      `&hourly=wave_height,wave_direction,wave_period` +
+      `&start_date=${isoDate}&end_date=${isoDate}&models=best_match`;
 
     const windUrl = `https://api.open-meteo.com/v1/forecast?` +
-      `latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}` +
+      `latitude=${stop.lat.toFixed(4)}&longitude=${stop.lon.toFixed(4)}` +
       `&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
-      `&wind_speed_unit=kn` +
-      `&start_date=${isoDate}&end_date=${isoDate}` +
-      `&models=best_match`;
+      `&wind_speed_unit=kn&start_date=${isoDate}&end_date=${isoDate}&models=best_match`;
 
-    const [marineResp, windResp] = await Promise.all([
-      fetch(marineUrl).then(r => r.json()).catch(() => null),
-      fetch(windUrl).then(r => r.json()).catch(() => null),
-    ]);
-
-    // Zoek het dichtstbijzijnde uur
-    const h = parseInt(hour);
     const getHourVal = (obj, key) => {
       if (!obj || !obj.hourly) return null;
       const times = obj.hourly.time || [];
-      const vals  = obj.hourly[key] || [];
-      let best = 0;
-      let bestDiff = Infinity;
+      const vals  = obj.hourly[key]  || [];
+      let best = 0, bestDiff = Infinity;
       times.forEach((t, idx) => {
-        const th = parseInt(t.slice(11, 13));
-        const diff = Math.abs(th - h);
+        const diff = Math.abs(parseInt(t.slice(11,13)) - h);
         if (diff < bestDiff) { bestDiff = diff; best = idx; }
       });
       return vals[best] ?? null;
     };
 
-    return {
-      waveHm0:  getHourVal(marineResp, 'wave_height'),
-      waveDir:  getHourVal(marineResp, 'wave_direction'),
-      wavePer:  getHourVal(marineResp, 'wave_period'),
-      windKt:   getHourVal(windResp,   'wind_speed_10m'),
-      windDir:  getHourVal(windResp,   'wind_direction_10m'),
-      windGust: getHourVal(windResp,   'wind_gusts_10m'),
-    };
+    try {
+      const [marine, wind] = await Promise.all([
+        fetch(marineUrl).then(r => r.json()).catch(() => null),
+        fetch(windUrl).then(r => r.json()).catch(() => null),
+      ]);
+      return {
+        waveHm0:  getHourVal(marine, 'wave_height'),
+        waveDir:  getHourVal(marine, 'wave_direction'),
+        wavePer:  getHourVal(marine, 'wave_period'),
+        windKt:   getHourVal(wind,   'wind_speed_10m'),
+        windDir:  getHourVal(wind,   'wind_direction_10m'),
+        windGust: getHourVal(wind,   'wind_gusts_10m'),
+      };
+    } catch { return null; }
   };
 
-  let results;
+  // Batches van 8
   try {
-    results = await Promise.all(cards.map(fetchPoint));
+    for (let b = 0; b < stops.length; b += 8) {
+      const batch = stops.slice(b, b + 8);
+      const res   = await Promise.all(batch.map(fetchStop));
+      res.forEach((r, i) => { _routeFcData[b + i] = r; });
+      // Update slider max en toon eerste resultaat alvast
+      if (b === 0) {
+        const slider = document.getElementById('route-fc-slider');
+        slider.max   = stops.length - 1;
+        slider.value = 0;
+        document.getElementById('route-fc-slider-dep').textContent =
+          _routeFcDep.toISOString().slice(11,16) + ' UTC';
+        document.getElementById('route-fc-slider-eta').textContent =
+          eta.toISOString().slice(11,16) + ' UTC ' + eta.toISOString().slice(0,10);
+        sliderWrap.style.display = '';
+        routeSliderMove(0);
+      }
+    }
   } catch(e) {
-    resultsEl.innerHTML = `<div class="route-fc-loading" style="color:#ef4444">Fout: ${e.message}</div>`;
+    cardWrap.innerHTML = `<div class="route-fc-loading" style="color:#ef4444">Fout: ${e.message}</div>`;
     return;
   }
 
-  const colors = ['#22c55e', '#ef4444'];
+  // Teken routelijn opnieuw zodat hij boven slider-marker staat
+  routeSliderMove(parseInt(document.getElementById('route-fc-slider').value));
+}
+
+function routeSliderMove(idx) {
+  idx = parseInt(idx);
+  if (!_routeFcStops.length) return;
+  const stop = _routeFcStops[idx];
+  const data = _routeFcData[idx];
+
+  const limitWind = parseFloat(document.getElementById('route-limit-wind').value) || null;
+  const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
+
+  // Toon/verplaats marker op kaart
+  if (_routeFcSlider) _routeMap.removeLayer(_routeFcSlider);
+  const color = _routeFcAlertColor(data, limitWind, limitWave);
+  _routeFcSlider = L.circleMarker([stop.lat, stop.lon], {
+    radius: 8, color: 'white', weight: 2,
+    fillColor: color, fillOpacity: 1,
+  }).addTo(_routeMap);
+
+  // Slider labels
+  document.getElementById('route-fc-slider-time').textContent =
+    stop.eta.toISOString().slice(0,10) + '  ' + stop.eta.toISOString().slice(11,16) + ' UTC';
+  document.getElementById('route-fc-slider-pos').textContent =
+    `${stop.lat.toFixed(3)}, ${stop.lon.toFixed(3)}  ·  ${stop.distNm.toFixed(1)} nm`;
+
+  // Alert banner
+  const alertEl = document.getElementById('route-fc-alert');
+  const alerts  = [];
+  if (data && limitWind && data.windKt !== null && data.windKt > limitWind)
+    alerts.push(`Wind ${data.windKt.toFixed(0)} kt > limiet ${limitWind} kt`);
+  if (data && limitWind && data.windGust !== null && data.windGust > limitWind)
+    alerts.push(`Windstoot ${data.windGust.toFixed(0)} kt > limiet ${limitWind} kt`);
+  if (data && limitWave && data.waveHm0 !== null && data.waveHm0 > limitWave)
+    alerts.push(`Golven ${data.waveHm0.toFixed(1)} m > limiet ${limitWave} m`);
+  if (alerts.length) {
+    alertEl.textContent = '⚠ ' + alerts.join(' · ');
+    alertEl.style.display = '';
+  } else {
+    alertEl.style.display = 'none';
+  }
+
+  // Weerkaart
+  const cardWrap = document.getElementById('route-fc-card-wrap');
+  if (!data) {
+    cardWrap.innerHTML = '<div class="route-fc-loading">Data laden…</div>';
+    return;
+  }
+
   const fmtDir = d => {
     if (d === null) return '–';
     const dirs = ['N','NO','O','ZO','Z','ZW','W','NW'];
     return dirs[Math.round(((d % 360) + 360) % 360 / 45) % 8];
   };
   const fmtVal = (v, dec=1) => v !== null && v !== undefined ? v.toFixed(dec) : '–';
-  const waveColor  = h => h === null ? '#3d5167' : h < 0.5 ? '#22c55e' : h < 1.0 ? '#84cc16' : h < 1.5 ? '#eab308' : h < 2.5 ? '#f97316' : '#ef4444';
-  const windColKt  = k => k === null ? '#3d5167' : k < 7 ? '#22c55e' : k < 11 ? '#84cc16' : k < 16 ? '#eab308' : k < 21 ? '#f97316' : k < 27 ? '#ef4444' : '#7f1d1d';
+  const windCls = v => {
+    if (v === null) return '';
+    if (limitWind && v > limitWind) return 'route-fc-bad';
+    if (limitWind && v > limitWind * 0.8) return 'route-fc-warn';
+    return 'route-fc-ok';
+  };
+  const waveCls = v => {
+    if (v === null) return '';
+    if (limitWave && v > limitWave) return 'route-fc-bad';
+    if (limitWave && v > limitWave * 0.8) return 'route-fc-warn';
+    return 'route-fc-ok';
+  };
+  const windFallback = v => !limitWind ? (v < 7 ? '#22c55e' : v < 16 ? '#eab308' : v < 27 ? '#f97316' : '#ef4444') : null;
+  const waveFallback = v => !limitWave ? (v < 0.5 ? '#22c55e' : v < 1.5 ? '#eab308' : v < 3 ? '#f97316' : '#ef4444') : null;
+  const cls2color = (cls, fallback) => {
+    if (!cls && fallback !== null) return `color:${fallback}`;
+    return `class="${cls}"`;
+  };
 
-  resultsEl.innerHTML = '';
-  cards.forEach((card, i) => {
-    const r  = results[i];
-    const lbl = card.pt.label;
-    const bg  = lbl === 'A' ? '#22c55e' : lbl === 'B' ? '#ef4444' : '#3b82f6';
-    const timeStr = card.eta.toISOString().slice(11, 16) + ' UTC';
-    const dateStr = card.eta.toISOString().slice(0, 10);
-
-    const el = document.createElement('div');
-    el.className = 'route-fc-card';
-    el.innerHTML = `
-      <div class="route-fc-card-header">
-        <div class="route-fc-badge" style="background:${bg}">${lbl}</div>
-        <div class="route-fc-card-title">${card.pt.lat.toFixed(3)}, ${card.pt.lon.toFixed(3)}</div>
-        <div class="route-fc-card-time">${dateStr}<br>${timeStr}</div>
-      </div>
+  cardWrap.innerHTML = `
+    <div class="route-fc-card" style="margin:0 10px 10px;">
       <div style="padding:6px 10px 2px;font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.05em">Wind</div>
       <div class="route-fc-metrics">
         <div class="route-fc-metric">
-          <div class="route-fc-metric-val" style="color:${windColKt(r.windKt)}">${fmtVal(r.windKt, 0)} kt</div>
+          <div class="route-fc-metric-val ${windCls(data.windKt)}" style="${!limitWind && data.windKt !== null ? 'color:'+windFallback(data.windKt) : ''}">${fmtVal(data.windKt,0)} kt</div>
           <div class="route-fc-metric-lbl">Snelheid</div>
         </div>
         <div class="route-fc-metric">
-          <div class="route-fc-metric-val" style="color:#94a3b8">${fmtDir(r.windDir)}</div>
+          <div class="route-fc-metric-val" style="color:#94a3b8">${fmtDir(data.windDir)}</div>
           <div class="route-fc-metric-lbl">Richting</div>
         </div>
         <div class="route-fc-metric">
-          <div class="route-fc-metric-val" style="color:#64748b">${fmtVal(r.windGust, 0)} kt</div>
+          <div class="route-fc-metric-val ${windCls(data.windGust)}" style="${!limitWind && data.windGust !== null ? 'color:'+windFallback(data.windGust) : ''}">${fmtVal(data.windGust,0)} kt</div>
           <div class="route-fc-metric-lbl">Windstoten</div>
         </div>
       </div>
       <div style="padding:6px 10px 2px;font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.05em">Golven</div>
       <div class="route-fc-metrics" style="margin-bottom:0">
         <div class="route-fc-metric">
-          <div class="route-fc-metric-val" style="color:${waveColor(r.waveHm0)}">${fmtVal(r.waveHm0)} m</div>
+          <div class="route-fc-metric-val ${waveCls(data.waveHm0)}" style="${!limitWave && data.waveHm0 !== null ? 'color:'+waveFallback(data.waveHm0) : ''}">${fmtVal(data.waveHm0)} m</div>
           <div class="route-fc-metric-lbl">Hm0</div>
         </div>
         <div class="route-fc-metric">
-          <div class="route-fc-metric-val" style="color:#94a3b8">${fmtDir(r.waveDir)}</div>
+          <div class="route-fc-metric-val" style="color:#94a3b8">${fmtDir(data.waveDir)}</div>
           <div class="route-fc-metric-lbl">Richting</div>
         </div>
         <div class="route-fc-metric">
-          <div class="route-fc-metric-val" style="color:#64748b">${fmtVal(r.wavePer)} s</div>
+          <div class="route-fc-metric-val" style="color:#64748b">${fmtVal(data.wavePer)} s</div>
           <div class="route-fc-metric-lbl">Periode</div>
         </div>
-      </div>`;
-    resultsEl.appendChild(el);
-  });
+      </div>
+    </div>
+
+    <!-- Mini tijdlijn: kleur per stop -->
+    <div style="padding:0 10px 10px;">
+      <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:0.05em">Route tijdlijn</div>
+      <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;gap:1px;">
+        ${_routeFcData.map((d, i) => {
+          const c = _routeFcAlertColor(d, limitWind, limitWave);
+          return `<div style="flex:1;background:${c};opacity:${i===idx?1:0.55};cursor:pointer;" onclick="document.getElementById('route-fc-slider').value=${i};routeSliderMove(${i})" title="${_routeFcStops[i]?_routeFcStops[i].eta.toISOString().slice(11,16):''} UTC"></div>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
+function _routeFcAlertColor(data, limitWind, limitWave) {
+  if (!data) return '#475569';
+  const windExc = limitWind && ((data.windKt && data.windKt > limitWind) || (data.windGust && data.windGust > limitWind));
+  const waveExc = limitWave && data.waveHm0 && data.waveHm0 > limitWave;
+  const windWarn = limitWind && ((data.windKt && data.windKt > limitWind * 0.8) || (data.windGust && data.windGust > limitWind * 0.8));
+  const waveWarn = limitWave && data.waveHm0 && data.waveHm0 > limitWave * 0.8;
+  if (windExc || waveExc) return '#ef4444';
+  if (windWarn || waveWarn) return '#f97316';
+  return '#22c55e';
 }
 
 // ── Waarnemingen Nederland ────────────────────────────────────────────────────
