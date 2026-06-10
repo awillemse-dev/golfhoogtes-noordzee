@@ -682,13 +682,13 @@
       </svg>
       <span class="tab-label">Waar&shy;nemingen</span>
     </div>
-    <div class="sidebar-tab" id="tab-nederland" onclick="selectSection('nederland')">
+    <div class="sidebar-tab" id="tab-route" onclick="selectSection('route')">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
-        <circle cx="12" cy="9" r="2.5"/>
+        <path d="M3 17l4-8 4 4 4-6 4 8"/>
+        <path d="M3 21h18"/>
       </svg>
-      <span class="tab-label">Waar&shy;nemingen NL</span>
+      <span class="tab-label">Route Fore&shy;cast</span>
     </div>
   </div>
 
@@ -1796,21 +1796,19 @@ function selectSection(section) {
     const layer = _lastWaarLayer;
     activeLayer = '';
     selectLayer(layer);
-  } else if (section === 'nederland') {
+  } else if (section === 'route') {
     if (activeLayer) _lastWaarLayer = activeLayer;
     nav.style.display        = 'none';
-    nlNav.style.display      = '';
-    comingSoon.style.display = 'none';
+    nlNav.style.display      = 'none';
+    comingSoon.style.display = '';
+    comingSoon.textContent   = 'Route Forecast — binnenkort beschikbaar';
     mapEl.style.display      = 'none';
-    document.getElementById('nl-panel').classList.add('active');
+    document.getElementById('nl-panel').classList.remove('active');
     document.getElementById('chart-panel').classList.remove('open');
     document.getElementById('radar-panel').classList.remove('active');
     stopRadar();
     clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem(); stopStormen();
     activeLayer = '';
-    const nlLayer = _activeNlLayer;
-    _activeNlLayer = '';
-    selectNlLayer(nlLayer || 'nl-temp');
   } else {
     nav.style.display        = 'none';
     nlNav.style.display      = 'none';
