@@ -840,6 +840,8 @@
     <!-- Route Forecast paneel -->
     <div id="route-panel">
       <div id="route-map"></div>
+
+      <!-- Invoerpaneel -->
       <div id="route-sidebar">
         <h3>Route Forecast</h3>
 
@@ -863,13 +865,33 @@
           <div class="route-coord-hint">Bijv. 51.9244, 4.4777 (Rotterdam)</div>
         </div>
 
+        <div class="route-section">
+          <label>Scheepssnelheid</label>
+          <div class="route-input-row">
+            <input id="route-speed" type="number" placeholder="Knopen" step="0.5" min="1" max="50" style="max-width:100px">
+            <span style="color:var(--text-muted);font-size:0.8rem">kt</span>
+          </div>
+        </div>
+
         <div class="route-section" style="border-bottom:none">
           <label>Waypoints</label>
           <div id="route-click-hint">Klik op de kaart om waypoints toe te voegen langs je route.</div>
         </div>
 
         <div id="route-waypoints-list"></div>
-        <button id="route-clear-btn" onclick="routeClearAll()">Alles wissen</button>
+
+        <div style="padding:0 16px 6px;display:flex;flex-direction:column;gap:8px;">
+          <div id="route-total-info" style="font-size:0.75rem;color:var(--text-muted);min-height:1.2em"></div>
+          <button id="route-save-btn" onclick="routeSave()" style="background:#1d4ed8;color:white;border:none;border-radius:6px;font-size:0.8rem;font-weight:700;padding:9px;cursor:pointer;">Route opslaan</button>
+          <button id="route-clear-btn" onclick="routeClearAll()">Alles wissen</button>
+        </div>
+      </div>
+
+      <!-- Opgeslagen route overlay (vervangt sidebar) -->
+      <div id="route-saved-overlay" style="display:none; position:absolute; top:12px; right:12px; z-index:1000; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; min-width:220px; max-width:280px;">
+        <div style="font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px">Opgeslagen route</div>
+        <div id="route-saved-info" style="font-size:0.8rem;color:#e2e8f0;line-height:1.7;"></div>
+        <button onclick="routeEdit()" style="margin-top:12px;width:100%;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-muted);font-size:0.75rem;padding:7px;cursor:pointer;">Route bewerken</button>
       </div>
     </div>
 
@@ -2386,6 +2408,8 @@ function _ensureRouteMap() {
     const { lat, lng } = e.latlng;
     _addRouteWaypoint(lat, lng);
   });
+
+  document.getElementById('route-speed').addEventListener('input', _renderWaypointList);
 }
 
 function _routeMarker(lat, lon, color, label) {
@@ -2416,18 +2440,56 @@ function _redrawRouteLine() {
   }
 }
 
+function _routeDistNm(lat1, lon1, lat2, lon2) {
+  // Haversine → zeemijlen
+  const R = 3440.065;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function _routeAllPoints() {
+  const pts = [];
+  if (_routeStart) pts.push({ lat: _routeStart.lat, lon: _routeStart.lon, label: 'A', color: '#22c55e' });
+  _routeWaypoints.forEach((wp, i) => pts.push({ lat: wp.lat, lon: wp.lon, label: i+1, color: '#3b82f6' }));
+  if (_routeEnd)   pts.push({ lat: _routeEnd.lat,   lon: _routeEnd.lon,   label: 'B', color: '#ef4444' });
+  return pts;
+}
+
 function _renderWaypointList() {
-  const list = document.getElementById('route-waypoints-list');
+  const pts   = _routeAllPoints();
+  const speed = parseFloat(document.getElementById('route-speed').value) || null;
+  const list  = document.getElementById('route-waypoints-list');
   list.innerHTML = '';
-  _routeWaypoints.forEach((wp, i) => {
+
+  let totalNm = 0;
+  for (let i = 0; i < pts.length; i++) {
     const el = document.createElement('div');
     el.className = 'route-wp-item';
-    el.innerHTML = `
-      <div class="route-wp-dot" style="background:#3b82f6"></div>
-      <span class="route-wp-coords">${wp.lat.toFixed(4)}, ${wp.lon.toFixed(4)}</span>
-      <button class="route-wp-del" onclick="routeRemoveWaypoint(${i})" title="Verwijder">✕</button>`;
+    let distHtml = '';
+    if (i > 0) {
+      const d = _routeDistNm(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
+      totalNm += d;
+      const tStr = speed ? ` · ${(d/speed).toFixed(1)} u` : '';
+      distHtml = `<span style="font-size:0.65rem;color:var(--text-muted);margin-bottom:3px;display:block">↑ ${d.toFixed(1)} nm${tStr}</span>`;
+    }
+    const isWp = i > 0 && i < pts.length - 1;
+    el.innerHTML = `${distHtml}
+      <div class="route-wp-dot" style="background:${pts[i].color}"></div>
+      <span class="route-wp-coords">${pts[i].lat.toFixed(4)}, ${pts[i].lon.toFixed(4)}</span>
+      ${isWp ? `<button class="route-wp-del" onclick="routeRemoveWaypoint(${i-1})" title="Verwijder">✕</button>` : ''}`;
     list.appendChild(el);
-  });
+  }
+
+  // Totaal
+  const infoEl = document.getElementById('route-total-info');
+  if (pts.length >= 2) {
+    const tStr = speed ? ` · reistijd ~${(totalNm/speed).toFixed(1)} u` : '';
+    infoEl.textContent = `Totaal: ${totalNm.toFixed(1)} nm${tStr}`;
+  } else {
+    infoEl.textContent = '';
+  }
 }
 
 function routeSetStart() {
@@ -2440,10 +2502,10 @@ function routeSetStart() {
   marker.on('dragend', e => {
     const p = e.target.getLatLng();
     _routeStart.lat = p.lat; _routeStart.lon = p.lng;
-    _redrawRouteLine();
+    _redrawRouteLine(); _renderWaypointList();
   });
   _routeStart = { lat, lon, marker };
-  _redrawRouteLine();
+  _redrawRouteLine(); _renderWaypointList();
   _routeMap.setView([lat, lon], Math.max(_routeMap.getZoom(), 7));
 }
 
@@ -2457,10 +2519,10 @@ function routeSetEnd() {
   marker.on('dragend', e => {
     const p = e.target.getLatLng();
     _routeEnd.lat = p.lat; _routeEnd.lon = p.lng;
-    _redrawRouteLine();
+    _redrawRouteLine(); _renderWaypointList();
   });
   _routeEnd = { lat, lon, marker };
-  _redrawRouteLine();
+  _redrawRouteLine(); _renderWaypointList();
 }
 
 function _addRouteWaypoint(lat, lon) {
@@ -2473,14 +2535,12 @@ function _addRouteWaypoint(lat, lon) {
     _redrawRouteLine(); _renderWaypointList();
   });
   _routeWaypoints.push({ lat, lon, marker });
-  _redrawRouteLine();
-  _renderWaypointList();
+  _redrawRouteLine(); _renderWaypointList();
 }
 
 function routeRemoveWaypoint(i) {
   _routeMap.removeLayer(_routeWaypoints[i].marker);
   _routeWaypoints.splice(i, 1);
-  // Hernummer resterende markers
   _routeWaypoints.forEach((wp, j) => {
     _routeMap.removeLayer(wp.marker);
     wp.marker = _routeMarker(wp.lat, wp.lon, '#3b82f6', j + 1);
@@ -2501,6 +2561,41 @@ function routeClearAll() {
   _routeWaypoints = [];
   if (_routeLine)  { _routeMap.removeLayer(_routeLine); _routeLine = null; }
   _renderWaypointList();
+  document.getElementById('route-saved-overlay').style.display = 'none';
+  document.getElementById('route-sidebar').style.display = '';
+  setTimeout(() => _routeMap.invalidateSize(), 50);
+}
+
+function routeSave() {
+  const pts = _routeAllPoints();
+  if (pts.length < 2) return;
+  const speed = parseFloat(document.getElementById('route-speed').value) || null;
+
+  // Bereken totaal
+  let totalNm = 0;
+  for (let i = 1; i < pts.length; i++)
+    totalNm += _routeDistNm(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
+
+  const speedStr = speed ? `${speed} kt` : '–';
+  const timeStr  = speed ? `~${(totalNm/speed).toFixed(1)} u` : '–';
+
+  document.getElementById('route-saved-info').innerHTML =
+    `<b>Van:</b> ${pts[0].lat.toFixed(4)}, ${pts[0].lon.toFixed(4)}<br>` +
+    `<b>Naar:</b> ${pts[pts.length-1].lat.toFixed(4)}, ${pts[pts.length-1].lon.toFixed(4)}<br>` +
+    `<b>Waypoints:</b> ${_routeWaypoints.length}<br>` +
+    `<b>Afstand:</b> ${totalNm.toFixed(1)} nm<br>` +
+    `<b>Snelheid:</b> ${speedStr}<br>` +
+    `<b>Reistijd:</b> ${timeStr}`;
+
+  document.getElementById('route-sidebar').style.display = 'none';
+  document.getElementById('route-saved-overlay').style.display = '';
+  setTimeout(() => _routeMap.invalidateSize(), 50);
+}
+
+function routeEdit() {
+  document.getElementById('route-saved-overlay').style.display = 'none';
+  document.getElementById('route-sidebar').style.display = '';
+  setTimeout(() => _routeMap.invalidateSize(), 50);
 }
 
 // ── Waarnemingen Nederland ────────────────────────────────────────────────────
