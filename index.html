@@ -1098,25 +1098,30 @@
           <div id="klim-fc-alert" style="display:none;margin-top:10px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.5);border-radius:7px;padding:8px 12px;font-size:0.75rem;color:#fca5a5;line-height:1.5;"></div>
         </div>
 
-        <!-- Statistiekkaart voor huidig slider moment -->
-        <div id="klim-fc-card-wrap" style="flex:0 0 auto;overflow-y:auto;padding:12px 0 0;max-height:320px;">
-          <div id="klim-fc-loading" class="route-fc-loading">Klimaatdata ophalen…</div>
-        </div>
+        <!-- Scrollbaar gebied: statistiekkaart + grafieken/tabel -->
+        <div id="klim-fc-scroll" style="flex:1 1 0;min-height:0;overflow-y:auto;">
 
-        <!-- Aparte grafieken voor wind en golven over volledige route -->
-        <div id="klim-fc-chart-wrap" style="display:none;flex:1 1 0;min-height:240px;padding:8px 10px 6px;border-top:1px solid var(--border);flex-direction:column;gap:6px;">
-          <div style="flex:1 1 0;min-height:110px;position:relative;"><canvas id="klim-fc-chart-wind"></canvas></div>
-          <div style="flex:1 1 0;min-height:110px;position:relative;"><canvas id="klim-fc-chart-wave"></canvas></div>
-        </div>
+          <!-- Statistiekkaart voor huidig slider moment -->
+          <div id="klim-fc-card-wrap" style="padding:12px 0 0;">
+            <div id="klim-fc-loading" class="route-fc-loading">Klimaatdata ophalen…</div>
+          </div>
 
-        <!-- Tabel weergave (toggle) -->
-        <div id="klim-fc-table-wrap" style="display:none;">
-          <table id="klim-fc-table">
-            <thead>
-              <tr id="klim-fc-table-head"></tr>
-            </thead>
-            <tbody id="klim-fc-table-body"></tbody>
-          </table>
+          <!-- Aparte grafieken voor wind en golven over volledige route -->
+          <div id="klim-fc-chart-wrap" style="display:none;padding:10px 10px 6px;border-top:1px solid var(--border);flex-direction:column;gap:14px;">
+            <div style="height:300px;position:relative;"><canvas id="klim-fc-chart-wind"></canvas></div>
+            <div style="height:300px;position:relative;"><canvas id="klim-fc-chart-wave"></canvas></div>
+          </div>
+
+          <!-- Tabel weergave (toggle) -->
+          <div id="klim-fc-table-wrap" style="display:none;">
+            <table id="klim-fc-table">
+              <thead>
+                <tr id="klim-fc-table-head"></tr>
+              </thead>
+              <tbody id="klim-fc-table-body"></tbody>
+            </table>
+          </div>
+
         </div>
 
         <div style="padding:8px 10px 10px;flex-shrink:0;display:flex;flex-direction:column;gap:6px;">
@@ -3255,7 +3260,7 @@ function klimSliderMove(idx) {
     </div>
     <div style="padding:0 16px 12px;">
       <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;">Route tijdlijn (workability per stop)</div>
-      ${_klimTimelineBar('Overschrijdingskans', d => _klimAlertColor(d, limitWind, limitWave), idx)}
+      ${_klimTimelineBar('Gemiddelde vs. limiet', d => _klimPctlColor(d, 'mean', limitWind, limitWave), idx)}
       ${_klimTimelineBar('P50 vs. limiet', d => _klimPctlColor(d, 'p50', limitWind, limitWave), idx)}
       ${_klimTimelineBar('P80 vs. limiet', d => _klimPctlColor(d, 'p80', limitWind, limitWave), idx)}
     </div>`;
