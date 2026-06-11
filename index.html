@@ -966,19 +966,11 @@
         </div>
 
         <div class="route-section" id="route-klimaat-section" style="display:none">
-          <label>Vertrekmaand &amp; -tijd (UTC)</label>
-          <div class="route-input-row" style="gap:8px;">
-            <select id="klim-month" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;">
-              <option value="1">Januari</option><option value="2">Februari</option>
-              <option value="3">Maart</option><option value="4">April</option>
-              <option value="5">Mei</option><option value="6">Juni</option>
-              <option value="7">Juli</option><option value="8">Augustus</option>
-              <option value="9">September</option><option value="10">Oktober</option>
-              <option value="11">November</option><option value="12">December</option>
-            </select>
-            <select id="klim-hour" style="width:90px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;"></select>
+          <label>Vertrekdatum &amp; -tijd (UTC)</label>
+          <div class="route-input-row">
+            <input id="klim-departure" type="datetime-local" style="flex:1">
           </div>
-          <div class="route-coord-hint">Klimatologie per stop in 3-uurs stappen langs de route.</div>
+          <div class="route-coord-hint">Klimatologie rond deze datum (±10 dagen) in 3-uurs stappen langs de route. Het jaar wordt genegeerd — er wordt over meerdere historische jaren gemiddeld.</div>
           <label style="margin-top:12px;">Aantal jaren historie</label>
           <div class="route-input-row" style="gap:8px;align-items:center;">
             <select id="klim-years" style="width:110px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;">
@@ -2891,20 +2883,14 @@ let _klimChart    = null;
 let _klimLines    = [];              // gekleurde segmenten op kaart
 let _klimViewMode = 'chart';
 let _klimSpeed    = 0;
-let _klimMonth    = 1;
-let _klimDepHour  = 6;
+let _klimDep      = null;
 const _klimCache  = new Map();
-let _klimHourInit = false;
+const _KLIM_WINDOW_DAYS = 10;
 
-function _ensureKlimHourOptions() {
-  if (_klimHourInit) return; _klimHourInit = true;
-  const sel = document.getElementById('klim-hour'); if (!sel) return;
-  for (let h = 0; h < 24; h += 3) {
-    const o = document.createElement('option');
-    o.value = h; o.textContent = String(h).padStart(2, '0') + ':00';
-    if (h === 6) o.selected = true;
-    sel.appendChild(o);
-  }
+function _ensureKlimDeparture() {
+  const el = document.getElementById('klim-departure'); if (!el || el.value) return;
+  const now = new Date();
+  el.value = `${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,'0')}-${String(now.getUTCDate()).padStart(2,'0')}T06:00`;
 }
 
 function _setRouteMode(mode) {
@@ -2916,7 +2902,7 @@ function _setRouteMode(mode) {
   document.getElementById('route-save-btn').innerHTML = isK
     ? 'Route opslaan &amp; klimatologie berekenen'
     : 'Route opslaan &amp; voorspelling berekenen';
-  _ensureKlimHourOptions();
+  _ensureKlimDeparture();
   document.getElementById('route-forecast-panel').style.display   = 'none';
   document.getElementById('klimaat-forecast-panel').style.display = 'none';
   document.getElementById('route-saved-overlay').style.display    = 'none';
@@ -2974,12 +2960,23 @@ function _klimExceed(stats, limit) {
   if (!stats || !limit) return null;
   return stats.raw.filter(x => x > limit).length / stats.n;
 }
+// Kleur o.b.v. overschrijdingskans: 0-25% groen, 25-50% geel, 50-75% oranje, 75-100% rood
+function _klimExColor(ex) {
+  if (ex == null) return null;
+  if (ex < 0.25) return '#22c55e';
+  if (ex < 0.50) return '#eab308';
+  if (ex < 0.75) return '#f97316';
+  return '#ef4444';
+}
 function _klimFmtDir(d) {
   if (d == null) return '–';
   const dirs = ['N','NO','O','ZO','Z','ZW','W','NW'];
   return dirs[Math.round(((d % 360) + 360) % 360 / 45) % 8];
 }
 function _klimGrid(v) { return Math.round(v / 0.25) * 0.25; }
+function _klimFmtEta(stop) {
+  return `${String(stop.day).padStart(2,'0')}/${String(stop.month).padStart(2,'0')} ${String(stop.hour).padStart(2,'0')}:00`;
+}
 
 // Globale fetch-throttle (voorkomt 429 rate-limits bij bursts) + retry op 429
 let _klimInFlight = 0;
@@ -3003,13 +3000,14 @@ async function _klimFetchUrl(url) {
   return null;
 }
 
-function _klimFetchYear(kind, lat, lon, year, month) {
-  const key = `${kind}|${_klimGrid(lat).toFixed(2)}|${_klimGrid(lon).toFixed(2)}|${year}|${month}`;
+// Haalt een venster van ±_KLIM_WINDOW_DAYS dagen rond (year, month, day) op
+function _klimFetchWindow(kind, lat, lon, year, month, day) {
+  const key = `${kind}|${_klimGrid(lat).toFixed(2)}|${_klimGrid(lon).toFixed(2)}|${year}|${month}-${day}`;
   if (_klimCache.has(key)) return _klimCache.get(key);
-  const mm = String(month).padStart(2, '0');
-  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const start = `${year}-${mm}-01`;
-  const end = `${year}-${mm}-${String(last).padStart(2, '0')}`;
+  const fmt = d => `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+  const center = Date.UTC(year, month - 1, day);
+  const start = fmt(new Date(center - _KLIM_WINDOW_DAYS * 86400000));
+  const end   = fmt(new Date(center + _KLIM_WINDOW_DAYS * 86400000));
   let url;
   if (kind === 'wind') {
     url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}` +
@@ -3034,8 +3032,8 @@ async function _klimRunPool(taskFns, limit) {
 async function _fetchKlimaat() {
   const pts   = _routeAllPoints();
   _klimSpeed  = parseFloat(document.getElementById('route-speed').value);
-  _klimMonth  = parseInt(document.getElementById('klim-month').value);
-  _klimDepHour = parseInt(document.getElementById('klim-hour').value);
+  const depVal = document.getElementById('klim-departure').value;
+  _klimDep = depVal ? new Date(depVal + ':00Z') : new Date();
   const nYears = parseInt(document.getElementById('klim-years').value);
   const endYear = new Date().getUTCFullYear() - 1;
   const years = [];
@@ -3073,19 +3071,21 @@ async function _fetchKlimaat() {
       const lon = pts[seg-1].lon + frac * (pts[seg].lon - pts[seg-1].lon);
       const d = segStartD + frac * segDist;
       const offsetH = d / _klimSpeed;
-      const hour = ((Math.round(_klimDepHour + offsetH)) % 24 + 24) % 24;
+      const eta = new Date(_klimDep.getTime() + offsetH * 3600000);
+      const hour = eta.getUTCHours();
       if (stops.length === 0 || Math.abs(d - stops[stops.length-1].distNm) > 0.01)
-        stops.push({ lat, lon, distNm: d, offsetH, hour });
+        stops.push({ lat, lon, distNm: d, offsetH, eta,
+          month: eta.getUTCMonth() + 1, day: eta.getUTCDate(), hour });
     }
   }
   _klimStops = stops; _klimData = new Array(stops.length).fill(null);
 
-  const monthNames = ['','januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
+  const fmtDateUTC = dt => `${String(dt.getUTCDate()).padStart(2,'0')}-${String(dt.getUTCMonth()+1).padStart(2,'0')}-${dt.getUTCFullYear()} ${String(dt.getUTCHours()).padStart(2,'0')}:00`;
   const summaryEl = document.getElementById('klim-fc-summary');
   summaryEl.innerHTML =
-    `Maand: <b>${monthNames[_klimMonth]}</b> · vertrek ${String(_klimDepHour).padStart(2,'0')}:00 UTC<br>` +
+    `Vertrek: <b>${fmtDateUTC(_klimDep)} UTC</b> (jaar genegeerd)<br>` +
     `${totalNm.toFixed(1)} nm · ~${totalHours.toFixed(1)} u · ${stops.length} stops (3-uurs)<br>` +
-    `Klimatologie o.b.v. <b>${years[0]}–${years[years.length-1]}</b> (${years.length} jr ERA5)`;
+    `Klimatologie o.b.v. <b>${years[0]}–${years[years.length-1]}</b> (${years.length} jr ERA5, ±${_KLIM_WINDOW_DAYS} dagen)`;
 
   const cardWrap = document.getElementById('klim-fc-card-wrap');
   cardWrap.innerHTML = `<div class="route-fc-loading">Klimaatdata ophalen… (0/${stops.length})</div>`;
@@ -3093,8 +3093,8 @@ async function _fetchKlimaat() {
   let done = 0;
   const taskFns = stops.map((stop, si) => async () => {
     const [windYears, waveYears] = await Promise.all([
-      Promise.all(years.map(y => _klimFetchYear('wind', stop.lat, stop.lon, y, _klimMonth))),
-      Promise.all(years.map(y => _klimFetchYear('wave', stop.lat, stop.lon, y, _klimMonth))),
+      Promise.all(years.map(y => _klimFetchWindow('wind', stop.lat, stop.lon, y, stop.month, stop.day))),
+      Promise.all(years.map(y => _klimFetchWindow('wave', stop.lat, stop.lon, y, stop.month, stop.day))),
     ]);
     const windVals = [], windDirs = [], waveVals = [], waveDirs = [], wavePers = [];
     windYears.forEach(obj => {
@@ -3130,9 +3130,11 @@ async function _fetchKlimaat() {
 
   const slider = document.getElementById('klim-fc-slider');
   slider.max = stops.length - 1; slider.value = 0;
-  document.getElementById('klim-fc-slider-dep').textContent = String(_klimDepHour).padStart(2,'0') + ':00 UTC';
-  const arrH = ((Math.round(_klimDepHour + totalHours)) % 24 + 24) % 24;
-  document.getElementById('klim-fc-slider-eta').textContent = `+${totalHours.toFixed(1)}u (${String(arrH).padStart(2,'0')}:00)`;
+  const arr = new Date(_klimDep.getTime() + totalHours * 3600000);
+  document.getElementById('klim-fc-slider-dep').textContent =
+    `${String(_klimDep.getUTCDate()).padStart(2,'0')}-${String(_klimDep.getUTCMonth()+1).padStart(2,'0')} ${String(_klimDep.getUTCHours()).padStart(2,'0')}:00`;
+  document.getElementById('klim-fc-slider-eta').textContent =
+    `${String(arr.getUTCDate()).padStart(2,'0')}-${String(arr.getUTCMonth()+1).padStart(2,'0')} ${String(arr.getUTCHours()).padStart(2,'0')}:00`;
   document.getElementById('klim-fc-slider-wrap').style.display = '';
   document.getElementById('klim-fc-view-toggle').style.display = '';
   klimSliderMove(0);
@@ -3140,14 +3142,12 @@ async function _fetchKlimaat() {
 
 function _klimAlertColor(data, limitWind, limitWave) {
   if (!data) return '#475569';
-  const w = data.wind, h = data.wave;
-  const windMed = limitWind && w && w.p50 > limitWind;
-  const waveMed = limitWave && h && h.p50 > limitWave;
-  const windWarn = limitWind && w && w.p90 > limitWind;
-  const waveWarn = limitWave && h && h.p90 > limitWave;
-  if (windMed || waveMed) return '#ef4444';
-  if (windWarn || waveWarn) return '#f97316';
-  return '#22c55e';
+  const exs = [];
+  if (limitWind && data.wind) exs.push(_klimExceed(data.wind, limitWind));
+  if (limitWave && data.wave) exs.push(_klimExceed(data.wave, limitWave));
+  const valid = exs.filter(e => e != null);
+  if (!valid.length) return '#22c55e';
+  return _klimExColor(Math.max(...valid));
 }
 
 function _updateKlimColors() {
@@ -3177,7 +3177,7 @@ function klimSliderMove(idx) {
   }).addTo(_routeMap);
 
   document.getElementById('klim-fc-slider-time').textContent =
-    `${String(stop.hour).padStart(2,'0')}:00 UTC  ·  +${stop.offsetH.toFixed(1)} u`;
+    `${_klimFmtEta(stop)} UTC  ·  +${stop.offsetH.toFixed(1)} u`;
   document.getElementById('klim-fc-slider-pos').textContent =
     `${stop.lat.toFixed(3)}, ${stop.lon.toFixed(3)}  ·  ${stop.distNm.toFixed(1)} nm`;
 
@@ -3205,7 +3205,7 @@ function klimSliderMove(idx) {
     const ex = _klimExceed(st, limit);
     const cell = (lbl, val) => `<div style="text-align:center;"><div style="font-size:1.02rem;font-weight:700;line-height:1;color:#e2e8f0;">${val != null ? val.toFixed(dec) : '–'}</div><div style="font-size:0.56rem;color:var(--text-muted);margin-top:3px;text-transform:uppercase;letter-spacing:0.04em;">${lbl}</div></div>`;
     const exHtml = limit != null
-      ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:0.72rem;"><span style="color:var(--text-muted);">Overschrijdingskans (> ${limit} ${unit})</span><span style="font-weight:700;color:${ex>0.5?'#ef4444':ex>0.1?'#f97316':'#22c55e'};">${(ex*100).toFixed(0)}%</span></div>`
+      ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:0.72rem;"><span style="color:var(--text-muted);">Overschrijdingskans (> ${limit} ${unit})</span><span style="font-weight:700;color:${_klimExColor(ex)};">${(ex*100).toFixed(0)}%</span></div>`
       : '';
     return `<div style="background:var(--surface-2);padding:12px 14px;">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
@@ -3280,7 +3280,7 @@ function _updateKlimChart(idx) {
           backgroundColor: 'rgba(13,22,37,0.95)', titleColor: '#94a3b8', bodyColor: '#e2e8f0', borderColor: '#1c2e45', borderWidth: 1,
           filter: it => it.dataset.label && it.dataset.label[0] !== '_',
           callbacks: {
-            title: items => { const s = _klimStops[items[0]?.dataIndex]; return s ? `${s.distNm.toFixed(0)} nm · ${String(s.hour).padStart(2,'0')}:00 UTC` : ''; },
+            title: items => { const s = _klimStops[items[0]?.dataIndex]; return s ? `${s.distNm.toFixed(0)} nm · ${_klimFmtEta(s)} UTC` : ''; },
             label: item => ` ${item.dataset.label}: ${item.raw != null ? Number(item.raw).toFixed(1) : '–'}`,
           } },
       },
@@ -3316,7 +3316,7 @@ function _updateKlimTable() {
   const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
   const fmtV = (v, dec=1) => v != null ? Number(v).toFixed(dec) : '–';
   const exFmt = ex => ex == null ? '–' : (ex*100).toFixed(0) + '%';
-  const exCls = ex => ex == null ? '' : ex > 0.5 ? 'fc-tbl-bad' : ex > 0.1 ? 'fc-tbl-warn' : 'fc-tbl-ok';
+  const exStyle = ex => { const c = _klimExColor(ex); return c ? `color:${c};font-weight:700;` : ''; };
 
   document.getElementById('klim-fc-table-head').innerHTML =
     `<th>Nm</th><th>Tijd</th>` +
@@ -3330,9 +3330,9 @@ function _updateKlimTable() {
     const rowBg = i % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
     return `<tr style="${rowBg}">
       <td>${stop.distNm.toFixed(0)}</td>
-      <td style="font-weight:600;color:#cbd5e1">${String(stop.hour).padStart(2,'0')}:00</td>
-      <td>${w?fmtV(w.mean,0):'–'}</td><td>${w?fmtV(w.p10,0):'–'}</td><td>${w?fmtV(w.p50,0):'–'}</td><td>${w?fmtV(w.p90,0):'–'}</td><td>${w?fmtV(w.max,0):'–'}</td><td class="${exCls(wEx)}">${exFmt(wEx)}</td><td>${_klimFmtDir(d&&d.windDir)}</td>
-      <td>${h?fmtV(h.mean):'–'}</td><td>${h?fmtV(h.p10):'–'}</td><td>${h?fmtV(h.p50):'–'}</td><td>${h?fmtV(h.p90):'–'}</td><td>${h?fmtV(h.max):'–'}</td><td class="${exCls(hEx)}">${exFmt(hEx)}</td><td>${_klimFmtDir(d&&d.waveDir)}</td>
+      <td style="font-weight:600;color:#cbd5e1">${_klimFmtEta(stop)}</td>
+      <td>${w?fmtV(w.mean,0):'–'}</td><td>${w?fmtV(w.p10,0):'–'}</td><td>${w?fmtV(w.p50,0):'–'}</td><td>${w?fmtV(w.p90,0):'–'}</td><td>${w?fmtV(w.max,0):'–'}</td><td style="${exStyle(wEx)}">${exFmt(wEx)}</td><td>${_klimFmtDir(d&&d.windDir)}</td>
+      <td>${h?fmtV(h.mean):'–'}</td><td>${h?fmtV(h.p10):'–'}</td><td>${h?fmtV(h.p50):'–'}</td><td>${h?fmtV(h.p90):'–'}</td><td>${h?fmtV(h.max):'–'}</td><td style="${exStyle(hEx)}">${exFmt(hEx)}</td><td>${_klimFmtDir(d&&d.waveDir)}</td>
     </tr>`;
   }).join('');
 }
