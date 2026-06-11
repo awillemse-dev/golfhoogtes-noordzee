@@ -520,6 +520,23 @@
     #route-fc-table .fc-tbl-ok   { color:#22c55e; font-weight:600; }
     #route-fc-table .fc-tbl-warn { color:#f97316; font-weight:600; }
     #route-fc-table .fc-tbl-bad  { color:#ef4444; font-weight:700; }
+    /* Klimaat tabel weergave */
+    #klim-fc-table-wrap { flex:1 1 0; min-height:0; overflow:auto; }
+    #klim-fc-table { width:100%; border-collapse:collapse; font-size:0.7rem; }
+    #klim-fc-table thead th {
+      position:sticky; top:0; background:var(--surface-2); color:var(--text-muted);
+      font-size:0.58rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;
+      padding:6px 7px; text-align:center; border-bottom:1px solid var(--border); z-index:1; white-space:nowrap;
+    }
+    #klim-fc-table td {
+      padding:4px 7px; text-align:center; border-bottom:1px solid rgba(28,46,69,0.5);
+      white-space:nowrap; color:#cbd5e1;
+    }
+    #klim-fc-table td:first-child { text-align:left; color:var(--text-muted); font-size:0.64rem; }
+    #klim-fc-table tr:hover td { background:rgba(6,182,212,0.06); }
+    #klim-fc-table .fc-tbl-ok   { color:#22c55e; font-weight:600; }
+    #klim-fc-table .fc-tbl-warn { color:#f97316; font-weight:600; }
+    #klim-fc-table .fc-tbl-bad  { color:#ef4444; font-weight:700; }
     #route-click-hint {
       font-size: 0.72rem;
       color: var(--text-muted);
@@ -876,6 +893,14 @@
       </svg>
       <span class="tab-label">Route Fore&shy;cast</span>
     </div>
+    <div class="sidebar-tab" id="tab-klimaat" onclick="selectSection('klimaat')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2v2m0 16v2m10-10h-2M4 12H2m15.07-5.07-1.41 1.41M8.34 15.66l-1.41 1.41m0-10.14 1.41 1.41m7.32 7.32 1.41 1.41"/>
+        <circle cx="12" cy="12" r="4"/>
+      </svg>
+      <span class="tab-label">Route Kli&shy;maat</span>
+    </div>
   </div>
 
   <!-- ── Kaartgebied ────────────────────────────────────────────────────── -->
@@ -903,7 +928,7 @@
 
       <!-- Invoerpaneel -->
       <div id="route-sidebar">
-        <h3>Route Forecast</h3>
+        <h3 id="route-sidebar-title">Route Forecast</h3>
 
         <div class="route-section">
           <label>Vertrekhaven</label>
@@ -933,10 +958,36 @@
           </div>
         </div>
 
-        <div class="route-section">
+        <div class="route-section" id="route-departure-section">
           <label>Vertrekdatum &amp; -tijd (UTC)</label>
           <div class="route-input-row">
             <input id="route-departure" type="datetime-local" style="flex:1">
+          </div>
+        </div>
+
+        <div class="route-section" id="route-klimaat-section" style="display:none">
+          <label>Vertrekmaand &amp; -tijd (UTC)</label>
+          <div class="route-input-row" style="gap:8px;">
+            <select id="klim-month" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;">
+              <option value="1">Januari</option><option value="2">Februari</option>
+              <option value="3">Maart</option><option value="4">April</option>
+              <option value="5">Mei</option><option value="6">Juni</option>
+              <option value="7">Juli</option><option value="8">Augustus</option>
+              <option value="9">September</option><option value="10">Oktober</option>
+              <option value="11">November</option><option value="12">December</option>
+            </select>
+            <select id="klim-hour" style="width:90px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;"></select>
+          </div>
+          <div class="route-coord-hint">Klimatologie per stop in 3-uurs stappen langs de route.</div>
+          <label style="margin-top:12px;">Aantal jaren historie</label>
+          <div class="route-input-row" style="gap:8px;align-items:center;">
+            <select id="klim-years" style="width:110px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;">
+              <option value="5">5 jaar</option>
+              <option value="10" selected>10 jaar</option>
+              <option value="15">15 jaar</option>
+              <option value="20">20 jaar</option>
+            </select>
+            <span style="color:var(--text-muted);font-size:0.72rem">ERA5 reanalyse</span>
           </div>
         </div>
 
@@ -953,13 +1004,13 @@
             <div>
               <div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:4px;">Max wind (kt)</div>
               <input id="route-limit-wind" type="number" placeholder="bijv. 20" min="1" max="100" step="1"
-                oninput="if(_routeFcStops.length){routeSliderMove(document.getElementById('route-fc-slider').value);}"
+                oninput="_onLimitChange()"
                 style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;box-sizing:border-box;">
             </div>
             <div>
               <div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:4px;">Max golf (m)</div>
               <input id="route-limit-wave" type="number" placeholder="bijv. 1.5" min="0.1" max="20" step="0.1"
-                oninput="if(_routeFcStops.length){routeSliderMove(document.getElementById('route-fc-slider').value);}"
+                oninput="_onLimitChange()"
                 style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;box-sizing:border-box;">
             </div>
           </div>
@@ -1030,12 +1081,65 @@
         </div>
       </div>
 
+      <!-- Klimaat paneel (naast kaart, vervangt sidebar) -->
+      <div id="klimaat-forecast-panel" style="display:none;width:640px;flex-shrink:0;background:var(--surface);border-left:1px solid var(--border);flex-direction:column;overflow:hidden;">
+        <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;">
+          <button onclick="klimHide()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:0.8rem;padding:0;line-height:1">← Sluiten</button>
+          <span style="font-size:0.82rem;font-weight:700;color:var(--text-dim);flex:1">Klimatologie</span>
+          <button id="klim-fc-view-toggle" onclick="klimToggleView()" style="display:none;background:none;border:1px solid var(--border);border-radius:5px;color:var(--text-muted);cursor:pointer;font-size:0.72rem;padding:3px 8px;margin-right:4px;">Tabel</button>
+          <button onclick="routeEdit()" style="background:none;border:1px solid var(--border);border-radius:5px;color:var(--text-muted);cursor:pointer;font-size:0.72rem;padding:3px 8px;">Bewerken</button>
+        </div>
+        <div id="klim-fc-summary" style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:0.78rem;color:var(--text-muted);line-height:1.8;flex-shrink:0;"></div>
+
+        <!-- Slider sectie -->
+        <div id="klim-fc-slider-wrap" style="display:none;padding:14px 16px;border-bottom:1px solid var(--border);flex-shrink:0;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
+            <span id="klim-fc-slider-time" style="font-size:0.85rem;font-weight:700;color:#e2e8f0;letter-spacing:0.02em;">–</span>
+            <span id="klim-fc-slider-pos"  style="font-size:0.72rem;color:var(--text-muted);">–</span>
+          </div>
+          <input id="klim-fc-slider" type="range" min="0" max="100" value="0" step="1"
+            style="width:100%;accent-color:#06b6d4;cursor:pointer;" oninput="klimSliderMove(this.value)">
+          <div style="display:flex;justify-content:space-between;font-size:0.68rem;color:var(--text-muted);margin-top:5px;">
+            <span id="klim-fc-slider-dep">Vertrek</span>
+            <span id="klim-fc-slider-eta">Aankomst</span>
+          </div>
+          <div id="klim-fc-alert" style="display:none;margin-top:10px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.5);border-radius:7px;padding:8px 12px;font-size:0.75rem;color:#fca5a5;line-height:1.5;"></div>
+        </div>
+
+        <!-- Statistiekkaart voor huidig slider moment -->
+        <div id="klim-fc-card-wrap" style="flex:0 0 auto;overflow-y:auto;padding:12px 0 0;max-height:320px;">
+          <div id="klim-fc-loading" class="route-fc-loading">Klimaatdata ophalen…</div>
+        </div>
+
+        <!-- Wind + golf grafiek over volledige route -->
+        <div id="klim-fc-chart-wrap" style="display:none;flex:1 1 0;min-height:120px;padding:8px 10px 6px;border-top:1px solid var(--border);">
+          <canvas id="klim-fc-chart"></canvas>
+        </div>
+
+        <!-- Tabel weergave (toggle) -->
+        <div id="klim-fc-table-wrap" style="display:none;">
+          <table id="klim-fc-table">
+            <thead>
+              <tr id="klim-fc-table-head"></tr>
+            </thead>
+            <tbody id="klim-fc-table-body"></tbody>
+          </table>
+        </div>
+
+        <div style="padding:8px 10px 10px;flex-shrink:0;display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:0.62rem;color:var(--text-muted);line-height:1.4;text-align:center;">
+            Open-Meteo Archive (ERA5) · klimatologische statistiek, geen verwachting
+          </div>
+        </div>
+      </div>
+
       <!-- Opgeslagen route overlay (compact, op kaart) -->
       <div id="route-saved-overlay" style="display:none; position:absolute; top:12px; right:12px; z-index:1000; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 14px; min-width:200px; max-width:260px;">
         <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Route opgeslagen</div>
         <div id="route-saved-info" style="font-size:0.78rem;color:#e2e8f0;line-height:1.7;margin-bottom:10px;"></div>
         <div style="display:flex;flex-direction:column;gap:6px;">
-          <button onclick="routeShowForecast()" style="background:#1d4ed8;color:white;border:none;border-radius:6px;font-size:0.75rem;font-weight:600;padding:7px;cursor:pointer;">Weersvoorspelling tonen</button>
+          <button id="route-show-fc-btn" onclick="routeShowForecast()" style="background:#1d4ed8;color:white;border:none;border-radius:6px;font-size:0.75rem;font-weight:600;padding:7px;cursor:pointer;">Weersvoorspelling tonen</button>
+          <button id="route-show-klim-btn" onclick="routeShowKlimaat()" style="display:none;background:#0e7490;color:white;border:none;border-radius:6px;font-size:0.75rem;font-weight:600;padding:7px;cursor:pointer;">Klimatologie tonen</button>
           <button onclick="routeEdit()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-muted);font-size:0.75rem;padding:7px;cursor:pointer;">Route bewerken</button>
         </div>
       </div>
@@ -2130,7 +2234,7 @@ function selectSection(section) {
     const layer = _lastWaarLayer;
     activeLayer = '';
     selectLayer(layer);
-  } else if (section === 'route') {
+  } else if (section === 'route' || section === 'klimaat') {
     if (activeLayer) _lastWaarLayer = activeLayer;
     nav.style.display        = 'none';
     nlNav.style.display      = 'none';
@@ -2143,6 +2247,7 @@ function selectSection(section) {
     stopRadar();
     clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem(); stopStormen();
     activeLayer = '';
+    _setRouteMode(section === 'klimaat' ? 'klimaat' : 'forecast');
     setTimeout(() => _ensureRouteMap(), 50);
   } else {
     nav.style.display        = 'none';
@@ -2754,6 +2859,10 @@ function routeSave() {
     `<b>Afstand:</b> ${totalNm.toFixed(1)} nm<br>` +
     `<b>Snelheid:</b> ${speed} kt · ~${(totalNm/speed).toFixed(1)} u`;
 
+  const isKlim = _routeMode === 'klimaat';
+  document.getElementById('route-show-fc-btn').style.display   = isKlim ? 'none' : '';
+  document.getElementById('route-show-klim-btn').style.display = isKlim ? '' : 'none';
+
   document.getElementById('route-sidebar').style.display = 'none';
   document.getElementById('route-saved-overlay').style.display = '';
   setTimeout(() => _routeMap.invalidateSize(), 50);
@@ -2762,6 +2871,7 @@ function routeSave() {
 function routeEdit() {
   document.getElementById('route-saved-overlay').style.display  = 'none';
   document.getElementById('route-forecast-panel').style.display = 'none';
+  document.getElementById('klimaat-forecast-panel').style.display = 'none';
   document.getElementById('route-sidebar').style.display = '';
   setTimeout(() => _routeMap.invalidateSize(), 50);
 }
@@ -2770,6 +2880,461 @@ function routeHideForecast() {
   document.getElementById('route-forecast-panel').style.display = 'none';
   document.getElementById('route-saved-overlay').style.display  = '';
   setTimeout(() => _routeMap.invalidateSize(), 50);
+}
+
+// ── Route Klimaat (klimatologie i.p.v. verwachting) ──────────────────────────
+let _routeMode    = 'forecast';      // 'forecast' | 'klimaat'
+let _klimStops    = [];              // { lat, lon, distNm, offsetH, hour }
+let _klimData     = [];              // { wind:stats, windDir, wave:stats, waveDir, wavePer:stats }
+let _klimSlider   = null;            // marker op kaart
+let _klimChart    = null;
+let _klimLines    = [];              // gekleurde segmenten op kaart
+let _klimViewMode = 'chart';
+let _klimSpeed    = 0;
+let _klimMonth    = 1;
+let _klimDepHour  = 6;
+const _klimCache  = new Map();
+let _klimHourInit = false;
+
+function _ensureKlimHourOptions() {
+  if (_klimHourInit) return; _klimHourInit = true;
+  const sel = document.getElementById('klim-hour'); if (!sel) return;
+  for (let h = 0; h < 24; h += 3) {
+    const o = document.createElement('option');
+    o.value = h; o.textContent = String(h).padStart(2, '0') + ':00';
+    if (h === 6) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+
+function _setRouteMode(mode) {
+  _routeMode = mode;
+  const isK = mode === 'klimaat';
+  document.getElementById('route-departure-section').style.display = isK ? 'none' : '';
+  document.getElementById('route-klimaat-section').style.display   = isK ? '' : 'none';
+  document.getElementById('route-sidebar-title').textContent = isK ? 'Route Klimaat' : 'Route Forecast';
+  document.getElementById('route-save-btn').innerHTML = isK
+    ? 'Route opslaan &amp; klimatologie berekenen'
+    : 'Route opslaan &amp; voorspelling berekenen';
+  _ensureKlimHourOptions();
+  document.getElementById('route-forecast-panel').style.display   = 'none';
+  document.getElementById('klimaat-forecast-panel').style.display = 'none';
+  document.getElementById('route-saved-overlay').style.display    = 'none';
+  document.getElementById('route-sidebar').style.display = '';
+  if (_routeMap) {
+    if (_routeFcSlider) { _routeMap.removeLayer(_routeFcSlider); _routeFcSlider = null; }
+    _routeFcLines.forEach(l => _routeMap.removeLayer(l)); _routeFcLines = [];
+    if (_klimSlider) { _routeMap.removeLayer(_klimSlider); _klimSlider = null; }
+    _klimLines.forEach(l => _routeMap.removeLayer(l)); _klimLines = [];
+  }
+}
+
+function routeShowKlimaat() {
+  document.getElementById('klimaat-forecast-panel').style.display = 'flex';
+  document.getElementById('route-saved-overlay').style.display = 'none';
+  setTimeout(() => _routeMap.invalidateSize(), 50);
+  _fetchKlimaat();
+}
+
+function klimHide() {
+  document.getElementById('klimaat-forecast-panel').style.display = 'none';
+  document.getElementById('route-saved-overlay').style.display = '';
+  setTimeout(() => _routeMap.invalidateSize(), 50);
+}
+
+function _onLimitChange() {
+  if (_routeMode === 'klimaat') {
+    if (_klimStops.length) klimSliderMove(document.getElementById('klim-fc-slider').value);
+  } else {
+    if (_routeFcStops.length) routeSliderMove(document.getElementById('route-fc-slider').value);
+  }
+}
+
+// Statistiek-helpers
+function _pct(sorted, p) {
+  if (!sorted.length) return null;
+  const idx = (sorted.length - 1) * p, lo = Math.floor(idx), hi = Math.ceil(idx);
+  return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}
+function _klimStats(arr) {
+  const v = arr.filter(x => x != null && !isNaN(x)).sort((a, b) => a - b);
+  if (!v.length) return null;
+  const mean = v.reduce((a, b) => a + b, 0) / v.length;
+  return { n: v.length, mean, min: v[0], max: v[v.length - 1],
+    p10: _pct(v, .1), p25: _pct(v, .25), p50: _pct(v, .5), p75: _pct(v, .75), p90: _pct(v, .9), raw: v };
+}
+function _circMean(arr) {
+  const v = arr.filter(x => x != null && !isNaN(x));
+  if (!v.length) return null;
+  let sx = 0, sy = 0;
+  v.forEach(d => { const r = d * Math.PI / 180; sx += Math.cos(r); sy += Math.sin(r); });
+  return (Math.atan2(sy, sx) * 180 / Math.PI + 360) % 360;
+}
+function _klimExceed(stats, limit) {
+  if (!stats || !limit) return null;
+  return stats.raw.filter(x => x > limit).length / stats.n;
+}
+function _klimFmtDir(d) {
+  if (d == null) return '–';
+  const dirs = ['N','NO','O','ZO','Z','ZW','W','NW'];
+  return dirs[Math.round(((d % 360) + 360) % 360 / 45) % 8];
+}
+function _klimGrid(v) { return Math.round(v / 0.25) * 0.25; }
+
+// Globale fetch-throttle (voorkomt 429 rate-limits bij bursts) + retry op 429
+let _klimInFlight = 0;
+const _klimQueue = [];
+const _KLIM_MAX = 5;
+function _klimThrottle(fn) {
+  return new Promise(resolve => {
+    const run = () => { _klimInFlight++; fn().then(resolve).finally(() => { _klimInFlight--; if (_klimQueue.length) _klimQueue.shift()(); }); };
+    if (_klimInFlight < _KLIM_MAX) run(); else _klimQueue.push(run);
+  });
+}
+async function _klimFetchUrl(url) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) return await r.json();
+      if (r.status === 429) { await new Promise(s => setTimeout(s, 500 * (attempt + 1))); continue; }
+      return null;
+    } catch { await new Promise(s => setTimeout(s, 350)); }
+  }
+  return null;
+}
+
+function _klimFetchYear(kind, lat, lon, year, month) {
+  const key = `${kind}|${_klimGrid(lat).toFixed(2)}|${_klimGrid(lon).toFixed(2)}|${year}|${month}`;
+  if (_klimCache.has(key)) return _klimCache.get(key);
+  const mm = String(month).padStart(2, '0');
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const start = `${year}-${mm}-01`;
+  const end = `${year}-${mm}-${String(last).padStart(2, '0')}`;
+  let url;
+  if (kind === 'wind') {
+    url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}` +
+      `&hourly=wind_speed_10m,wind_direction_10m&wind_speed_unit=kn&timeformat=unixtime&timezone=UTC` +
+      `&start_date=${start}&end_date=${end}`;
+  } else {
+    url = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}` +
+      `&hourly=wave_height,wave_direction,wave_period&timeformat=unixtime&timezone=UTC` +
+      `&start_date=${start}&end_date=${end}`;
+  }
+  const p = _klimThrottle(() => _klimFetchUrl(url));
+  _klimCache.set(key, p);
+  return p;
+}
+
+async function _klimRunPool(taskFns, limit) {
+  let i = 0;
+  async function worker() { while (i < taskFns.length) { const idx = i++; await taskFns[idx](); } }
+  await Promise.all(Array.from({ length: Math.min(limit, taskFns.length) }, worker));
+}
+
+async function _fetchKlimaat() {
+  const pts   = _routeAllPoints();
+  _klimSpeed  = parseFloat(document.getElementById('route-speed').value);
+  _klimMonth  = parseInt(document.getElementById('klim-month').value);
+  _klimDepHour = parseInt(document.getElementById('klim-hour').value);
+  const nYears = parseInt(document.getElementById('klim-years').value);
+  const endYear = new Date().getUTCFullYear() - 1;
+  const years = [];
+  for (let y = endYear - nYears + 1; y <= endYear; y++) years.push(y);
+
+  // reset
+  if (_klimChart) { _klimChart.destroy(); _klimChart = null; }
+  _klimLines.forEach(l => _routeMap.removeLayer(l)); _klimLines = [];
+  if (_klimSlider) { _routeMap.removeLayer(_klimSlider); _klimSlider = null; }
+  document.getElementById('klim-fc-chart-wrap').style.display = 'none';
+  document.getElementById('klim-fc-table-wrap').style.display = 'none';
+  document.getElementById('klim-fc-view-toggle').style.display = 'none';
+  document.getElementById('klim-fc-view-toggle').textContent = 'Tabel';
+  _klimViewMode = 'chart';
+  document.getElementById('klim-fc-slider-wrap').style.display = 'none';
+  document.getElementById('klim-fc-card-wrap').style.display = '';
+
+  let totalNm = 0;
+  for (let i = 1; i < pts.length; i++)
+    totalNm += _routeDistNm(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
+  const totalHours = totalNm / _klimSpeed;
+
+  // 3-uurs stops
+  const stepH = 3;
+  const stops = [];
+  let distAccum = 0;
+  for (let seg = 1; seg < pts.length; seg++) {
+    const segDist = _routeDistNm(pts[seg-1].lat, pts[seg-1].lon, pts[seg].lat, pts[seg].lon);
+    const segStartD = distAccum; distAccum += segDist;
+    const startH = segStartD / _klimSpeed, endH = distAccum / _klimSpeed;
+    const nSteps = Math.max(1, Math.ceil((endH - startH) / stepH));
+    for (let s = (seg === 1 ? 0 : 1); s <= nSteps; s++) {
+      const frac = s / nSteps;
+      const lat = pts[seg-1].lat + frac * (pts[seg].lat - pts[seg-1].lat);
+      const lon = pts[seg-1].lon + frac * (pts[seg].lon - pts[seg-1].lon);
+      const d = segStartD + frac * segDist;
+      const offsetH = d / _klimSpeed;
+      const hour = ((Math.round(_klimDepHour + offsetH)) % 24 + 24) % 24;
+      if (stops.length === 0 || Math.abs(d - stops[stops.length-1].distNm) > 0.01)
+        stops.push({ lat, lon, distNm: d, offsetH, hour });
+    }
+  }
+  _klimStops = stops; _klimData = new Array(stops.length).fill(null);
+
+  const monthNames = ['','januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
+  const summaryEl = document.getElementById('klim-fc-summary');
+  summaryEl.innerHTML =
+    `Maand: <b>${monthNames[_klimMonth]}</b> · vertrek ${String(_klimDepHour).padStart(2,'0')}:00 UTC<br>` +
+    `${totalNm.toFixed(1)} nm · ~${totalHours.toFixed(1)} u · ${stops.length} stops (3-uurs)<br>` +
+    `Klimatologie o.b.v. <b>${years[0]}–${years[years.length-1]}</b> (${years.length} jr ERA5)`;
+
+  const cardWrap = document.getElementById('klim-fc-card-wrap');
+  cardWrap.innerHTML = `<div class="route-fc-loading">Klimaatdata ophalen… (0/${stops.length})</div>`;
+
+  let done = 0;
+  const taskFns = stops.map((stop, si) => async () => {
+    const [windYears, waveYears] = await Promise.all([
+      Promise.all(years.map(y => _klimFetchYear('wind', stop.lat, stop.lon, y, _klimMonth))),
+      Promise.all(years.map(y => _klimFetchYear('wave', stop.lat, stop.lon, y, _klimMonth))),
+    ]);
+    const windVals = [], windDirs = [], waveVals = [], waveDirs = [], wavePers = [];
+    windYears.forEach(obj => {
+      if (!obj || !obj.hourly) return;
+      const t = obj.hourly.time || [], ws = obj.hourly.wind_speed_10m || [], wd = obj.hourly.wind_direction_10m || [];
+      t.forEach((ts, i) => { if (new Date(ts*1000).getUTCHours() === stop.hour) {
+        if (ws[i] != null) windVals.push(ws[i]); if (wd[i] != null) windDirs.push(wd[i]); } });
+    });
+    waveYears.forEach(obj => {
+      if (!obj || !obj.hourly) return;
+      const t = obj.hourly.time || [], wh = obj.hourly.wave_height || [], wdd = obj.hourly.wave_direction || [], wp = obj.hourly.wave_period || [];
+      t.forEach((ts, i) => { if (new Date(ts*1000).getUTCHours() === stop.hour) {
+        if (wh[i] != null) waveVals.push(wh[i]); if (wdd[i] != null) waveDirs.push(wdd[i]); if (wp[i] != null) wavePers.push(wp[i]); } });
+    });
+    _klimData[si] = {
+      wind: _klimStats(windVals), windDir: _circMean(windDirs),
+      wave: _klimStats(waveVals), waveDir: _circMean(waveDirs), wavePer: _klimStats(wavePers),
+    };
+    done++;
+    const ld = cardWrap.querySelector('.route-fc-loading');
+    if (ld) ld.textContent = `Klimaatdata ophalen… (${done}/${stops.length})`;
+  });
+
+  try {
+    await _klimRunPool(taskFns, 4);
+  } catch (e) {
+    cardWrap.innerHTML = `<div class="route-fc-loading" style="color:#ef4444">Fout: ${e.message}</div>`;
+    return;
+  }
+
+  if (!_klimData.some(d => d && d.wave))
+    summaryEl.innerHTML += `<br><span style="color:#fbbf24">⚠ Geen golfklimatologie beschikbaar voor deze route/periode.</span>`;
+
+  const slider = document.getElementById('klim-fc-slider');
+  slider.max = stops.length - 1; slider.value = 0;
+  document.getElementById('klim-fc-slider-dep').textContent = String(_klimDepHour).padStart(2,'0') + ':00 UTC';
+  const arrH = ((Math.round(_klimDepHour + totalHours)) % 24 + 24) % 24;
+  document.getElementById('klim-fc-slider-eta').textContent = `+${totalHours.toFixed(1)}u (${String(arrH).padStart(2,'0')}:00)`;
+  document.getElementById('klim-fc-slider-wrap').style.display = '';
+  document.getElementById('klim-fc-view-toggle').style.display = '';
+  klimSliderMove(0);
+}
+
+function _klimAlertColor(data, limitWind, limitWave) {
+  if (!data) return '#475569';
+  const w = data.wind, h = data.wave;
+  const windMed = limitWind && w && w.p50 > limitWind;
+  const waveMed = limitWave && h && h.p50 > limitWave;
+  const windWarn = limitWind && w && w.p90 > limitWind;
+  const waveWarn = limitWave && h && h.p90 > limitWave;
+  if (windMed || waveMed) return '#ef4444';
+  if (windWarn || waveWarn) return '#f97316';
+  return '#22c55e';
+}
+
+function _updateKlimColors() {
+  _klimLines.forEach(l => _routeMap.removeLayer(l)); _klimLines = [];
+  if (!_klimStops.length) return;
+  const limitWind = parseFloat(document.getElementById('route-limit-wind').value) || null;
+  const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
+  for (let i = 0; i < _klimStops.length - 1; i++) {
+    const a = _klimStops[i], b = _klimStops[i + 1];
+    const color = _klimAlertColor(_klimData[i], limitWind, limitWave);
+    _klimLines.push(L.polyline([[a.lat, a.lon], [b.lat, b.lon]], { color, weight: 5, opacity: 0.9 }).addTo(_routeMap));
+  }
+}
+
+function klimSliderMove(idx) {
+  idx = parseInt(idx);
+  if (!_klimStops.length) return;
+  const stop = _klimStops[idx];
+  const data = _klimData[idx];
+  const limitWind = parseFloat(document.getElementById('route-limit-wind').value) || null;
+  const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
+
+  if (_klimSlider) _routeMap.removeLayer(_klimSlider);
+  const color = _klimAlertColor(data, limitWind, limitWave);
+  _klimSlider = L.circleMarker([stop.lat, stop.lon], {
+    radius: 8, color: 'white', weight: 2, fillColor: color, fillOpacity: 1,
+  }).addTo(_routeMap);
+
+  document.getElementById('klim-fc-slider-time').textContent =
+    `${String(stop.hour).padStart(2,'0')}:00 UTC  ·  +${stop.offsetH.toFixed(1)} u`;
+  document.getElementById('klim-fc-slider-pos').textContent =
+    `${stop.lat.toFixed(3)}, ${stop.lon.toFixed(3)}  ·  ${stop.distNm.toFixed(1)} nm`;
+
+  // Alert
+  const alertEl = document.getElementById('klim-fc-alert');
+  const alerts = [];
+  if (data && data.wind && limitWind) {
+    const ex = _klimExceed(data.wind, limitWind);
+    if (data.wind.p50 > limitWind) alerts.push(`Wind mediaan ${data.wind.p50.toFixed(0)} kt > limiet ${limitWind} kt (overschreden in ${(ex*100).toFixed(0)}% van de jaren)`);
+    else if (data.wind.p90 > limitWind) alerts.push(`Wind P90 ${data.wind.p90.toFixed(0)} kt > limiet (${(ex*100).toFixed(0)}% van de tijd boven limiet)`);
+  }
+  if (data && data.wave && limitWave) {
+    const ex = _klimExceed(data.wave, limitWave);
+    if (data.wave.p50 > limitWave) alerts.push(`Golf mediaan ${data.wave.p50.toFixed(1)} m > limiet ${limitWave} m (${(ex*100).toFixed(0)}% van de jaren)`);
+    else if (data.wave.p90 > limitWave) alerts.push(`Golf P90 ${data.wave.p90.toFixed(1)} m > limiet (${(ex*100).toFixed(0)}% van de tijd boven limiet)`);
+  }
+  if (alerts.length) { alertEl.innerHTML = '⚠ ' + alerts.join('<br>⚠ '); alertEl.style.display = ''; }
+  else alertEl.style.display = 'none';
+
+  const cardWrap = document.getElementById('klim-fc-card-wrap');
+  if (!data) { cardWrap.innerHTML = '<div class="route-fc-loading">Data laden…</div>'; return; }
+
+  const block = (title, st, unit, dec, dir, limit, accent) => {
+    if (!st) return `<div style="background:var(--surface-2);padding:12px 14px;"><div style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-muted);margin-bottom:8px;">${title}</div><div style="font-size:0.74rem;color:#fbbf24;">Geen data beschikbaar</div></div>`;
+    const ex = _klimExceed(st, limit);
+    const cell = (lbl, val) => `<div style="text-align:center;"><div style="font-size:1.02rem;font-weight:700;line-height:1;color:#e2e8f0;">${val != null ? val.toFixed(dec) : '–'}</div><div style="font-size:0.56rem;color:var(--text-muted);margin-top:3px;text-transform:uppercase;letter-spacing:0.04em;">${lbl}</div></div>`;
+    const exHtml = limit != null
+      ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:0.72rem;"><span style="color:var(--text-muted);">Overschrijdingskans (> ${limit} ${unit})</span><span style="font-weight:700;color:${ex>0.5?'#ef4444':ex>0.1?'#f97316':'#22c55e'};">${(ex*100).toFixed(0)}%</span></div>`
+      : '';
+    return `<div style="background:var(--surface-2);padding:12px 14px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
+        <span style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:${accent};">${title}</span>
+        <span style="font-size:0.66rem;color:var(--text-muted);">richting ${_klimFmtDir(dir)} · n=${st.n}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;">
+        ${cell('Gem', st.mean)}${cell('P10', st.p10)}${cell('P25', st.p25)}${cell('Mediaan', st.p50)}${cell('P75', st.p75)}${cell('P90', st.p90)}${cell('Max', st.max)}
+      </div>${exHtml}</div>`;
+  };
+
+  cardWrap.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr;gap:1px;margin:0 16px 12px;background:var(--border);border-radius:10px;overflow:hidden;">
+      ${block('Wind (kt)', data.wind, 'kt', 0, data.windDir, limitWind, '#60a5fa')}
+      ${block('Golfhoogte (m)', data.wave, 'm', 1, data.waveDir, limitWave, '#34d399')}
+    </div>
+    <div style="padding:0 16px 12px;">
+      <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;">Route tijdlijn (mediaan vs. limiet)</div>
+      <div style="display:flex;height:16px;border-radius:5px;overflow:hidden;gap:1px;">
+        ${_klimData.map((d, i) => {
+          const c = _klimAlertColor(d, limitWind, limitWave);
+          return `<div style="flex:1;background:${c};opacity:${i===idx?1:0.6};cursor:pointer;transition:opacity 0.1s;" onclick="document.getElementById('klim-fc-slider').value=${i};klimSliderMove(${i})" title="${_klimStops[i]?_klimStops[i].distNm.toFixed(0)+' nm':''}"></div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  _updateKlimChart(idx);
+  _updateKlimColors();
+}
+
+function _updateKlimChart(idx) {
+  const wrap = document.getElementById('klim-fc-chart-wrap');
+  const canvas = document.getElementById('klim-fc-chart');
+  const limitWind = parseFloat(document.getElementById('route-limit-wind').value) || null;
+  const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
+
+  const labels = _klimStops.map(s => +s.distNm.toFixed(2));
+  const pick = (g, k) => _klimData.map(d => d && d[g] ? d[g][k] : null);
+  const wp10 = pick('wind','p10'), wp50 = pick('wind','p50'), wp90 = pick('wind','p90');
+  const gp10 = pick('wave','p10'), gp50 = pick('wave','p50'), gp90 = pick('wave','p90');
+
+  const datasets = [
+    { label: '_w0', data: wp10, yAxisID: 'yWind', borderColor: 'transparent', pointRadius: 0, borderWidth: 0, fill: false, tension: 0.3, spanGaps: true },
+    { label: '_w1', data: wp90, yAxisID: 'yWind', borderColor: 'transparent', backgroundColor: 'rgba(59,130,246,0.16)', pointRadius: 0, borderWidth: 0, fill: '-1', tension: 0.3, spanGaps: true },
+    { label: 'Wind mediaan (kt)', data: wp50, yAxisID: 'yWind', borderColor: '#3b82f6', backgroundColor: '#3b82f6', pointRadius: 0, borderWidth: 2.5, fill: false, tension: 0.3, spanGaps: true },
+    { label: '_g0', data: gp10, yAxisID: 'yWave', borderColor: 'transparent', pointRadius: 0, borderWidth: 0, fill: false, tension: 0.3, spanGaps: true },
+    { label: '_g1', data: gp90, yAxisID: 'yWave', borderColor: 'transparent', backgroundColor: 'rgba(16,185,129,0.16)', pointRadius: 0, borderWidth: 0, fill: '-1', tension: 0.3, spanGaps: true },
+    { label: 'Golf mediaan (m)', data: gp50, yAxisID: 'yWave', borderColor: '#10b981', backgroundColor: '#10b981', pointRadius: 0, borderWidth: 2.5, borderDash: [6, 4], fill: false, tension: 0.3, spanGaps: true },
+  ];
+  if (limitWind) datasets.push({ label: 'Windlimiet', data: labels.map(() => limitWind), yAxisID: 'yWind', borderColor: 'rgba(239,68,68,0.8)', backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, spanGaps: true });
+  if (limitWave) datasets.push({ label: 'Golflimiet', data: labels.map(() => limitWave), yAxisID: 'yWave', borderColor: 'rgba(249,115,22,0.8)', backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, spanGaps: true });
+
+  if (_klimChart) {
+    _klimChart.data.labels = labels;
+    _klimChart.data.datasets = datasets;
+    _klimChart._vLineIdx = idx;
+    _klimChart.update('none');
+    return;
+  }
+
+  _klimChart = new Chart(canvas, {
+    type: 'line',
+    plugins: [_chartBgPlugin, _routeVLinePlugin],
+    data: { labels, datasets },
+    options: {
+      animation: false, responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, position: 'top', align: 'end',
+          labels: { color: '#94a3b8', font: { size: 9 }, boxWidth: 24, boxHeight: 2, padding: 12,
+            filter: it => it.text && it.text[0] !== '_' } },
+        tooltip: { mode: 'index', intersect: false,
+          backgroundColor: 'rgba(13,22,37,0.95)', titleColor: '#94a3b8', bodyColor: '#e2e8f0', borderColor: '#1c2e45', borderWidth: 1,
+          filter: it => it.dataset.label && it.dataset.label[0] !== '_',
+          callbacks: {
+            title: items => { const s = _klimStops[items[0]?.dataIndex]; return s ? `${s.distNm.toFixed(0)} nm · ${String(s.hour).padStart(2,'0')}:00 UTC` : ''; },
+            label: item => ` ${item.dataset.label}: ${item.raw != null ? Number(item.raw).toFixed(1) : '–'}`,
+          } },
+      },
+      scales: {
+        x: { type: 'linear', grid: { color: 'rgba(255,255,255,0.05)' },
+          title: { display: true, text: 'Afstand (nm)', color: '#64748b', font: { size: 9 } },
+          ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 7, callback: v => Math.round(v) }, border: { display: false } },
+        yWind: { position: 'left', grid: { color: 'rgba(255,255,255,0.05)' },
+          title: { display: true, text: 'Wind (kt)', color: '#3b82f6', font: { size: 9, weight: 'bold' } },
+          ticks: { color: '#3b82f6', font: { size: 9 }, maxTicksLimit: 5, callback: v => v + ' kt' }, border: { display: false } },
+        yWave: { position: 'right', grid: { drawOnChartArea: false },
+          title: { display: true, text: 'Golven (m)', color: '#10b981', font: { size: 9, weight: 'bold' } },
+          ticks: { color: '#10b981', font: { size: 9 }, maxTicksLimit: 5, callback: v => v + ' m' }, border: { display: false } },
+      }
+    }
+  });
+  _klimChart._vLineIdx = idx;
+  wrap.style.display = '';
+}
+
+function klimToggleView() {
+  _klimViewMode = _klimViewMode === 'chart' ? 'table' : 'chart';
+  const isChart = _klimViewMode === 'chart';
+  document.getElementById('klim-fc-view-toggle').textContent = isChart ? 'Tabel' : 'Grafiek';
+  document.getElementById('klim-fc-card-wrap').style.display  = isChart ? '' : 'none';
+  document.getElementById('klim-fc-chart-wrap').style.display = isChart ? '' : 'none';
+  document.getElementById('klim-fc-table-wrap').style.display = isChart ? 'none' : '';
+  if (!isChart) _updateKlimTable();
+}
+
+function _updateKlimTable() {
+  const limitWind = parseFloat(document.getElementById('route-limit-wind').value) || null;
+  const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
+  const fmtV = (v, dec=1) => v != null ? Number(v).toFixed(dec) : '–';
+  const exFmt = ex => ex == null ? '–' : (ex*100).toFixed(0) + '%';
+  const exCls = ex => ex == null ? '' : ex > 0.5 ? 'fc-tbl-bad' : ex > 0.1 ? 'fc-tbl-warn' : 'fc-tbl-ok';
+
+  document.getElementById('klim-fc-table-head').innerHTML =
+    `<th>Nm</th><th>Tijd</th>` +
+    `<th style="color:#3b82f6">W gem</th><th style="color:#3b82f6">P10</th><th style="color:#3b82f6">P50</th><th style="color:#3b82f6">P90</th><th style="color:#3b82f6">Max</th><th style="color:#3b82f6">%>lim</th><th style="color:#3b82f6">Richt</th>` +
+    `<th style="color:#10b981">G gem</th><th style="color:#10b981">P10</th><th style="color:#10b981">P50</th><th style="color:#10b981">P90</th><th style="color:#10b981">Max</th><th style="color:#10b981">%>lim</th><th style="color:#10b981">Richt</th>`;
+
+  const tbody = document.getElementById('klim-fc-table-body');
+  tbody.innerHTML = _klimStops.map((stop, i) => {
+    const d = _klimData[i], w = d && d.wind, h = d && d.wave;
+    const wEx = _klimExceed(w, limitWind), hEx = _klimExceed(h, limitWave);
+    const rowBg = i % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
+    return `<tr style="${rowBg}">
+      <td>${stop.distNm.toFixed(0)}</td>
+      <td style="font-weight:600;color:#cbd5e1">${String(stop.hour).padStart(2,'0')}:00</td>
+      <td>${w?fmtV(w.mean,0):'–'}</td><td>${w?fmtV(w.p10,0):'–'}</td><td>${w?fmtV(w.p50,0):'–'}</td><td>${w?fmtV(w.p90,0):'–'}</td><td>${w?fmtV(w.max,0):'–'}</td><td class="${exCls(wEx)}">${exFmt(wEx)}</td><td>${_klimFmtDir(d&&d.windDir)}</td>
+      <td>${h?fmtV(h.mean):'–'}</td><td>${h?fmtV(h.p10):'–'}</td><td>${h?fmtV(h.p50):'–'}</td><td>${h?fmtV(h.p90):'–'}</td><td>${h?fmtV(h.max):'–'}</td><td class="${exCls(hEx)}">${exFmt(hEx)}</td><td>${_klimFmtDir(d&&d.waveDir)}</td>
+    </tr>`;
+  }).join('');
 }
 
 let _routeFcStops   = [];   // { lat, lon, eta, distNm }
