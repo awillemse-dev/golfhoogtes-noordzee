@@ -3304,7 +3304,7 @@ function _updateKlimChart(idx) {
         } },
     },
     scales: {
-      x: { type: 'linear', grid: { color: 'rgba(255,255,255,0.05)' },
+      x: { type: 'linear', bounds: 'data', min: labels[0], max: labels[labels.length - 1], grid: { color: 'rgba(255,255,255,0.05)' },
         title: { display: true, text: 'Afstand (nm)', color: '#64748b', font: { size: 9 } },
         ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 7, callback: v => Math.round(v) }, border: { display: false } },
       y: { position: 'left', grid: { color: 'rgba(255,255,255,0.05)' },
@@ -3315,21 +3315,21 @@ function _updateKlimChart(idx) {
 
   const upd = (chart, datasets) => { chart.data.labels = labels; chart.data.datasets = datasets; chart._vLineIdx = idx; chart.update('none'); };
 
-  const windDs = buildDatasets('wind', '#3b82f6', 'rgba(59,130,246,0.16)', 'kt', limitWind);
-  const waveDs = buildDatasets('wave', '#10b981', 'rgba(16,185,129,0.16)', 'm', limitWave);
+  const windDs = buildDatasets('wind', '#10b981', 'rgba(16,185,129,0.16)', 'kt', limitWind);
+  const waveDs = buildDatasets('wave', '#3b82f6', 'rgba(59,130,246,0.16)', 'm', limitWave);
 
   if (_klimChartWind) { upd(_klimChartWind, windDs); }
   else {
     _klimChartWind = new Chart(document.getElementById('klim-fc-chart-wind'), {
       type: 'line', plugins: [_chartBgPlugin, _routeVLinePlugin],
-      data: { labels, datasets: windDs }, options: makeOpts('Wind (kt)', '#3b82f6', 'kt') });
+      data: { labels, datasets: windDs }, options: makeOpts('Wind (kt)', '#10b981', 'kt') });
     _klimChartWind._vLineIdx = idx;
   }
   if (_klimChartWave) { upd(_klimChartWave, waveDs); }
   else {
     _klimChartWave = new Chart(document.getElementById('klim-fc-chart-wave'), {
       type: 'line', plugins: [_chartBgPlugin, _routeVLinePlugin],
-      data: { labels, datasets: waveDs }, options: makeOpts('Golven (m)', '#10b981', 'm') });
+      data: { labels, datasets: waveDs }, options: makeOpts('Golven (m)', '#3b82f6', 'm') });
     _klimChartWave._vLineIdx = idx;
   }
   wrap.style.display = 'flex';
