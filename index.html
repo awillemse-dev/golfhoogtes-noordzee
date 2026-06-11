@@ -1103,9 +1103,10 @@
           <div id="klim-fc-loading" class="route-fc-loading">Klimaatdata ophalen…</div>
         </div>
 
-        <!-- Wind + golf grafiek over volledige route -->
-        <div id="klim-fc-chart-wrap" style="display:none;flex:1 1 0;min-height:120px;padding:8px 10px 6px;border-top:1px solid var(--border);">
-          <canvas id="klim-fc-chart"></canvas>
+        <!-- Aparte grafieken voor wind en golven over volledige route -->
+        <div id="klim-fc-chart-wrap" style="display:none;flex:1 1 0;min-height:240px;padding:8px 10px 6px;border-top:1px solid var(--border);flex-direction:column;gap:6px;">
+          <div style="flex:1 1 0;min-height:110px;position:relative;"><canvas id="klim-fc-chart-wind"></canvas></div>
+          <div style="flex:1 1 0;min-height:110px;position:relative;"><canvas id="klim-fc-chart-wave"></canvas></div>
         </div>
 
         <!-- Tabel weergave (toggle) -->
@@ -2879,7 +2880,8 @@ let _routeMode    = 'forecast';      // 'forecast' | 'klimaat'
 let _klimStops    = [];              // { lat, lon, distNm, offsetH, hour }
 let _klimData     = [];              // { wind:stats, windDir, wave:stats, waveDir, wavePer:stats }
 let _klimSlider   = null;            // marker op kaart
-let _klimChart    = null;
+let _klimChartWind = null;
+let _klimChartWave = null;
 let _klimLines    = [];              // gekleurde segmenten op kaart
 let _klimViewMode = 'chart';
 let _klimSpeed    = 0;
@@ -2947,7 +2949,7 @@ function _klimStats(arr) {
   if (!v.length) return null;
   const mean = v.reduce((a, b) => a + b, 0) / v.length;
   return { n: v.length, mean, min: v[0], max: v[v.length - 1],
-    p10: _pct(v, .1), p25: _pct(v, .25), p50: _pct(v, .5), p75: _pct(v, .75), p90: _pct(v, .9), raw: v };
+    p10: _pct(v, .1), p25: _pct(v, .25), p50: _pct(v, .5), p75: _pct(v, .75), p80: _pct(v, .8), p90: _pct(v, .9), raw: v };
 }
 function _circMean(arr) {
   const v = arr.filter(x => x != null && !isNaN(x));
@@ -2967,6 +2969,34 @@ function _klimExColor(ex) {
   if (ex < 0.50) return '#eab308';
   if (ex < 0.75) return '#f97316';
   return '#ef4444';
+}
+// Kleur op basis van percentielwaarde t.o.v. limiet (ratio = waarde/limiet)
+function _klimRatioColor(ratio) {
+  if (ratio == null) return null;
+  if (ratio <= 0.75) return '#22c55e';
+  if (ratio <= 1.00) return '#eab308';
+  if (ratio <= 1.25) return '#f97316';
+  return '#ef4444';
+}
+// Kleur een segment op de hoogste ratio van een gekozen percentiel t.o.v. de limiet
+function _klimPctlColor(data, key, limitWind, limitWave) {
+  if (!data) return '#475569';
+  const ratios = [];
+  if (limitWind && data.wind && data.wind[key] != null) ratios.push(data.wind[key] / limitWind);
+  if (limitWave && data.wave && data.wave[key] != null) ratios.push(data.wave[key] / limitWave);
+  if (!ratios.length) return '#22c55e';
+  return _klimRatioColor(Math.max(...ratios));
+}
+// Eén workability-balk over de route; colorFn(data) bepaalt de kleur per stop
+function _klimTimelineBar(label, colorFn, idx) {
+  const segs = _klimData.map((d, i) => {
+    const c = colorFn(d);
+    return `<div style="flex:1;background:${c};opacity:${i===idx?1:0.55};cursor:pointer;transition:opacity 0.1s;" onclick="document.getElementById('klim-fc-slider').value=${i};klimSliderMove(${i})" title="${_klimStops[i]?_klimStops[i].distNm.toFixed(0)+' nm':''}"></div>`;
+  }).join('');
+  return `<div style="margin-bottom:8px;">
+    <div style="font-size:0.6rem;color:var(--text-muted);margin-bottom:3px;">${label}</div>
+    <div style="display:flex;height:14px;border-radius:5px;overflow:hidden;gap:1px;">${segs}</div>
+  </div>`;
 }
 function _klimFmtDir(d) {
   if (d == null) return '–';
@@ -3040,7 +3070,8 @@ async function _fetchKlimaat() {
   for (let y = endYear - nYears + 1; y <= endYear; y++) years.push(y);
 
   // reset
-  if (_klimChart) { _klimChart.destroy(); _klimChart = null; }
+  if (_klimChartWind) { _klimChartWind.destroy(); _klimChartWind = null; }
+  if (_klimChartWave) { _klimChartWave.destroy(); _klimChartWave = null; }
   _klimLines.forEach(l => _routeMap.removeLayer(l)); _klimLines = [];
   if (_klimSlider) { _routeMap.removeLayer(_klimSlider); _klimSlider = null; }
   document.getElementById('klim-fc-chart-wrap').style.display = 'none';
@@ -3223,13 +3254,10 @@ function klimSliderMove(idx) {
       ${block('Golfhoogte (m)', data.wave, 'm', 1, data.waveDir, limitWave, '#34d399')}
     </div>
     <div style="padding:0 16px 12px;">
-      <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;">Route tijdlijn (mediaan vs. limiet)</div>
-      <div style="display:flex;height:16px;border-radius:5px;overflow:hidden;gap:1px;">
-        ${_klimData.map((d, i) => {
-          const c = _klimAlertColor(d, limitWind, limitWave);
-          return `<div style="flex:1;background:${c};opacity:${i===idx?1:0.6};cursor:pointer;transition:opacity 0.1s;" onclick="document.getElementById('klim-fc-slider').value=${i};klimSliderMove(${i})" title="${_klimStops[i]?_klimStops[i].distNm.toFixed(0)+' nm':''}"></div>`;
-        }).join('')}
-      </div>
+      <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;">Route tijdlijn (workability per stop)</div>
+      ${_klimTimelineBar('Overschrijdingskans', d => _klimAlertColor(d, limitWind, limitWave), idx)}
+      ${_klimTimelineBar('P50 vs. limiet', d => _klimPctlColor(d, 'p50', limitWind, limitWave), idx)}
+      ${_klimTimelineBar('P80 vs. limiet', d => _klimPctlColor(d, 'p80', limitWind, limitWave), idx)}
     </div>`;
 
   _updateKlimChart(idx);
@@ -3238,67 +3266,68 @@ function klimSliderMove(idx) {
 
 function _updateKlimChart(idx) {
   const wrap = document.getElementById('klim-fc-chart-wrap');
-  const canvas = document.getElementById('klim-fc-chart');
   const limitWind = parseFloat(document.getElementById('route-limit-wind').value) || null;
   const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
 
   const labels = _klimStops.map(s => +s.distNm.toFixed(2));
   const pick = (g, k) => _klimData.map(d => d && d[g] ? d[g][k] : null);
-  const wp10 = pick('wind','p10'), wp50 = pick('wind','p50'), wp90 = pick('wind','p90');
-  const gp10 = pick('wave','p10'), gp50 = pick('wave','p50'), gp90 = pick('wave','p90');
 
-  const datasets = [
-    { label: '_w0', data: wp10, yAxisID: 'yWind', borderColor: 'transparent', pointRadius: 0, borderWidth: 0, fill: false, tension: 0.3, spanGaps: true },
-    { label: '_w1', data: wp90, yAxisID: 'yWind', borderColor: 'transparent', backgroundColor: 'rgba(59,130,246,0.16)', pointRadius: 0, borderWidth: 0, fill: '-1', tension: 0.3, spanGaps: true },
-    { label: 'Wind mediaan (kt)', data: wp50, yAxisID: 'yWind', borderColor: '#3b82f6', backgroundColor: '#3b82f6', pointRadius: 0, borderWidth: 2.5, fill: false, tension: 0.3, spanGaps: true },
-    { label: '_g0', data: gp10, yAxisID: 'yWave', borderColor: 'transparent', pointRadius: 0, borderWidth: 0, fill: false, tension: 0.3, spanGaps: true },
-    { label: '_g1', data: gp90, yAxisID: 'yWave', borderColor: 'transparent', backgroundColor: 'rgba(16,185,129,0.16)', pointRadius: 0, borderWidth: 0, fill: '-1', tension: 0.3, spanGaps: true },
-    { label: 'Golf mediaan (m)', data: gp50, yAxisID: 'yWave', borderColor: '#10b981', backgroundColor: '#10b981', pointRadius: 0, borderWidth: 2.5, borderDash: [6, 4], fill: false, tension: 0.3, spanGaps: true },
-  ];
-  if (limitWind) datasets.push({ label: 'Windlimiet', data: labels.map(() => limitWind), yAxisID: 'yWind', borderColor: 'rgba(239,68,68,0.8)', backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, spanGaps: true });
-  if (limitWave) datasets.push({ label: 'Golflimiet', data: labels.map(() => limitWave), yAxisID: 'yWave', borderColor: 'rgba(249,115,22,0.8)', backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, spanGaps: true });
+  // Eén grafiek per parameter; band P10-P90 + mediaanlijn + limietlijn.
+  const buildDatasets = (group, color, bandColor, unit, limit) => {
+    const p10 = pick(group, 'p10'), p50 = pick(group, 'p50'), p90 = pick(group, 'p90');
+    const ds = [
+      { label: '_lo', data: p10, borderColor: 'transparent', pointRadius: 0, borderWidth: 0, fill: false, tension: 0.3, spanGaps: true },
+      { label: '_hi', data: p90, borderColor: 'transparent', backgroundColor: bandColor, pointRadius: 0, borderWidth: 0, fill: '-1', tension: 0.3, spanGaps: true },
+      { label: `Mediaan (${unit})`, data: p50, borderColor: color, backgroundColor: color, pointRadius: 0, borderWidth: 2.5, fill: false, tension: 0.3, spanGaps: true },
+    ];
+    if (limit) ds.push({ label: `Limiet (${limit} ${unit})`, data: labels.map(() => limit), borderColor: 'rgba(239,68,68,0.85)', backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, spanGaps: true });
+    return ds;
+  };
 
-  if (_klimChart) {
-    _klimChart.data.labels = labels;
-    _klimChart.data.datasets = datasets;
-    _klimChart._vLineIdx = idx;
-    _klimChart.update('none');
-    return;
-  }
-
-  _klimChart = new Chart(canvas, {
-    type: 'line',
-    plugins: [_chartBgPlugin, _routeVLinePlugin],
-    data: { labels, datasets },
-    options: {
-      animation: false, responsive: true, maintainAspectRatio: false,
-      plugins: {
-        legend: { display: true, position: 'top', align: 'end',
-          labels: { color: '#94a3b8', font: { size: 9 }, boxWidth: 24, boxHeight: 2, padding: 12,
-            filter: it => it.text && it.text[0] !== '_' } },
-        tooltip: { mode: 'index', intersect: false,
-          backgroundColor: 'rgba(13,22,37,0.95)', titleColor: '#94a3b8', bodyColor: '#e2e8f0', borderColor: '#1c2e45', borderWidth: 1,
-          filter: it => it.dataset.label && it.dataset.label[0] !== '_',
-          callbacks: {
-            title: items => { const s = _klimStops[items[0]?.dataIndex]; return s ? `${s.distNm.toFixed(0)} nm · ${_klimFmtEta(s)} UTC` : ''; },
-            label: item => ` ${item.dataset.label}: ${item.raw != null ? Number(item.raw).toFixed(1) : '–'}`,
-          } },
-      },
-      scales: {
-        x: { type: 'linear', grid: { color: 'rgba(255,255,255,0.05)' },
-          title: { display: true, text: 'Afstand (nm)', color: '#64748b', font: { size: 9 } },
-          ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 7, callback: v => Math.round(v) }, border: { display: false } },
-        yWind: { position: 'left', grid: { color: 'rgba(255,255,255,0.05)' },
-          title: { display: true, text: 'Wind (kt)', color: '#3b82f6', font: { size: 9, weight: 'bold' } },
-          ticks: { color: '#3b82f6', font: { size: 9 }, maxTicksLimit: 5, callback: v => v + ' kt' }, border: { display: false } },
-        yWave: { position: 'right', grid: { drawOnChartArea: false },
-          title: { display: true, text: 'Golven (m)', color: '#10b981', font: { size: 9, weight: 'bold' } },
-          ticks: { color: '#10b981', font: { size: 9 }, maxTicksLimit: 5, callback: v => v + ' m' }, border: { display: false } },
-      }
+  const makeOpts = (axisTitle, axisColor, unit) => ({
+    animation: false, responsive: true, maintainAspectRatio: false,
+    plugins: {
+      legend: { display: true, position: 'top', align: 'end',
+        labels: { color: '#94a3b8', font: { size: 9 }, boxWidth: 24, boxHeight: 2, padding: 10,
+          filter: it => it.text && it.text[0] !== '_' } },
+      tooltip: { mode: 'index', intersect: false,
+        backgroundColor: 'rgba(13,22,37,0.95)', titleColor: '#94a3b8', bodyColor: '#e2e8f0', borderColor: '#1c2e45', borderWidth: 1,
+        filter: it => it.dataset.label && it.dataset.label[0] !== '_',
+        callbacks: {
+          title: items => { const s = _klimStops[items[0]?.dataIndex]; return s ? `${s.distNm.toFixed(0)} nm · ${_klimFmtEta(s)} UTC` : ''; },
+          label: item => ` ${item.dataset.label}: ${item.raw != null ? Number(item.raw).toFixed(unit === 'm' ? 1 : 0) : '–'}`,
+        } },
+    },
+    scales: {
+      x: { type: 'linear', grid: { color: 'rgba(255,255,255,0.05)' },
+        title: { display: true, text: 'Afstand (nm)', color: '#64748b', font: { size: 9 } },
+        ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 7, callback: v => Math.round(v) }, border: { display: false } },
+      y: { position: 'left', grid: { color: 'rgba(255,255,255,0.05)' },
+        title: { display: true, text: axisTitle, color: axisColor, font: { size: 9, weight: 'bold' } },
+        ticks: { color: axisColor, font: { size: 9 }, maxTicksLimit: 5, callback: v => v + ' ' + unit }, border: { display: false } },
     }
   });
-  _klimChart._vLineIdx = idx;
-  wrap.style.display = '';
+
+  const upd = (chart, datasets) => { chart.data.labels = labels; chart.data.datasets = datasets; chart._vLineIdx = idx; chart.update('none'); };
+
+  const windDs = buildDatasets('wind', '#3b82f6', 'rgba(59,130,246,0.16)', 'kt', limitWind);
+  const waveDs = buildDatasets('wave', '#10b981', 'rgba(16,185,129,0.16)', 'm', limitWave);
+
+  if (_klimChartWind) { upd(_klimChartWind, windDs); }
+  else {
+    _klimChartWind = new Chart(document.getElementById('klim-fc-chart-wind'), {
+      type: 'line', plugins: [_chartBgPlugin, _routeVLinePlugin],
+      data: { labels, datasets: windDs }, options: makeOpts('Wind (kt)', '#3b82f6', 'kt') });
+    _klimChartWind._vLineIdx = idx;
+  }
+  if (_klimChartWave) { upd(_klimChartWave, waveDs); }
+  else {
+    _klimChartWave = new Chart(document.getElementById('klim-fc-chart-wave'), {
+      type: 'line', plugins: [_chartBgPlugin, _routeVLinePlugin],
+      data: { labels, datasets: waveDs }, options: makeOpts('Golven (m)', '#10b981', 'm') });
+    _klimChartWave._vLineIdx = idx;
+  }
+  wrap.style.display = 'flex';
 }
 
 function klimToggleView() {
@@ -3306,7 +3335,7 @@ function klimToggleView() {
   const isChart = _klimViewMode === 'chart';
   document.getElementById('klim-fc-view-toggle').textContent = isChart ? 'Tabel' : 'Grafiek';
   document.getElementById('klim-fc-card-wrap').style.display  = isChart ? '' : 'none';
-  document.getElementById('klim-fc-chart-wrap').style.display = isChart ? '' : 'none';
+  document.getElementById('klim-fc-chart-wrap').style.display = isChart ? 'flex' : 'none';
   document.getElementById('klim-fc-table-wrap').style.display = isChart ? 'none' : '';
   if (!isChart) _updateKlimTable();
 }
