@@ -3193,7 +3193,7 @@ function _updateKlimColors() {
   const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
   for (let i = 0; i < _klimStops.length - 1; i++) {
     const a = _klimStops[i], b = _klimStops[i + 1];
-    const color = _klimAlertColor(_klimData[i], limitWind, limitWave);
+    const color = _klimPctlColor(_klimData[i], 'mean', limitWind, limitWave);
     _klimLines.push(L.polyline([[a.lat, a.lon], [b.lat, b.lon]], { color, weight: 5, opacity: 0.9 }).addTo(_routeMap));
   }
 }
