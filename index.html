@@ -901,6 +901,15 @@
       </svg>
       <span class="tab-label">Route Kli&shy;maat</span>
     </div>
+    <div class="sidebar-tab" id="tab-optimaal" onclick="selectSection('optimaal')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2a10 10 0 1 0 10 10"/>
+        <path d="M12 12 19 5"/>
+        <circle cx="12" cy="12" r="2.5"/>
+      </svg>
+      <span class="tab-label">Route Opti&shy;maal</span>
+    </div>
   </div>
 
   <!-- ── Kaartgebied ────────────────────────────────────────────────────── -->
@@ -983,7 +992,25 @@
           </div>
         </div>
 
-        <div class="route-section" style="border-bottom:none">
+        <div class="route-section" id="route-optimaal-section" style="display:none">
+          <label>Vertrekdatum &amp; -tijd (UTC)</label>
+          <div class="route-input-row">
+            <input id="opt-departure" type="datetime-local" style="flex:1">
+          </div>
+          <div class="route-coord-hint">Op basis van start, bestemming, snelheid en het klimaat berekent de app de gunstigste route. Blijft binnen een beperkte afwijking van de kortste route en minimaal 10 nm uit de kust.</div>
+          <label style="margin-top:12px;">Aantal jaren historie</label>
+          <div class="route-input-row" style="gap:8px;align-items:center;">
+            <select id="opt-years" style="width:110px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;">
+              <option value="5" selected>5 jaar</option>
+              <option value="10">10 jaar</option>
+              <option value="15">15 jaar</option>
+              <option value="20">20 jaar</option>
+            </select>
+            <span style="color:var(--text-muted);font-size:0.72rem">ERA5 reanalyse</span>
+          </div>
+        </div>
+
+        <div class="route-section" style="border-bottom:none" id="route-waypoints-block">
           <label>Waypoints</label>
           <div id="route-click-hint">Klik op de kaart om waypoints toe te voegen langs je route.</div>
         </div>
@@ -1138,6 +1165,7 @@
         <div style="display:flex;flex-direction:column;gap:6px;">
           <button id="route-show-fc-btn" onclick="routeShowForecast()" style="background:#1d4ed8;color:white;border:none;border-radius:6px;font-size:0.75rem;font-weight:600;padding:7px;cursor:pointer;">Weersvoorspelling tonen</button>
           <button id="route-show-klim-btn" onclick="routeShowKlimaat()" style="display:none;background:#0e7490;color:white;border:none;border-radius:6px;font-size:0.75rem;font-weight:600;padding:7px;cursor:pointer;">Klimatologie tonen</button>
+          <button id="route-show-opt-btn" onclick="routeShowOptimaal()" style="display:none;background:#7c3aed;color:white;border:none;border-radius:6px;font-size:0.75rem;font-weight:600;padding:7px;cursor:pointer;">Optimale route berekenen</button>
           <button onclick="routeEdit()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-muted);font-size:0.75rem;padding:7px;cursor:pointer;">Route bewerken</button>
         </div>
       </div>
@@ -2232,7 +2260,7 @@ function selectSection(section) {
     const layer = _lastWaarLayer;
     activeLayer = '';
     selectLayer(layer);
-  } else if (section === 'route' || section === 'klimaat') {
+  } else if (section === 'route' || section === 'klimaat' || section === 'optimaal') {
     if (activeLayer) _lastWaarLayer = activeLayer;
     nav.style.display        = 'none';
     nlNav.style.display      = 'none';
@@ -2245,7 +2273,7 @@ function selectSection(section) {
     stopRadar();
     clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem(); stopStormen();
     activeLayer = '';
-    _setRouteMode(section === 'klimaat' ? 'klimaat' : 'forecast');
+    _setRouteMode(section);
     setTimeout(() => _ensureRouteMap(), 50);
   } else {
     nav.style.display        = 'none';
@@ -2657,6 +2685,7 @@ function _ensureRouteMap() {
   _routeMap.setView([53.0, 5.0], 6);
 
   _routeMap.on('click', e => {
+    if (_routeMode === 'optimaal') return; // waypoints worden automatisch berekend
     const { lat, lng } = e.latlng;
     _addRouteWaypoint(lat, lng);
   });
@@ -2858,8 +2887,10 @@ function routeSave() {
     `<b>Snelheid:</b> ${speed} kt · ~${(totalNm/speed).toFixed(1)} u`;
 
   const isKlim = _routeMode === 'klimaat';
-  document.getElementById('route-show-fc-btn').style.display   = isKlim ? 'none' : '';
+  const isOpt  = _routeMode === 'optimaal';
+  document.getElementById('route-show-fc-btn').style.display   = (isKlim || isOpt) ? 'none' : '';
   document.getElementById('route-show-klim-btn').style.display = isKlim ? '' : 'none';
+  document.getElementById('route-show-opt-btn').style.display  = isOpt ? '' : 'none';
 
   document.getElementById('route-sidebar').style.display = 'none';
   document.getElementById('route-saved-overlay').style.display = '';
@@ -2894,22 +2925,31 @@ let _klimDep      = null;
 const _klimCache  = new Map();
 const _KLIM_WINDOW_DAYS = 10;
 
-function _ensureKlimDeparture() {
-  const el = document.getElementById('klim-departure'); if (!el || el.value) return;
+function _ensureDeparture(id) {
+  const el = document.getElementById(id); if (!el || el.value) return;
   const now = new Date();
   el.value = `${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,'0')}-${String(now.getUTCDate()).padStart(2,'0')}T06:00`;
 }
+function _ensureKlimDeparture() { _ensureDeparture('klim-departure'); }
 
 function _setRouteMode(mode) {
+  if (mode === 'route') mode = 'forecast';
   _routeMode = mode;
   const isK = mode === 'klimaat';
-  document.getElementById('route-departure-section').style.display = isK ? 'none' : '';
+  const isO = mode === 'optimaal';
+  document.getElementById('route-departure-section').style.display = (isK || isO) ? 'none' : '';
   document.getElementById('route-klimaat-section').style.display   = isK ? '' : 'none';
-  document.getElementById('route-sidebar-title').textContent = isK ? 'Route Klimaat' : 'Route Forecast';
-  document.getElementById('route-save-btn').innerHTML = isK
-    ? 'Route opslaan &amp; klimatologie berekenen'
+  document.getElementById('route-optimaal-section').style.display  = isO ? '' : 'none';
+  // In optimaal-modus berekent de app de waypoints zelf.
+  document.getElementById('route-waypoints-block').style.display = isO ? 'none' : '';
+  document.getElementById('route-sidebar-title').textContent =
+    isO ? 'Route Optimaal' : isK ? 'Route Klimaat' : 'Route Forecast';
+  document.getElementById('route-save-btn').innerHTML =
+    isO ? 'Route opslaan &amp; optimale route berekenen'
+    : isK ? 'Route opslaan &amp; klimatologie berekenen'
     : 'Route opslaan &amp; voorspelling berekenen';
   _ensureKlimDeparture();
+  _ensureDeparture('opt-departure');
   document.getElementById('route-forecast-panel').style.display   = 'none';
   document.getElementById('klimaat-forecast-panel').style.display = 'none';
   document.getElementById('route-saved-overlay').style.display    = 'none';
@@ -2933,6 +2973,13 @@ function klimHide() {
   document.getElementById('klimaat-forecast-panel').style.display = 'none';
   document.getElementById('route-saved-overlay').style.display = '';
   setTimeout(() => _routeMap.invalidateSize(), 50);
+}
+
+function routeShowOptimaal() {
+  document.getElementById('klimaat-forecast-panel').style.display = 'flex';
+  document.getElementById('route-saved-overlay').style.display = 'none';
+  setTimeout(() => _routeMap.invalidateSize(), 50);
+  _optimizeRoute();
 }
 
 function _onLimitChange() {
@@ -3949,6 +3996,254 @@ async function _loadLand() {
   const topo = await res.json();
   _landGeoJSON = topojson.feature(topo, topo.objects.land);
   return _landGeoJSON;
+}
+
+// ── Geometrie-helpers voor route-optimalisatie ───────────────────────────────
+function _bearingDeg(lat1, lon1, lat2, lon2) {
+  const φ1 = lat1*Math.PI/180, φ2 = lat2*Math.PI/180, Δλ = (lon2-lon1)*Math.PI/180;
+  const y = Math.sin(Δλ)*Math.cos(φ2);
+  const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+  return (Math.atan2(y, x)*180/Math.PI + 360) % 360;
+}
+function _destPoint(lat, lon, bearingDeg, distNm) {
+  const R = 3440.065, d = distNm / R;
+  const br = bearingDeg*Math.PI/180, φ1 = lat*Math.PI/180, λ1 = lon*Math.PI/180;
+  const φ2 = Math.asin(Math.sin(φ1)*Math.cos(d) + Math.cos(φ1)*Math.sin(d)*Math.cos(br));
+  const λ2 = λ1 + Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(φ1), Math.cos(d) - Math.sin(φ1)*Math.sin(φ2));
+  return { lat: φ2*180/Math.PI, lon: ((λ2*180/Math.PI + 540) % 360) - 180 };
+}
+// Afstand punt → lijnsegment in zeemijlen (lokale equirectangulaire projectie)
+function _ptSegNm(plat, plon, alat, alon, blat, blon) {
+  const k = Math.cos(plat*Math.PI/180), nmPerDeg = 60;
+  const ax = (alon-plon)*k*nmPerDeg, ay = (alat-plat)*nmPerDeg;
+  const bx = (blon-plon)*k*nmPerDeg, by = (blat-plat)*nmPerDeg;
+  const dx = bx-ax, dy = by-ay, L2 = dx*dx + dy*dy;
+  let t = L2 > 0 ? -(ax*dx + ay*dy)/L2 : 0; t = Math.max(0, Math.min(1, t));
+  const cx = ax + t*dx, cy = ay + t*dy;
+  return Math.hypot(cx, cy);
+}
+function _inRing(lat, lon, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length-1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+    if (((yi > lat) !== (yj > lat)) && (lon < (xj-xi)*(lat-yi)/(yj-yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function _pointInLand(lat, lon) {
+  const geo = _landGeoJSON; if (!geo) return false;
+  for (const f of geo.features) {
+    const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+    for (const poly of polys) {
+      if (_inRing(lat, lon, poly[0])) {
+        let inHole = false;
+        for (let h = 1; h < poly.length; h++) if (_inRing(lat, lon, poly[h])) { inHole = true; break; }
+        if (!inHole) return true;
+      }
+    }
+  }
+  return false;
+}
+// Kortste afstand tot de kustlijn in zeemijlen (negatief als op land)
+function _distToCoastNm(lat, lon) {
+  const geo = _landGeoJSON; if (!geo) return Infinity;
+  let min = Infinity;
+  for (const f of geo.features) {
+    const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+    for (const poly of polys) {
+      for (const ring of poly) {
+        let rminLat = Infinity, rmaxLat = -Infinity, rminLon = Infinity, rmaxLon = -Infinity;
+        for (const [lo, la] of ring) {
+          if (la < rminLat) rminLat = la; if (la > rmaxLat) rmaxLat = la;
+          if (lo < rminLon) rminLon = lo; if (lo > rmaxLon) rmaxLon = lo;
+        }
+        if (lat < rminLat-2.5 || lat > rmaxLat+2.5 || lon < rminLon-2.5 || lon > rmaxLon+2.5) continue;
+        for (let i = 1; i < ring.length; i++) {
+          const d = _ptSegNm(lat, lon, ring[i-1][1], ring[i-1][0], ring[i][1], ring[i][0]);
+          if (d < min) min = d;
+        }
+      }
+    }
+  }
+  return _pointInLand(lat, lon) ? -min : min;
+}
+
+// Klimaatstatistiek voor één punt/tijd (gedeeld door optimizer + klimaat-fetch)
+async function _klimFetchPointStats(lat, lon, month, day, hour, years) {
+  const [windYears, waveYears] = await Promise.all([
+    Promise.all(years.map(y => _klimFetchWindow('wind', lat, lon, y, month, day))),
+    Promise.all(years.map(y => _klimFetchWindow('wave', lat, lon, y, month, day))),
+  ]);
+  const windVals = [], waveVals = [];
+  windYears.forEach(obj => {
+    if (!obj || !obj.hourly) return;
+    const t = obj.hourly.time || [], ws = obj.hourly.wind_speed_10m || [];
+    t.forEach((ts, i) => { if (new Date(ts*1000).getUTCHours() === hour && ws[i] != null) windVals.push(ws[i]); });
+  });
+  waveYears.forEach(obj => {
+    if (!obj || !obj.hourly) return;
+    const t = obj.hourly.time || [], wh = obj.hourly.wave_height || [];
+    t.forEach((ts, i) => { if (new Date(ts*1000).getUTCHours() === hour && wh[i] != null) waveVals.push(wh[i]); });
+  });
+  return { wind: _klimStats(windVals), wave: _klimStats(waveVals) };
+}
+function _nodeBadness(stats, limitWind, limitWave) {
+  const exs = [];
+  if (limitWind && stats && stats.wind) exs.push(_klimExceed(stats.wind, limitWind));
+  if (limitWave && stats && stats.wave) exs.push(_klimExceed(stats.wave, limitWave));
+  const v = exs.filter(e => e != null);
+  return v.length ? Math.max(...v) : 0;
+}
+
+// ── Route-optimalisatie: beste route o.b.v. klimaat, binnen afwijking + kustmarge ──
+const _OPT_MIN_COAST_NM = 10;   // minimaal 10 nm uit de kust
+const _OPT_COLS         = 6;    // aantal segmenten langs de route (kolommen = COLS+1)
+const _OPT_LATERAL      = 5;    // aantal laterale kandidaten per kolom (oneven → midden = directe lijn)
+const _OPT_WDIST        = 0.35; // straf per extra zeemijl t.o.v. badness (hoger = dichter bij kortste route)
+
+async function _optimizeRoute() {
+  const cardWrap = document.getElementById('klim-fc-card-wrap');
+  const summaryEl = document.getElementById('klim-fc-summary');
+  document.getElementById('klim-fc-slider-wrap').style.display = 'none';
+  document.getElementById('klim-fc-chart-wrap').style.display = 'none';
+  document.getElementById('klim-fc-table-wrap').style.display = 'none';
+  document.getElementById('klim-fc-view-toggle').style.display = 'none';
+  cardWrap.style.display = '';
+  cardWrap.innerHTML = '<div class="route-fc-loading">Kustlijn laden…</div>';
+  summaryEl.innerHTML = 'Optimale route berekenen…';
+
+  if (!_routeStart || !_routeEnd) {
+    cardWrap.innerHTML = '<div class="route-fc-loading" style="color:#ef4444">Stel eerst start en bestemming in.</div>';
+    return;
+  }
+  const speed = parseFloat(document.getElementById('route-speed').value);
+  if (!speed) { cardWrap.innerHTML = '<div class="route-fc-loading" style="color:#ef4444">Vul een snelheid in.</div>'; return; }
+  const depVal = document.getElementById('opt-departure').value;
+  const dep = depVal ? new Date(depVal + ':00Z') : new Date();
+  const nYears = parseInt(document.getElementById('opt-years').value);
+  const endYear = new Date().getUTCFullYear() - 1;
+  const years = [];
+  for (let y = endYear - nYears + 1; y <= endYear; y++) years.push(y);
+  const limitWind = parseFloat(document.getElementById('route-limit-wind').value) || null;
+  const limitWave = parseFloat(document.getElementById('route-limit-wave').value) || null;
+
+  try { await _loadLand(); } catch (e) {
+    cardWrap.innerHTML = `<div class="route-fc-loading" style="color:#ef4444">Kustlijn laden mislukt: ${e.message}</div>`;
+    return;
+  }
+
+  const A = { lat: _routeStart.lat, lon: _routeStart.lon };
+  const B = { lat: _routeEnd.lat,   lon: _routeEnd.lon };
+  const directNm = _routeDistNm(A.lat, A.lon, B.lat, B.lon);
+  const directHours = directNm / speed;
+  const bearing = _bearingDeg(A.lat, A.lon, B.lat, B.lon);
+  // Maximale laterale afwijking: beperkt, schaalt met routelengte
+  const Dmax = Math.max(12, Math.min(45, directNm * 0.2));
+
+  // Bouw kolommen (incl. eindpunten) met laterale kandidaatknopen
+  const cols = [];
+  for (let c = 0; c <= _OPT_COLS; c++) {
+    const f = c / _OPT_COLS;
+    const center = { lat: A.lat + f*(B.lat - A.lat), lon: A.lon + f*(B.lon - A.lon) };
+    const t = dep.getTime() + f * directHours * 3600000;
+    const eta = new Date(t);
+    const tk = { month: eta.getUTCMonth()+1, day: eta.getUTCDate(), hour: eta.getUTCHours() };
+    let nodes;
+    if (c === 0)            nodes = [{ ...A, ...tk, offNm: 0 }];
+    else if (c === _OPT_COLS) nodes = [{ ...B, ...tk, offNm: 0 }];
+    else {
+      nodes = [];
+      for (let k = 0; k < _OPT_LATERAL; k++) {
+        const frac = _OPT_LATERAL === 1 ? 0 : (k/(_OPT_LATERAL-1))*2 - 1; // -1..+1
+        const off = frac * Dmax;
+        const p = off === 0 ? center : _destPoint(center.lat, center.lon, bearing + (off > 0 ? 90 : -90), Math.abs(off));
+        nodes.push({ lat: p.lat, lon: p.lon, ...tk, offNm: off });
+      }
+    }
+    cols.push(nodes);
+  }
+
+  // Verzamel alle knopen, check kustmarge, haal klimaat op
+  const allNodes = [];
+  cols.forEach((nodes, ci) => nodes.forEach(n => { n.col = ci; allNodes.push(n); }));
+  cardWrap.innerHTML = `<div class="route-fc-loading">Klimaat langs kandidaten berekenen… (0/${allNodes.length})</div>`;
+  let done = 0;
+  const tasks = allNodes.map(n => async () => {
+    n.coastNm = _distToCoastNm(n.lat, n.lon);
+    n.valid = n.coastNm >= _OPT_MIN_COAST_NM;
+    if (n.coastNm > -Infinity) {
+      try { n.stats = await _klimFetchPointStats(n.lat, n.lon, n.month, n.day, n.hour, years); }
+      catch { n.stats = null; }
+    }
+    n.bad = _nodeBadness(n.stats, limitWind, limitWave);
+    done++;
+    const ld = cardWrap.querySelector('.route-fc-loading');
+    if (ld) ld.textContent = `Klimaat langs kandidaten berekenen… (${done}/${allNodes.length})`;
+  });
+  try { await _klimRunPool(tasks, 4); }
+  catch (e) { cardWrap.innerHTML = `<div class="route-fc-loading" style="color:#ef4444">Fout: ${e.message}</div>`; return; }
+
+  // Knoopstraf: ongeldige knopen (te dicht bij kust / op land) zwaar bestraffen
+  const INVALID_PEN = 1e6;
+  const nodePen = n => (n.valid ? 0 : INVALID_PEN);
+
+  // Dynamisch programmeren over de kolommen
+  const N = cols.length;
+  const cost = cols.map(nodes => nodes.map(() => Infinity));
+  const prev = cols.map(nodes => nodes.map(() => -1));
+  cols[0].forEach((n, i) => { cost[0][i] = nodePen(n); });
+  for (let c = 1; c < N; c++) {
+    for (let j = 0; j < cols[c].length; j++) {
+      const v = cols[c][j];
+      let best = Infinity, bi = -1;
+      for (let i = 0; i < cols[c-1].length; i++) {
+        const u = cols[c-1][i];
+        if (cost[c-1][i] === Infinity) continue;
+        const segNm = _routeDistNm(u.lat, u.lon, v.lat, v.lon);
+        const edge = segNm * (_OPT_WDIST + (u.bad + v.bad) / 2);
+        const tot = cost[c-1][i] + edge;
+        if (tot < best) { best = tot; bi = i; }
+      }
+      cost[c][j] = best + nodePen(v);
+      prev[c][j] = bi;
+    }
+  }
+  // Beste eindknoop (kolom N-1 heeft 1 knoop = B)
+  let endIdx = 0, endCost = cost[N-1][0];
+  for (let j = 1; j < cols[N-1].length; j++) if (cost[N-1][j] < endCost) { endCost = cost[N-1][j]; endIdx = j; }
+
+  // Pad terugvolgen
+  const path = [];
+  let ci = N-1, idx = endIdx;
+  while (ci >= 0 && idx >= 0) { path.unshift(cols[ci][idx]); idx = prev[ci][idx]; ci--; }
+
+  // Interne knopen → waypoints (start/eind blijven staan)
+  _routeWaypoints.forEach(wp => _routeMap.removeLayer(wp.marker));
+  _routeWaypoints = [];
+  const interior = path.slice(1, -1);
+  interior.forEach((n, i) => {
+    const marker = _routeMarker(n.lat, n.lon, '#7c3aed', i + 1);
+    marker.addTo(_routeMap);
+    const j = i;
+    marker.on('dragend', e => {
+      const p = e.target.getLatLng();
+      _routeWaypoints[j].lat = p.lat; _routeWaypoints[j].lon = p.lng;
+      _redrawRouteLine(); _renderWaypointList();
+    });
+    _routeWaypoints.push({ lat: n.lat, lon: n.lon, marker });
+  });
+  _redrawRouteLine();
+
+  // Detail-display via de bestaande klimaat-pijplijn (kopieer invoer)
+  document.getElementById('klim-departure').value = depVal;
+  document.getElementById('klim-years').value = String(nYears);
+  const anyInvalid = path.some(n => !n.valid);
+  await _fetchKlimaat();
+  // Voeg optimizer-context toe aan de samenvatting
+  const optNm = path.reduce((s, n, i) => i ? s + _routeDistNm(path[i-1].lat, path[i-1].lon, n.lat, n.lon) : 0, 0);
+  let extra = `<br><span style="color:#a78bfa;">Optimale route: ${optNm.toFixed(1)} nm (kortste: ${directNm.toFixed(1)} nm, +${(optNm-directNm).toFixed(1)} nm) · ${interior.length} waypoints · ≥${_OPT_MIN_COAST_NM} nm uit kust</span>`;
+  if (anyInvalid) extra += `<br><span style="color:#fbbf24;">⚠ Geen route gevonden die overal ≥${_OPT_MIN_COAST_NM} nm uit de kust blijft; dichtstbijzijnde alternatief getoond.</span>`;
+  summaryEl.innerHTML += extra;
 }
 
 async function _pdfDrawMap(doc, x, y, w, h, limitWind, limitWave) {
