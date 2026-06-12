@@ -4076,6 +4076,22 @@ function _distToCoastNm(lat, lon) {
   }
   return _pointInLand(lat, lon) ? -min : min;
 }
+// Kustafstand-analyse langs een lijnsegment: minimum + opgetelde overtreding t.o.v. de marge
+function _segCoast(lat1, lon1, lat2, lon2, marginNm) {
+  const distNm = _routeDistNm(lat1, lon1, lat2, lon2);
+  const steps = Math.max(2, Math.ceil(distNm / 3));   // ± elke 3 nm bemonsteren
+  let min = Infinity, short = 0;
+  for (let s = 0; s <= steps; s++) {
+    const f = s / steps;
+    const c = _distToCoastNm(lat1 + f*(lat2-lat1), lon1 + f*(lon2-lon1));
+    if (c < min) min = c;
+    if (c < marginNm) short += (marginNm - c);        // hoe dieper/langer in de marge, hoe groter
+  }
+  return { min, short };
+}
+function _segMinCoastNm(lat1, lon1, lat2, lon2) {
+  return _segCoast(lat1, lon1, lat2, lon2, _OPT_MIN_COAST_NM).min;
+}
 
 // Klimaatstatistiek voor één punt/tijd (gedeeld door optimizer + klimaat-fetch)
 async function _klimFetchPointStats(lat, lon, month, day, hour, years) {
@@ -4106,9 +4122,9 @@ function _nodeBadness(stats, limitWind, limitWave) {
 
 // ── Route-optimalisatie: beste route o.b.v. klimaat, binnen afwijking + kustmarge ──
 const _OPT_MIN_COAST_NM = 10;   // minimaal 10 nm uit de kust
-const _OPT_COLS         = 6;    // aantal segmenten langs de route (kolommen = COLS+1)
-const _OPT_LATERAL      = 5;    // aantal laterale kandidaten per kolom (oneven → midden = directe lijn)
-const _OPT_WDIST        = 0.35; // straf per extra zeemijl t.o.v. badness (hoger = dichter bij kortste route)
+const _OPT_COLS         = 7;    // aantal segmenten langs de route (kolommen = COLS+1)
+const _OPT_LATERAL      = 9;    // aantal laterale kandidaten per kolom (oneven → midden = directe lijn)
+const _OPT_WDIST        = 0.15; // straf per extra zeemijl t.o.v. badness (lager = meer afwijking voor beter weer)
 
 async function _optimizeRoute() {
   const cardWrap = document.getElementById('klim-fc-card-wrap');
@@ -4146,8 +4162,8 @@ async function _optimizeRoute() {
   const directNm = _routeDistNm(A.lat, A.lon, B.lat, B.lon);
   const directHours = directNm / speed;
   const bearing = _bearingDeg(A.lat, A.lon, B.lat, B.lon);
-  // Maximale laterale afwijking: beperkt, schaalt met routelengte
-  const Dmax = Math.max(12, Math.min(45, directNm * 0.2));
+  // Maximale laterale afwijking: schaalt met routelengte, ruimer voor beter weer
+  const Dmax = Math.max(15, Math.min(80, directNm * 0.35));
 
   // Bouw kolommen (incl. eindpunten) met laterale kandidaatknopen
   const cols = [];
@@ -4180,7 +4196,8 @@ async function _optimizeRoute() {
   const tasks = allNodes.map(n => async () => {
     n.coastNm = _distToCoastNm(n.lat, n.lon);
     n.valid = n.coastNm >= _OPT_MIN_COAST_NM;
-    if (n.coastNm > -Infinity) {
+    // Ongeldige (land/kust) knopen krijgen toch INVALID_PEN → klimaat ophalen is verspilling
+    if (n.valid) {
       try { n.stats = await _klimFetchPointStats(n.lat, n.lon, n.month, n.day, n.hour, years); }
       catch { n.stats = null; }
     }
@@ -4192,9 +4209,9 @@ async function _optimizeRoute() {
   try { await _klimRunPool(tasks, 4); }
   catch (e) { cardWrap.innerHTML = `<div class="route-fc-loading" style="color:#ef4444">Fout: ${e.message}</div>`; return; }
 
-  // Knoopstraf: ongeldige knopen (te dicht bij kust / op land) zwaar bestraffen
+  // Knoopstraf: ongeldige knopen zwaar bestraffen, gegradeerd zodat "minst slecht" wint
   const INVALID_PEN = 1e6;
-  const nodePen = n => (n.valid ? 0 : INVALID_PEN);
+  const nodePen = n => (n.valid ? 0 : INVALID_PEN + (_OPT_MIN_COAST_NM - n.coastNm) * 1000);
 
   // Dynamisch programmeren over de kolommen
   const N = cols.length;
@@ -4209,7 +4226,10 @@ async function _optimizeRoute() {
         const u = cols[c-1][i];
         if (cost[c-1][i] === Infinity) continue;
         const segNm = _routeDistNm(u.lat, u.lon, v.lat, v.lon);
-        const edge = segNm * (_OPT_WDIST + (u.bad + v.bad) / 2);
+        // Segment mag nooit over land of binnen de kustmarge lopen (gegradeerd bestraft)
+        const sc = _segCoast(u.lat, u.lon, v.lat, v.lon, _OPT_MIN_COAST_NM);
+        const segPen = sc.short > 0 ? INVALID_PEN + sc.short * 1000 : 0;
+        const edge = segNm * (_OPT_WDIST + (u.bad + v.bad) / 2) + segPen;
         const tot = cost[c-1][i] + edge;
         if (tot < best) { best = tot; bi = i; }
       }
@@ -4246,7 +4266,9 @@ async function _optimizeRoute() {
   // Detail-display via de bestaande klimaat-pijplijn (kopieer invoer)
   document.getElementById('klim-departure').value = depVal;
   document.getElementById('klim-years').value = String(nYears);
-  const anyInvalid = path.some(n => !n.valid);
+  let anyInvalid = path.some(n => !n.valid);
+  for (let i = 1; i < path.length && !anyInvalid; i++)
+    if (_segMinCoastNm(path[i-1].lat, path[i-1].lon, path[i].lat, path[i].lon) < _OPT_MIN_COAST_NM) anyInvalid = true;
   await _fetchKlimaat();
   // Voeg optimizer-context toe aan de samenvatting
   const optNm = path.reduce((s, n, i) => i ? s + _routeDistNm(path[i-1].lat, path[i-1].lon, n.lat, n.lon) : 0, 0);
