@@ -13,15 +13,15 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     :root {
-      --bg:          #080d18;
-      --surface:     #0d1625;
-      --surface-2:   #131f33;
-      --surface-3:   #192840;
-      --border:      #1c2e45;
-      --border-2:    #243a56;
-      --accent:      #38bdf8;
-      --accent-glow: rgba(56,189,248,0.12);
-      --text:        #e2e8f0;
+      --bg:          #e9eef4;
+      --surface:     #ffffff;
+      --surface-2:   #f3f6fb;
+      --surface-3:   #e7edf5;
+      --border:      #d7e0eb;
+      --border-2:    #c6d2e0;
+      --accent:      #0284c7;
+      --accent-glow: rgba(2,132,199,0.12);
+      --text:        #0f172a;
       --text-dim:    #7a91a8;
       --text-muted:  #3d5167;
       --green:       #4ade80;
@@ -73,7 +73,7 @@
     .brand-name {
       font-size: 0.88rem;
       font-weight: 600;
-      color: #f1f5f9;
+      color: #0f172a;
       letter-spacing: -0.01em;
     }
 
@@ -182,7 +182,7 @@
     }
     .sidebar-tab svg { width: 18px; height: 18px; flex-shrink: 0; }
     .sidebar-tab:hover  { background: var(--surface-2); color: var(--text-dim); border-color: var(--border); }
-    .sidebar-tab.active { background: var(--accent-glow); color: var(--accent); border-color: rgba(56,189,248,0.22); }
+    .sidebar-tab.active { background: var(--accent-glow); color: var(--accent); border-color: rgba(2,132,199,0.22); }
     .sidebar-tab .tab-label { line-height: 1.2; }
 
     /* ── Kaartgebied ──────────────────────────────────────────────────────── */
@@ -309,7 +309,7 @@
 
     /* Radar legenda (Leaflet control) */
     .radar-legend {
-      background: rgba(13,22,37,0.88);
+      background: rgba(255,255,255,0.92);
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 10px 12px;
@@ -393,7 +393,7 @@
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: 6px;
-      color: #e2e8f0;
+      color: #0f172a;
       font-size: 0.8rem;
       padding: 6px 9px;
       outline: none;
@@ -483,7 +483,7 @@
       font-size: 0.65rem; font-weight: 700; color: white;
       flex-shrink: 0;
     }
-    .route-fc-card-title { font-size: 0.78rem; font-weight: 600; color: #e2e8f0; flex: 1; }
+    .route-fc-card-title { font-size: 0.78rem; font-weight: 600; color: #0f172a; flex: 1; }
     .route-fc-card-time  { font-size: 0.68rem; color: var(--text-muted); }
     .route-fc-metrics {
       display: grid;
@@ -513,10 +513,10 @@
     }
     #route-fc-table td {
       padding:4px 8px; text-align:center; border-bottom:1px solid rgba(28,46,69,0.5);
-      white-space:nowrap; color:#cbd5e1;
+      white-space:nowrap; color:#334155;
     }
     #route-fc-table td:first-child { text-align:left; color:var(--text-muted); font-size:0.65rem; }
-    #route-fc-table tr:hover td { background:rgba(56,189,248,0.05); }
+    #route-fc-table tr:hover td { background:rgba(2,132,199,0.05); }
     #route-fc-table .fc-tbl-ok   { color:#22c55e; font-weight:600; }
     #route-fc-table .fc-tbl-warn { color:#f97316; font-weight:600; }
     #route-fc-table .fc-tbl-bad  { color:#ef4444; font-weight:700; }
@@ -530,7 +530,7 @@
     }
     #klim-fc-table td {
       padding:4px 7px; text-align:center; border-bottom:1px solid rgba(28,46,69,0.5);
-      white-space:nowrap; color:#cbd5e1;
+      white-space:nowrap; color:#334155;
     }
     #klim-fc-table td:first-child { text-align:left; color:var(--text-muted); font-size:0.64rem; }
     #klim-fc-table tr:hover td { background:rgba(6,182,212,0.06); }
@@ -613,7 +613,7 @@
     #chart-naam {
       font-size: 0.9rem;
       font-weight: 600;
-      color: #f1f5f9;
+      color: #0f172a;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -685,7 +685,7 @@
 
     /* ── Legenda ────────────────────────────────────────────────────────── */
     .legend {
-      background: rgba(13,22,37,0.96);
+      background: rgba(255,255,255,0.95);
       border: 1px solid var(--border);
       border-radius: 10px;
       padding: 12px 14px;
@@ -982,7 +982,7 @@
           <div class="route-coord-hint">Klimatologie rond deze datum (±10 dagen) in 3-uurs stappen langs de route. Het jaar wordt genegeerd — er wordt over meerdere historische jaren gemiddeld.</div>
           <label style="margin-top:12px;">Aantal jaren historie</label>
           <div class="route-input-row" style="gap:8px;align-items:center;">
-            <select id="klim-years" style="width:110px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;">
+            <select id="klim-years" style="width:110px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#0f172a;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;">
               <option value="5">5 jaar</option>
               <option value="10" selected>10 jaar</option>
               <option value="15">15 jaar</option>
@@ -1000,7 +1000,7 @@
           <div class="route-coord-hint">Op basis van start, bestemming, snelheid en het klimaat berekent de app de gunstigste route. Blijft binnen een beperkte afwijking van de kortste route en minimaal 10 nm uit de kust.</div>
           <label style="margin-top:12px;">Aantal jaren historie</label>
           <div class="route-input-row" style="gap:8px;align-items:center;">
-            <select id="opt-years" style="width:110px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;">
+            <select id="opt-years" style="width:110px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#0f172a;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;">
               <option value="5" selected>5 jaar</option>
               <option value="10">10 jaar</option>
               <option value="15">15 jaar</option>
@@ -1024,13 +1024,13 @@
               <div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:4px;">Max wind (kt)</div>
               <input id="route-limit-wind" type="number" placeholder="bijv. 20" min="1" max="100" step="1"
                 oninput="_onLimitChange()"
-                style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;box-sizing:border-box;">
+                style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#0f172a;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;box-sizing:border-box;">
             </div>
             <div>
               <div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:4px;">Max golf (m)</div>
               <input id="route-limit-wave" type="number" placeholder="bijv. 1.5" min="0.1" max="20" step="0.1"
                 oninput="_onLimitChange()"
-                style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#e2e8f0;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;box-sizing:border-box;">
+                style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:#0f172a;font-size:0.8rem;padding:6px 8px;outline:none;font-family:inherit;box-sizing:border-box;">
             </div>
           </div>
         </div>
@@ -1055,7 +1055,7 @@
         <!-- Slider sectie -->
         <div id="route-fc-slider-wrap" style="display:none;padding:14px 16px;border-bottom:1px solid var(--border);flex-shrink:0;">
           <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
-            <span id="route-fc-slider-time" style="font-size:0.85rem;font-weight:700;color:#e2e8f0;letter-spacing:0.02em;">–</span>
+            <span id="route-fc-slider-time" style="font-size:0.85rem;font-weight:700;color:#0f172a;letter-spacing:0.02em;">–</span>
             <span id="route-fc-slider-pos"  style="font-size:0.72rem;color:var(--text-muted);">–</span>
           </div>
           <input id="route-fc-slider" type="range" min="0" max="100" value="0" step="1"
@@ -1113,7 +1113,7 @@
         <!-- Slider sectie -->
         <div id="klim-fc-slider-wrap" style="display:none;padding:14px 16px;border-bottom:1px solid var(--border);flex-shrink:0;">
           <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
-            <span id="klim-fc-slider-time" style="font-size:0.85rem;font-weight:700;color:#e2e8f0;letter-spacing:0.02em;">–</span>
+            <span id="klim-fc-slider-time" style="font-size:0.85rem;font-weight:700;color:#0f172a;letter-spacing:0.02em;">–</span>
             <span id="klim-fc-slider-pos"  style="font-size:0.72rem;color:var(--text-muted);">–</span>
           </div>
           <input id="klim-fc-slider" type="range" min="0" max="100" value="0" step="1"
@@ -1161,7 +1161,7 @@
       <!-- Opgeslagen route overlay (compact, op kaart) -->
       <div id="route-saved-overlay" style="display:none; position:absolute; top:12px; right:12px; z-index:1000; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 14px; min-width:200px; max-width:260px;">
         <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Route opgeslagen</div>
-        <div id="route-saved-info" style="font-size:0.78rem;color:#e2e8f0;line-height:1.7;margin-bottom:10px;"></div>
+        <div id="route-saved-info" style="font-size:0.78rem;color:#0f172a;line-height:1.7;margin-bottom:10px;"></div>
         <div style="display:flex;flex-direction:column;gap:6px;">
           <button id="route-show-fc-btn" onclick="routeShowForecast()" style="background:#1d4ed8;color:white;border:none;border-radius:6px;font-size:0.75rem;font-weight:600;padding:7px;cursor:pointer;">Weersvoorspelling tonen</button>
           <button id="route-show-klim-btn" onclick="routeShowKlimaat()" style="display:none;background:#0e7490;color:white;border:none;border-radius:6px;font-size:0.75rem;font-weight:600;padding:7px;cursor:pointer;">Klimatologie tonen</button>
@@ -2478,11 +2478,11 @@ const CHART_OPTS = (color) => ({
   plugins: {
     legend: { display: false },
     tooltip: {
-      backgroundColor: '#0d1625',
-      borderColor:     '#1c2e45',
+      backgroundColor: '#ffffff',
+      borderColor:     '#d7e0eb',
       borderWidth:     1,
       titleColor:      '#7a91a8',
-      bodyColor:       '#e2e8f0',
+      bodyColor:       '#0f172a',
       padding:         10,
       cornerRadius:    7,
     },
@@ -2492,13 +2492,13 @@ const CHART_OPTS = (color) => ({
       type: 'time',
       time: { unit: 'hour', displayFormats: { hour: 'HH:mm' } },
       ticks: { color: '#3d5167', maxTicksLimit: 7, font: { size: 10, family: 'Inter' } },
-      grid:  { color: '#1c2e45' },
-      border:{ color: '#1c2e45' },
+      grid:  { color: '#d7e0eb' },
+      border:{ color: '#d7e0eb' },
     },
     y: {
       ticks: { color: '#3d5167', font: { size: 10, family: 'Inter' } },
-      grid:  { color: '#1c2e45' },
-      border:{ color: '#1c2e45' },
+      grid:  { color: '#d7e0eb' },
+      border:{ color: '#d7e0eb' },
     },
   },
 });
@@ -2679,7 +2679,7 @@ function _ensureRouteMap() {
     zoomControl: true, scrollWheelZoom: true,
     attributionControl: false,
   });
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
     subdomains: 'abcd', maxZoom: 18, crossOrigin: true,
   }).addTo(_routeMap);
   _routeMap.setView([53.0, 5.0], 6);
@@ -3295,7 +3295,7 @@ function klimSliderMove(idx) {
   const block = (title, st, unit, dec, dir, limit, accent) => {
     if (!st) return `<div style="background:var(--surface-2);padding:12px 14px;"><div style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--text-muted);margin-bottom:8px;">${title}</div><div style="font-size:0.74rem;color:#fbbf24;">Geen data beschikbaar</div></div>`;
     const ex = _klimExceed(st, limit);
-    const cell = (lbl, val) => `<div style="text-align:center;"><div style="font-size:1.02rem;font-weight:700;line-height:1;color:#e2e8f0;">${val != null ? val.toFixed(dec) : '–'}</div><div style="font-size:0.56rem;color:var(--text-muted);margin-top:3px;text-transform:uppercase;letter-spacing:0.04em;">${lbl}</div></div>`;
+    const cell = (lbl, val) => `<div style="text-align:center;"><div style="font-size:1.02rem;font-weight:700;line-height:1;color:#0f172a;">${val != null ? val.toFixed(dec) : '–'}</div><div style="font-size:0.56rem;color:var(--text-muted);margin-top:3px;text-transform:uppercase;letter-spacing:0.04em;">${lbl}</div></div>`;
     const exHtml = limit != null
       ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:0.72rem;"><span style="color:var(--text-muted);">Overschrijdingskans (> ${limit} ${unit})</span><span style="font-weight:700;color:${_klimExColor(ex)};">${(ex*100).toFixed(0)}%</span></div>`
       : '';
@@ -3352,7 +3352,7 @@ function _updateKlimChart(idx) {
         labels: { color: '#94a3b8', font: { size: 9 }, boxWidth: 24, boxHeight: 2, padding: 10,
           filter: it => it.text && it.text[0] !== '_' } },
       tooltip: { mode: 'index', intersect: false,
-        backgroundColor: 'rgba(13,22,37,0.95)', titleColor: '#94a3b8', bodyColor: '#e2e8f0', borderColor: '#1c2e45', borderWidth: 1,
+        backgroundColor: 'rgba(255,255,255,0.96)', titleColor: '#94a3b8', bodyColor: '#0f172a', borderColor: '#d7e0eb', borderWidth: 1,
         filter: it => it.dataset.label && it.dataset.label[0] !== '_',
         callbacks: {
           title: items => { const s = _klimStops[items[0]?.dataIndex]; return s ? `${s.distNm.toFixed(0)} nm · ${_klimFmtEta(s)} UTC` : ''; },
@@ -3360,10 +3360,10 @@ function _updateKlimChart(idx) {
         } },
     },
     scales: {
-      x: { type: 'linear', bounds: 'data', min: labels[0], max: labels[labels.length - 1], grid: { color: 'rgba(255,255,255,0.05)' },
+      x: { type: 'linear', bounds: 'data', min: labels[0], max: labels[labels.length - 1], grid: { color: 'rgba(15,23,42,0.08)' },
         title: { display: true, text: 'Afstand (nm)', color: '#64748b', font: { size: 9 } },
         ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 7, callback: v => Math.round(v) }, border: { display: false } },
-      y: { position: 'left', grid: { color: 'rgba(255,255,255,0.05)' },
+      y: { position: 'left', grid: { color: 'rgba(15,23,42,0.08)' },
         title: { display: true, text: axisTitle, color: axisColor, font: { size: 9, weight: 'bold' } },
         ticks: { color: axisColor, font: { size: 9 }, maxTicksLimit: 5, callback: v => v + ' ' + unit }, border: { display: false } },
     }
@@ -3420,7 +3420,7 @@ function _updateKlimTable() {
     const rowBg = i % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
     return `<tr style="${rowBg}">
       <td>${stop.distNm.toFixed(0)}</td>
-      <td style="font-weight:600;color:#cbd5e1">${_klimFmtEta(stop)}</td>
+      <td style="font-weight:600;color:#334155">${_klimFmtEta(stop)}</td>
       <td>${w?fmtV(w.mean,0):'–'}</td><td>${w?fmtV(w.p10,0):'–'}</td><td>${w?fmtV(w.p50,0):'–'}</td><td>${w?fmtV(w.p90,0):'–'}</td><td>${w?fmtV(w.max,0):'–'}</td><td style="${exStyle(wEx)}">${exFmt(wEx)}</td><td>${_klimFmtDir(d&&d.windDir)}</td>
       <td>${h?fmtV(h.mean):'–'}</td><td>${h?fmtV(h.p10):'–'}</td><td>${h?fmtV(h.p50):'–'}</td><td>${h?fmtV(h.p90):'–'}</td><td>${h?fmtV(h.max):'–'}</td><td style="${exStyle(hEx)}">${exFmt(hEx)}</td><td>${_klimFmtDir(d&&d.waveDir)}</td>
     </tr>`;
@@ -3460,7 +3460,7 @@ const _chartBgPlugin = {
   beforeDraw(chart) {
     const ctx = chart.ctx;
     ctx.save();
-    ctx.fillStyle = '#0d1625';
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, chart.width, chart.height);
     ctx.restore();
   }
@@ -3785,7 +3785,7 @@ function _updateFcTable() {
     const rowBg = i % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
     return `<tr style="${rowBg}">
       <td style="color:var(--text-muted)">${stop.eta.toISOString().slice(0,10)}</td>
-      <td style="font-weight:600;color:#cbd5e1">${stop.eta.toISOString().slice(11,16)}</td>
+      <td style="font-weight:600;color:#334155">${stop.eta.toISOString().slice(11,16)}</td>
       <td>${stop.distNm.toFixed(1)}</td>
       <td class="${wCls}">${d ? fmtV(d.windKt,0) : '…'}</td>
       <td>${d ? fmtDir(d.windDir) : '…'}</td>
@@ -3864,9 +3864,9 @@ function _updateRouteChart(idx) {
         },
         tooltip: {
           mode: 'index', intersect: false,
-          backgroundColor: 'rgba(13,22,37,0.95)',
-          titleColor: '#94a3b8', bodyColor: '#e2e8f0',
-          borderColor: '#1c2e45', borderWidth: 1,
+          backgroundColor: 'rgba(255,255,255,0.96)',
+          titleColor: '#94a3b8', bodyColor: '#0f172a',
+          borderColor: '#d7e0eb', borderWidth: 1,
           callbacks: {
             title: items => {
               const s = _routeFcStops[items[0]?.dataIndex];
@@ -3882,13 +3882,13 @@ function _updateRouteChart(idx) {
         x: {
           type: 'time',
           time: { unit: 'hour', displayFormats: { hour: 'HH:mm', day: 'dd/MM' } },
-          grid: { color: 'rgba(255,255,255,0.05)' },
+          grid: { color: 'rgba(15,23,42,0.08)' },
           ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 7 },
           border: { display: false },
         },
         yWind: {
           position: 'left',
-          grid: { color: 'rgba(255,255,255,0.05)' },
+          grid: { color: 'rgba(15,23,42,0.08)' },
           title: { display: true, text: 'Wind (kt)', color: '#3b82f6', font: { size: 9, weight: 'bold' } },
           ticks: { color: '#3b82f6', font: { size: 9 }, maxTicksLimit: 5, callback: v => v + ' kt' },
           border: { display: false },
