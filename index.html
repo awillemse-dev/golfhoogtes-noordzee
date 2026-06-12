@@ -2870,8 +2870,14 @@ function routeClearAll() {
 }
 
 function routeSave() {
+  // Pas ingevulde coördinaten alsnog toe als 'Zet' niet is geklikt
+  if (!_routeStart) routeSetStart();
+  if (!_routeEnd)   routeSetEnd();
   const pts   = _routeAllPoints();
-  if (pts.length < 2) return;
+  if (pts.length < 2) {
+    alert('Vul eerst een vertrek- en bestemmingshaven in (lat/lon) en klik op "Zet".');
+    return;
+  }
   const speed = parseFloat(document.getElementById('route-speed').value) || null;
   if (!speed) { alert('Vul eerst een scheepssnelheid in (kt).'); return; }
 
@@ -2895,6 +2901,9 @@ function routeSave() {
   document.getElementById('route-sidebar').style.display = 'none';
   document.getElementById('route-saved-overlay').style.display = '';
   setTimeout(() => _routeMap.invalidateSize(), 50);
+
+  // In optimaal-modus meteen de route berekenen (knop belooft "berekenen")
+  if (isOpt) routeShowOptimaal();
 }
 
 function routeEdit() {
