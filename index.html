@@ -4126,7 +4126,11 @@ const _OPT_SEG_NM       = 22;   // streefafstand per segment (nm) → meer waypo
 const _OPT_COLS_MIN     = 7;    // minimaal aantal segmenten (kolommen = COLS+1)
 const _OPT_COLS_MAX     = 28;   // maximaal aantal segmenten (begrenst aantal API-calls)
 const _OPT_LATERAL      = 9;    // aantal laterale kandidaten per kolom (oneven → midden = directe lijn)
-const _OPT_WDIST        = 0.15; // straf per extra zeemijl t.o.v. badness (lager = meer afwijking voor beter weer)
+// Afstandsstraf per extra zeemijl t.o.v. badness: hoog bij korte routes (blijf dichtbij),
+// laag bij lange routes (meer afwijking toegestaan als het weer klimatologisch beter is).
+const _OPT_WDIST_NEAR   = 0.15; // afstandsstraf voor korte routes
+const _OPT_WDIST_FAR    = 0.05; // afstandsstraf voor lange routes
+const _OPT_WDIST_FAR_NM = 450;  // routelengte (nm) waarbij de minimale afstandsstraf geldt
 
 async function _optimizeRoute() {
   const cardWrap = document.getElementById('klim-fc-card-wrap');
@@ -4164,8 +4168,10 @@ async function _optimizeRoute() {
   const directNm = _routeDistNm(A.lat, A.lon, B.lat, B.lon);
   const directHours = directNm / speed;
   const bearing = _bearingDeg(A.lat, A.lon, B.lat, B.lon);
-  // Maximale laterale afwijking: schaalt met routelengte, ruimer voor beter weer
-  const Dmax = Math.max(15, Math.min(80, directNm * 0.35));
+  // Maximale laterale afwijking: schaalt met routelengte, ruim genoeg voor beter weer
+  const Dmax = Math.max(15, Math.min(140, directNm * 0.45));
+  // Afstandsstraf schaalt omlaag met routelengte → lange routes mogen verder afwijken voor beter weer
+  const wdist = _OPT_WDIST_NEAR + (_OPT_WDIST_FAR - _OPT_WDIST_NEAR) * Math.min(1, directNm / _OPT_WDIST_FAR_NM);
   // Aantal segmenten schaalt met routelengte → lange routes krijgen veel meer waypoints
   const nCols = Math.max(_OPT_COLS_MIN, Math.min(_OPT_COLS_MAX, Math.round(directNm / _OPT_SEG_NM)));
 
@@ -4233,7 +4239,7 @@ async function _optimizeRoute() {
         // Segment mag nooit over land of binnen de kustmarge lopen (gegradeerd bestraft)
         const sc = _segCoast(u.lat, u.lon, v.lat, v.lon, _OPT_MIN_COAST_NM);
         const segPen = sc.short > 0 ? INVALID_PEN + sc.short * 1000 : 0;
-        const edge = segNm * (_OPT_WDIST + (u.bad + v.bad) / 2) + segPen;
+        const edge = segNm * (wdist + (u.bad + v.bad) / 2) + segPen;
         const tot = cost[c-1][i] + edge;
         if (tot < best) { best = tot; bi = i; }
       }
