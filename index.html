@@ -4122,7 +4122,9 @@ function _nodeBadness(stats, limitWind, limitWave) {
 
 // ── Route-optimalisatie: beste route o.b.v. klimaat, binnen afwijking + kustmarge ──
 const _OPT_MIN_COAST_NM = 10;   // minimaal 10 nm uit de kust
-const _OPT_COLS         = 7;    // aantal segmenten langs de route (kolommen = COLS+1)
+const _OPT_SEG_NM       = 22;   // streefafstand per segment (nm) → meer waypoints bij lange routes
+const _OPT_COLS_MIN     = 7;    // minimaal aantal segmenten (kolommen = COLS+1)
+const _OPT_COLS_MAX     = 28;   // maximaal aantal segmenten (begrenst aantal API-calls)
 const _OPT_LATERAL      = 9;    // aantal laterale kandidaten per kolom (oneven → midden = directe lijn)
 const _OPT_WDIST        = 0.15; // straf per extra zeemijl t.o.v. badness (lager = meer afwijking voor beter weer)
 
@@ -4164,18 +4166,20 @@ async function _optimizeRoute() {
   const bearing = _bearingDeg(A.lat, A.lon, B.lat, B.lon);
   // Maximale laterale afwijking: schaalt met routelengte, ruimer voor beter weer
   const Dmax = Math.max(15, Math.min(80, directNm * 0.35));
+  // Aantal segmenten schaalt met routelengte → lange routes krijgen veel meer waypoints
+  const nCols = Math.max(_OPT_COLS_MIN, Math.min(_OPT_COLS_MAX, Math.round(directNm / _OPT_SEG_NM)));
 
   // Bouw kolommen (incl. eindpunten) met laterale kandidaatknopen
   const cols = [];
-  for (let c = 0; c <= _OPT_COLS; c++) {
-    const f = c / _OPT_COLS;
+  for (let c = 0; c <= nCols; c++) {
+    const f = c / nCols;
     const center = { lat: A.lat + f*(B.lat - A.lat), lon: A.lon + f*(B.lon - A.lon) };
     const t = dep.getTime() + f * directHours * 3600000;
     const eta = new Date(t);
     const tk = { month: eta.getUTCMonth()+1, day: eta.getUTCDate(), hour: eta.getUTCHours() };
     let nodes;
     if (c === 0)            nodes = [{ ...A, ...tk, offNm: 0 }];
-    else if (c === _OPT_COLS) nodes = [{ ...B, ...tk, offNm: 0 }];
+    else if (c === nCols) nodes = [{ ...B, ...tk, offNm: 0 }];
     else {
       nodes = [];
       for (let k = 0; k < _OPT_LATERAL; k++) {
