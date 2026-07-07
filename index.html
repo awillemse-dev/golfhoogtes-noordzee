@@ -307,6 +307,78 @@
     .rv-radar-frame { transition: opacity 0.2s ease; }
     #radar-map.scrubbing .rv-radar-frame { transition: none !important; }
 
+    /* ── Satellietpaneel (MTG) ───────────────────────────────────────────── */
+    #satelliet-panel {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      background: var(--bg);
+      overflow: hidden;
+    }
+    #satelliet-panel.active { display: flex; }
+    #satelliet-map { flex: 1; min-height: 0; }
+    #satelliet-map img { background: transparent !important; }
+    #satelliet-controls {
+      flex-shrink: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    #satelliet-play {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: none;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    #satelliet-play:hover { background: #7dd3fc; }
+    #satelliet-play svg { width: 16px; height: 16px; fill: #0c1a2b; }
+    #satelliet-slider {
+      flex: 1;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border-2);
+      outline: none;
+      cursor: pointer;
+    }
+    #satelliet-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    #satelliet-slider::-moz-range-thumb {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: none;
+      cursor: pointer;
+    }
+    #satelliet-time {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      min-width: 42px;
+      text-align: right;
+    }
+    #satelliet-source {
+      font-size: 0.62rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .sat-frame { transition: opacity 0.25s ease; }
+    #satelliet-map.scrubbing .sat-frame { transition: none !important; }
+
     /* Radar legenda (Leaflet control) */
     .radar-legend {
       background: rgba(255,255,255,0.92);
@@ -844,6 +916,17 @@
       </svg>
       Radar Europa
     </button>
+    <button class="nav-btn" id="nav-satelliet" onclick="selectLayer('satelliet')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 7 9 3 5 7l4 4"/>
+        <path d="m17 11 4 4-4 4-4-4"/>
+        <path d="m8 12 4 4"/>
+        <path d="m16 8 3-3"/>
+        <path d="M9 21a6 6 0 0 0-6-6"/>
+      </svg>
+      Satelliet MTG
+    </button>
     <button class="nav-btn" id="nav-stormen" onclick="selectLayer('stormen')">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1181,6 +1264,19 @@
         <input id="radar-slider" type="range" min="0" max="11" value="11" step="1">
         <span id="radar-time">–:––</span>
         <span id="radar-source">Bron: RainViewer</span>
+      </div>
+    </div>
+
+    <!-- Satellietpaneel (MTG) -->
+    <div id="satelliet-panel">
+      <div id="satelliet-map"></div>
+      <div id="satelliet-controls">
+        <button id="satelliet-play" title="Afspelen / pauzeren">
+          <svg id="satelliet-play-icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </button>
+        <input id="satelliet-slider" type="range" min="0" max="11" value="11" step="1">
+        <span id="satelliet-time">–:––</span>
+        <span id="satelliet-source">Bron: EUMETSAT · MTG GeoColour</span>
       </div>
     </div>
 
@@ -2308,10 +2404,12 @@ function selectLayer(layer) {
 
   const mapEl      = document.getElementById('map');
   const radarEl    = document.getElementById('radar-panel');
+  const satEl      = document.getElementById('satelliet-panel');
   const comingSoon = document.getElementById('coming-soon');
 
   // Verberg altijd de radar bij wissel naar andere tab
   if (layer !== 'radar') { radarEl.classList.remove('active'); stopRadar(); }
+  if (layer !== 'satelliet') { satEl.classList.remove('active'); stopSatelliet(); }
   if (layer !== 'stormen') stopStormen();
 
   if (layer === 'golf') {
@@ -2348,6 +2446,11 @@ function selectLayer(layer) {
     comingSoon.style.display = 'none';
     radarEl.classList.add('active');
     startRadar();
+  } else if (layer === 'satelliet') {
+    mapEl.style.display      = 'none';
+    comingSoon.style.display = 'none';
+    satEl.classList.add('active');
+    startSatelliet();
   } else if (layer === 'stormen') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
@@ -5514,6 +5617,159 @@ function startRadar() {
 function stopRadar() {
   _radarPauseAnim();
   if (_radarRefreshT) { clearInterval(_radarRefreshT); _radarRefreshT = null; }
+}
+
+// ── Satelliet (Meteosat Third Generation, EUMETSAT) ────────────────────────────
+// Bron: EUMETSAT View WMS — MTG-I1 FCI GeoColour (dag/nacht-blend), 10-min frames.
+const SAT_WMS        = 'https://view.eumetsat.int/geoserver/mtg_fd/rgb_geocolour/ows';
+const SAT_LAYER      = 'mtg_fd:rgb_geocolour';
+const SAT_BOUNDS     = [[40, -15], [64, 25]];   // Noordzee/Europa
+const SAT_STEP_MIN   = 20;    // minuten tussen frames
+const SAT_SPAN_MIN   = 180;   // afgelopen 3 uur
+const SAT_LAG_MIN    = 30;    // publicatievertraging MTG
+const SAT_INTERVAL_MS = 700;  // ms per frame tijdens afspelen
+
+let _satMap       = null;
+let _satLayers    = [];   // imageOverlay per frame (oud → nieuw)
+let _satFrames    = [];   // ISO-tijdstrings (oud → nieuw)
+let _satIdx       = -1;
+let _satPlaying   = true;
+let _satAnimT     = null;
+let _satRefreshT  = null;
+
+function _satBuildFrameTimes() {
+  const latest = new Date();
+  latest.setUTCSeconds(0, 0);
+  latest.setUTCMinutes(Math.floor(latest.getUTCMinutes() / 10) * 10);   // op 10-min raster
+  latest.setUTCMinutes(latest.getUTCMinutes() - SAT_LAG_MIN);
+  const n = Math.round(SAT_SPAN_MIN / SAT_STEP_MIN);
+  const frames = [];
+  for (let i = n; i >= 0; i--) {
+    const t = new Date(latest);
+    t.setUTCMinutes(t.getUTCMinutes() - i * SAT_STEP_MIN);
+    frames.push(t.toISOString().replace(/\.\d{3}Z$/, 'Z'));
+  }
+  return frames;
+}
+
+function _satWmsUrl(timeIso) {
+  const p = new URLSearchParams({
+    SERVICE: 'WMS', REQUEST: 'GetMap', VERSION: '1.3.0',
+    LAYERS: SAT_LAYER, STYLES: '',
+    CRS: 'EPSG:4326', BBOX: '40,-15,64,25',
+    WIDTH: '900', HEIGHT: '540',
+    FORMAT: 'image/png', TRANSPARENT: 'TRUE',
+    TIME: timeIso,
+  });
+  return `${SAT_WMS}?${p}`;
+}
+
+function _satBuildLayers() {
+  _satFrames = _satBuildFrameTimes();
+  _satLayers.forEach(l => _satMap && _satMap.removeLayer(l));
+  _satLayers = [];
+  _satIdx    = -1;
+  _satFrames.forEach(t => {
+    const layer = L.imageOverlay(_satWmsUrl(t), SAT_BOUNDS, {
+      opacity: 0, className: 'sat-frame', crossOrigin: 'anonymous', zIndex: 10,
+    });
+    if (_satMap) layer.addTo(_satMap);
+    _satLayers.push(layer);
+  });
+}
+
+// instant=true: meteen wisselen (voor slider-scrubbing)
+function _satShowFrame(idx, instant = false) {
+  if (!_satLayers.length || idx < 0 || idx >= _satLayers.length) return;
+  const old = _satIdx;
+  _satIdx = idx;
+  _satLayers[idx].setOpacity(1);
+
+  document.getElementById('satelliet-slider').value = idx;
+  const d = new Date(_satFrames[idx]);
+  document.getElementById('satelliet-time').textContent =
+    d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
+  if (activeLayer === 'satelliet') {
+    const latest = new Date(_satFrames[_satFrames.length - 1]);
+    setStatus('ok', `MTG satelliet · tot ${latest.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' })}`);
+  }
+
+  if (old < 0 || old === idx || old >= _satLayers.length) return;
+  const oldL = _satLayers[old];
+  if (instant) { oldL.setOpacity(0); return; }
+  // Oud frame pas verbergen als het nieuwe (ondoorzichtige) frame erover ligt
+  setTimeout(() => { if (_satIdx !== old) oldL.setOpacity(0); }, 260);
+}
+
+function _satStep() {
+  if (!_satLayers.length) return;
+  _satShowFrame((_satIdx + 1) % _satLayers.length);
+}
+
+function _satStartAnim() {
+  if (_satAnimT) return;
+  _satAnimT = setInterval(_satStep, SAT_INTERVAL_MS);
+  _satPlaying = true;
+  document.getElementById('satelliet-play-icon').innerHTML = '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
+}
+
+function _satPauseAnim() {
+  if (_satAnimT) { clearInterval(_satAnimT); _satAnimT = null; }
+  _satPlaying = false;
+  document.getElementById('satelliet-play-icon').innerHTML = '<polygon points="5 3 19 12 5 21 5 3"/>';
+}
+
+function startSatelliet() {
+  setStatus('loading', 'Satelliet laden…');
+
+  if (!_satMap) {
+    _satMap = L.map('satelliet-map', {
+      center: [54, 5], zoom: 5, minZoom: 3,
+      zoomControl: true, scrollWheelZoom: true,
+    });
+    _satMap.zoomControl.setPosition('topright');
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://carto.com/">CARTO</a> · Satelliet &copy; <a href="https://www.eumetsat.int/">EUMETSAT</a> (MTG)',
+      subdomains: 'abcd', maxZoom: 10,
+    }).addTo(_satMap);
+
+    document.getElementById('satelliet-play').addEventListener('click', () => {
+      if (_satPlaying) _satPauseAnim(); else _satStartAnim();
+    });
+
+    let _satRaf = null, _satScrubT = null;
+    const satMapEl = document.getElementById('satelliet-map');
+    document.getElementById('satelliet-slider').addEventListener('input', e => {
+      _satPauseAnim();
+      const idx = parseInt(e.target.value);
+      satMapEl.classList.add('scrubbing');
+      clearTimeout(_satScrubT);
+      _satScrubT = setTimeout(() => satMapEl.classList.remove('scrubbing'), 300);
+      if (_satRaf) cancelAnimationFrame(_satRaf);
+      _satRaf = requestAnimationFrame(() => { _satRaf = null; _satShowFrame(idx, true); });
+    });
+  }
+
+  _satBuildLayers();
+  if (!_satLayers.length) { setStatus('error', 'Satelliet niet beschikbaar'); return; }
+  document.getElementById('satelliet-slider').max = _satLayers.length - 1;
+  _satShowFrame(_satLayers.length - 1);
+  _satStartAnim();
+
+  // Elke 10 minuten nieuwe frames ophalen
+  if (_satRefreshT) clearInterval(_satRefreshT);
+  _satRefreshT = setInterval(() => {
+    if (activeLayer !== 'satelliet') return;
+    _satBuildLayers();
+    document.getElementById('satelliet-slider').max = _satLayers.length - 1;
+    _satShowFrame(_satLayers.length - 1);
+  }, 10 * 60 * 1000);
+}
+
+function stopSatelliet() {
+  _satPauseAnim();
+  if (_satRefreshT) { clearInterval(_satRefreshT); _satRefreshT = null; }
 }
 
 // ── Stormen (orkanen, tyfonen, cyclonen) ──────────────────────────────────────
