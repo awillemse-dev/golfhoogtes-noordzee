@@ -5643,6 +5643,12 @@ const SAT_WMS        = 'https://view.eumetsat.int/geoserver/mtg_fd/rgb_geocolour
 const SAT_LAYER      = 'mtg_fd:rgb_geocolour';
 const SAT_WMS_HRFI   = 'https://view.eumetsat.int/geoserver/mtg_fd/vis06_hrfi/ows';
 const SAT_LAYER_HRFI = 'mtg_fd:vis06_hrfi';
+// IR 10.5 µm (HRFI, ~1 km): thermisch kanaal. Koude, hoge dunne bewolking
+// (cirrus, sluier, vliegtuigstrepen) licht hierin fel op — in VIS is die vrijwel
+// onzichtbaar. Overdag als 'sandwich' (screen) over het scherpe VIS-beeld.
+const SAT_WMS_IR     = 'https://view.eumetsat.int/geoserver/mtg_fd/ir105_hrfi/ows';
+const SAT_LAYER_IR   = 'mtg_fd:ir105_hrfi';
+const SAT_IR_OPACITY = 0.5;   // sterkte van de IR-sandwich overdag
 const SAT_REF_LAT    = 54;    // referentiepunt Noordzee voor dag/nacht-bepaling
 const SAT_REF_LON    = 4;
 const SAT_DAY_ELEV   = 3;     // ° zonshoogte: hierboven is VIS bruikbaar
@@ -5672,6 +5678,7 @@ function _solarElevationDeg(date, lat, lon) {
 
 let _satMap       = null;
 let _satLayers    = [];   // WMS-tilelaag per frame (oud → nieuw)
+let _satIrLayers  = [];   // IR 10.5 sandwich-overlay per frame (dag) of null (nacht)
 let _satFrames    = [];   // ISO-tijdstrings (oud → nieuw)
 let _satIdx       = -1;
 let _satPlaying   = true;
@@ -5696,8 +5703,10 @@ function _satBuildFrameTimes() {
 function _satBuildLayers() {
   _satFrames = _satBuildFrameTimes();
   _satLayers.forEach(l => _satMap && _satMap.removeLayer(l));
-  _satLayers = [];
-  _satIdx    = -1;
+  _satIrLayers.forEach(l => l && _satMap && _satMap.removeLayer(l));
+  _satLayers   = [];
+  _satIrLayers = [];
+  _satIdx      = -1;
   _satFrames.forEach(t => {
     const day = _solarElevationDeg(new Date(t), SAT_REF_LAT, SAT_REF_LON) > SAT_DAY_ELEV;
     const cfg = day
@@ -5725,6 +5734,30 @@ function _satBuildLayers() {
     layer.on('load',    () => { layer._satLoaded = true;  });
     if (_satMap) layer.addTo(_satMap);
     _satLayers.push(layer);
+
+    // Overdag: IR 10.5 sandwich-overlay (screen) → hoge dunne bewolking zichtbaar.
+    if (day) {
+      const ir = L.tileLayer.wms(SAT_WMS_IR, {
+        layers:      SAT_LAYER_IR,
+        styles:      '',
+        format:      'image/png',
+        transparent: true,
+        version:     '1.3.0',
+        time:        t,
+        tileSize:    512,
+        opacity:     0,
+        pane:        'satImg',
+        className:   'sat-frame sat-day',
+        crossOrigin: 'anonymous',
+        updateWhenZooming: false,
+        maxNativeZoom: 10,
+        maxZoom:     12,
+      });
+      if (_satMap) ir.addTo(_satMap);
+      _satIrLayers.push(ir);
+    } else {
+      _satIrLayers.push(null);
+    }
   });
 }
 
@@ -5733,15 +5766,17 @@ function _satShowFrame(idx, instant = false) {
   if (!_satLayers.length || idx < 0 || idx >= _satLayers.length) return;
   const old = _satIdx;
   const newLayer = _satLayers[idx];
+  const newIr = _satIrLayers[idx];
   _satIdx = idx;
   newLayer.setOpacity(1);
+  if (newIr) newIr.setOpacity(SAT_IR_OPACITY);
 
   document.getElementById('satelliet-slider').value = idx;
   const d = new Date(_satFrames[idx]);
   document.getElementById('satelliet-time').textContent =
     d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
   document.getElementById('satelliet-source').textContent = newLayer._satDay
-    ? 'Bron: EUMETSAT · MTG VIS 0.6 HRFI (0,5 km)'
+    ? 'Bron: EUMETSAT · MTG VIS 0.6 + IR 10.5 (0,5 km)'
     : 'Bron: EUMETSAT · MTG GeoColour (nacht)';
   if (activeLayer === 'satelliet') {
     const latest = new Date(_satFrames[_satFrames.length - 1]);
@@ -5750,18 +5785,19 @@ function _satShowFrame(idx, instant = false) {
 
   if (old < 0 || old === idx || old >= _satLayers.length) return;
   const oldL = _satLayers[old];
-  if (instant) { oldL.setOpacity(0); return; }
+  const oldIr = _satIrLayers[old];
+  if (instant) { oldL.setOpacity(0); if (oldIr) oldIr.setOpacity(0); return; }
 
   // Oud frame pas verbergen als het nieuwe frame geladen is (voorkomt lege kaart)
   if (newLayer._satLoaded) {
-    setTimeout(() => { if (_satIdx !== old) oldL.setOpacity(0); }, 260);
+    setTimeout(() => { if (_satIdx !== old) { oldL.setOpacity(0); if (oldIr) oldIr.setOpacity(0); } }, 260);
   } else {
     let resolved = false;
     const hideOld = () => {
       if (resolved) return;
       resolved = true;
       newLayer.off('load', hideOld);
-      if (_satIdx !== old) oldL.setOpacity(0);
+      if (_satIdx !== old) { oldL.setOpacity(0); if (oldIr) oldIr.setOpacity(0); }
     };
     newLayer.on('load', hideOld);
     setTimeout(hideOld, 6000);
