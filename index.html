@@ -5654,6 +5654,7 @@ function _solarElevationDeg(date, lat, lon) {
 }
 
 let _satMap       = null;
+let _satCoastLayer = null; // dikke kustlijn-vectorlaag
 let _satLayers    = [];   // WMS-tilelaag per frame (oud → nieuw)
 let _satFrames    = [];   // ISO-tijdstrings (oud → nieuw)
 let _satIdx       = -1;
@@ -5674,6 +5675,35 @@ function _satBuildFrameTimes() {
     frames.push(t.toISOString().replace(/\.\d{3}Z$/, 'Z'));
   }
   return frames;
+}
+
+// Doorschijnende land/zee-tint + dikke kustlijn bovenop het beeld (Natural Earth 50m).
+async function _satAddCoast() {
+  if (_satCoastLayer || !_satMap) return;
+  // Blauwe zee-tint over het hele beeld (doorschijnend → wolken blijven zichtbaar)
+  L.rectangle([[-85, -179.9], [85, 179.9]], {
+    stroke: false, fillColor: '#1668c9', fillOpacity: 0.22, interactive: false,
+  }).addTo(_satMap);
+  try {
+    const topo = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/land-50m.json').then(r => r.json());
+    const geo  = topojson.feature(topo, topo.objects.land);
+    // Groene land-tint bovenop de zee-tint
+    L.geoJSON(geo, {
+      interactive: false,
+      style: { stroke: false, fillColor: '#2f9e44', fillOpacity: 0.33 },
+    }).addTo(_satMap);
+    // Dikke kustlijn: donkere rand + heldere lijn → "vet gedrukt" en goed leesbaar
+    L.geoJSON(geo, {
+      interactive: false,
+      style: { color: '#0b1220', weight: 5, opacity: 0.55, fill: false, lineJoin: 'round' },
+    }).addTo(_satMap);
+    _satCoastLayer = L.geoJSON(geo, {
+      interactive: false,
+      style: { color: '#eafcff', weight: 2.5, opacity: 0.95, fill: false, lineJoin: 'round' },
+    }).addTo(_satMap);
+  } catch (e) {
+    console.error('[sat] kustlijn laden mislukt', e);
+  }
 }
 
 function _satBuildLayers() {
@@ -5790,6 +5820,8 @@ function startSatelliet() {
       attribution: 'Grenzen &copy; <a href="https://www.esri.com/">Esri</a>',
       zIndex: 20, maxZoom: 11, opacity: 0.9,
     }).addTo(_satMap);
+
+    _satAddCoast();   // dikke kustlijn erover
 
     document.getElementById('satelliet-play').addEventListener('click', () => {
       if (_satPlaying) _satPauseAnim(); else _satStartAnim();
