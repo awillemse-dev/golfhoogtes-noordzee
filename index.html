@@ -5782,8 +5782,14 @@ function startSatelliet() {
     // Panes bepalen de stapelvolgorde:
     //   satBase (grondbeeld) → satImg (live wolken, blend 'screen') → satRef (labels)
     _satMap.createPane('satBase'); _satMap.getPane('satBase').style.zIndex = 205;
+    // Grondbeeld flink donkerder + minder verzadigd, zodat de wolken er straks
+    // fel wit bovenuit springen (zoals Zoom Earth). Anders verdwijnen dunne
+    // wolken tegen het lichte, felgroene/blauwe satellietmozaïek.
+    _satMap.getPane('satBase').style.filter = 'brightness(0.5) saturate(0.8)';
     _satMap.createPane('satImg');  _satMap.getPane('satImg').style.zIndex  = 300;
     _satMap.getPane('satImg').style.mixBlendMode = 'screen';   // wolken lichten fel op
+    // Extra contrast + helderheid op de wolkenlaag → ook dunne bewolking valt op.
+    _satMap.getPane('satImg').style.filter = 'contrast(1.4) brightness(1.25)';
     _satMap.createPane('satRef');  _satMap.getPane('satRef').style.zIndex  = 350;
 
     // Grondbeeld: echt satelliet-mozaïek van land én zee (zoals Zoom Earth / Imweather).
