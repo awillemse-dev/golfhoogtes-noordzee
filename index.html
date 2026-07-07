@@ -5654,7 +5654,6 @@ function _solarElevationDeg(date, lat, lon) {
 }
 
 let _satMap       = null;
-let _satCoastLayer = null; // dikke kustlijn-vectorlaag
 let _satLayers    = [];   // WMS-tilelaag per frame (oud → nieuw)
 let _satFrames    = [];   // ISO-tijdstrings (oud → nieuw)
 let _satIdx       = -1;
@@ -5675,37 +5674,6 @@ function _satBuildFrameTimes() {
     frames.push(t.toISOString().replace(/\.\d{3}Z$/, 'Z'));
   }
   return frames;
-}
-
-// Gekleurde ondergrond (zee blauw, land groen) ONDER het beeld + dikke kustlijn erover.
-// Het satellietbeeld ligt met blend-mode 'screen' erover: donkere zee/land tonen de
-// kleur, wolken (helder) lichten juist fel wit op → wolken blijven goed zichtbaar.
-async function _satAddCoast() {
-  if (_satCoastLayer || !_satMap) return;
-  // Blauwe zee als volledige ondergrond (opaak, in de kleur-pane onder het beeld)
-  L.rectangle([[-85, -179.9], [85, 179.9]], {
-    stroke: false, fillColor: '#0f5aa8', fillOpacity: 1, interactive: false, pane: 'satBase',
-  }).addTo(_satMap);
-  try {
-    const topo = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/land-50m.json').then(r => r.json());
-    const geo  = topojson.feature(topo, topo.objects.land);
-    // Groen land bovenop de zee-ondergrond (nog steeds onder het beeld)
-    L.geoJSON(geo, {
-      interactive: false, pane: 'satBase',
-      style: { stroke: false, fillColor: '#2f8f43', fillOpacity: 1 },
-    }).addTo(_satMap);
-    // Dikke kustlijn bovenóp het beeld: donkere rand + heldere lijn → "vet gedrukt"
-    L.geoJSON(geo, {
-      interactive: false,
-      style: { color: '#0b1220', weight: 5, opacity: 0.55, fill: false, lineJoin: 'round' },
-    }).addTo(_satMap);
-    _satCoastLayer = L.geoJSON(geo, {
-      interactive: false,
-      style: { color: '#eafcff', weight: 2.5, opacity: 0.95, fill: false, lineJoin: 'round' },
-    }).addTo(_satMap);
-  } catch (e) {
-    console.error('[sat] kustlijn laden mislukt', e);
-  }
 }
 
 function _satBuildLayers() {
@@ -5812,19 +5780,24 @@ function startSatelliet() {
     _satMap.zoomControl.setPosition('topright');
 
     // Panes bepalen de stapelvolgorde:
-    //   satBase (kleur) → satImg (beeld, blend 'screen') → satRef (labels) → coastline (overlayPane)
+    //   satBase (grondbeeld) → satImg (live wolken, blend 'screen') → satRef (labels)
     _satMap.createPane('satBase'); _satMap.getPane('satBase').style.zIndex = 205;
     _satMap.createPane('satImg');  _satMap.getPane('satImg').style.zIndex  = 300;
     _satMap.getPane('satImg').style.mixBlendMode = 'screen';   // wolken lichten fel op
     _satMap.createPane('satRef');  _satMap.getPane('satRef').style.zIndex  = 350;
 
-    // Referentielaag: kustlijnen, landsgrenzen en plaatsnamen (witte labels met rand).
-    L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
-      attribution: 'Satelliet &copy; <a href="https://www.eumetsat.int/">EUMETSAT</a> (MTG) · Grenzen &copy; <a href="https://www.esri.com/">Esri</a>',
-      pane: 'satRef', maxZoom: 11, opacity: 0.9,
+    // Grondbeeld: echt satelliet-mozaïek van land én zee (zoals Zoom Earth / Imweather).
+    // Bij heldere hemel zie je de echte grond; de live MTG-wolken liggen er blend overheen.
+    L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Grondbeeld &copy; <a href="https://www.esri.com/">Esri</a> · Satelliet &copy; <a href="https://www.eumetsat.int/">EUMETSAT</a> (MTG)',
+      pane: 'satBase', maxZoom: 11,
     }).addTo(_satMap);
 
-    _satAddCoast();   // gekleurde ondergrond + dikke kustlijn
+    // Referentielaag: landsgrenzen en plaatsnamen (witte labels met rand).
+    L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Grenzen &copy; <a href="https://www.esri.com/">Esri</a>',
+      pane: 'satRef', maxZoom: 11, opacity: 0.9,
+    }).addTo(_satMap);
 
     document.getElementById('satelliet-play').addEventListener('click', () => {
       if (_satPlaying) _satPauseAnim(); else _satStartAnim();
