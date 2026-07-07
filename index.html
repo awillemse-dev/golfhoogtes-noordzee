@@ -378,10 +378,11 @@
     }
     .sat-frame { transition: opacity 0.25s ease; }
     #satelliet-map.scrubbing .sat-frame { transition: none !important; }
+    /* url(#satSharpen) = niet-destructieve verscherping (lighten): scherper zonder wolkenverlies. */
     /* Dag (HRFI 0,5 km): fors contrast → wolken springen fel wit uit tegen de donkere grond. */
-    .sat-day   { filter: contrast(1.75) brightness(1.2); }
+    .sat-day   { filter: url(#satSharpen) contrast(1.75) brightness(1.2); }
     /* Nacht (GeoColour): getemperd → wit niet overbelicht, wolken toch zichtbaar. */
-    .sat-night { filter: contrast(1.1) brightness(0.85); }
+    .sat-night { filter: url(#satSharpen) contrast(1.1) brightness(0.85); }
 
     /* Radar legenda (Leaflet control) */
     .radar-legend {
@@ -1273,6 +1274,18 @@
 
     <!-- Satellietpaneel (MTG) -->
     <div id="satelliet-panel">
+      <!-- Niet-destructieve verscherping op de MTG-beelden.
+           feConvolveMatrix = unsharp-mask, maar we blenden het resultaat met de
+           bron via 'lighten' (per pixel het helderste). Randen/structuur worden
+           scherper, maar geen enkel pixel wordt donkerder → op de screen-blend
+           wolkenlaag kan zo GEEN bewolking verloren gaan. -->
+      <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+        <filter id="satSharpen" color-interpolation-filters="sRGB">
+          <feConvolveMatrix order="3" preserveAlpha="true"
+            kernelMatrix="0 -0.5 0  -0.5 3 -0.5  0 -0.5 0" result="sharp"/>
+          <feBlend in="SourceGraphic" in2="sharp" mode="lighten"/>
+        </filter>
+      </svg>
       <div id="satelliet-map"></div>
       <div id="satelliet-controls">
         <button id="satelliet-play" title="Afspelen / pauzeren">
