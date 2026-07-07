@@ -5620,17 +5620,41 @@ function stopRadar() {
 }
 
 // ── Satelliet (Meteosat Third Generation, EUMETSAT) ────────────────────────────
-// Bron: EUMETSAT View WMS — MTG-I1 FCI GeoColour (dag/nacht-blend), 10-min frames.
+// Bron: EUMETSAT View WMS — getegeld, MTG-I1 FCI, 10-min frames.
+// Overdag: VIS 0.6 HRFI (~0,5 km/px, hoge detail). 's Nachts: GeoColour (dag/nacht-blend).
 const SAT_WMS        = 'https://view.eumetsat.int/geoserver/mtg_fd/rgb_geocolour/ows';
 const SAT_LAYER      = 'mtg_fd:rgb_geocolour';
-const SAT_BOUNDS     = [[40, -15], [64, 25]];   // Noordzee/Europa
+const SAT_WMS_HRFI   = 'https://view.eumetsat.int/geoserver/mtg_fd/vis06_hrfi/ows';
+const SAT_LAYER_HRFI = 'mtg_fd:vis06_hrfi';
+const SAT_REF_LAT    = 54;    // referentiepunt Noordzee voor dag/nacht-bepaling
+const SAT_REF_LON    = 4;
+const SAT_DAY_ELEV   = 3;     // ° zonshoogte: hierboven is VIS bruikbaar
 const SAT_STEP_MIN   = 20;    // minuten tussen frames
 const SAT_SPAN_MIN   = 180;   // afgelopen 3 uur
 const SAT_LAG_MIN    = 30;    // publicatievertraging MTG
 const SAT_INTERVAL_MS = 700;  // ms per frame tijdens afspelen
 
+// Zonshoogte (°) op een tijdstip/plek — NOAA-benadering.
+function _solarElevationDeg(date, lat, lon) {
+  const rad = Math.PI / 180;
+  const start = Date.UTC(date.getUTCFullYear(), 0, 0);
+  const dayOfYear = Math.floor((date - start) / 86400000);
+  const hoursUTC = date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600;
+  const g = 2 * Math.PI / 365 * (dayOfYear - 1 + (hoursUTC - 12) / 24);
+  const eqtime = 229.18 * (0.000075 + 0.001868 * Math.cos(g) - 0.032077 * Math.sin(g)
+    - 0.014615 * Math.cos(2 * g) - 0.040849 * Math.sin(2 * g));
+  const decl = 0.006918 - 0.399912 * Math.cos(g) + 0.070257 * Math.sin(g)
+    - 0.006758 * Math.cos(2 * g) + 0.000907 * Math.sin(2 * g)
+    - 0.002697 * Math.cos(3 * g) + 0.00148 * Math.sin(3 * g);
+  const tst = hoursUTC * 60 + eqtime + 4 * lon;
+  const ha = (tst / 4 - 180) * rad;
+  const latR = lat * rad;
+  const cosZen = Math.sin(latR) * Math.sin(decl) + Math.cos(latR) * Math.cos(decl) * Math.cos(ha);
+  return 90 - Math.acos(Math.min(1, Math.max(-1, cosZen))) / rad;
+}
+
 let _satMap       = null;
-let _satLayers    = [];   // imageOverlay per frame (oud → nieuw)
+let _satLayers    = [];   // WMS-tilelaag per frame (oud → nieuw)
 let _satFrames    = [];   // ISO-tijdstrings (oud → nieuw)
 let _satIdx       = -1;
 let _satPlaying   = true;
@@ -5652,27 +5676,36 @@ function _satBuildFrameTimes() {
   return frames;
 }
 
-function _satWmsUrl(timeIso) {
-  const p = new URLSearchParams({
-    SERVICE: 'WMS', REQUEST: 'GetMap', VERSION: '1.3.0',
-    LAYERS: SAT_LAYER, STYLES: '',
-    CRS: 'EPSG:4326', BBOX: '40,-15,64,25',
-    WIDTH: '900', HEIGHT: '540',
-    FORMAT: 'image/png', TRANSPARENT: 'TRUE',
-    TIME: timeIso,
-  });
-  return `${SAT_WMS}?${p}`;
-}
-
 function _satBuildLayers() {
   _satFrames = _satBuildFrameTimes();
   _satLayers.forEach(l => _satMap && _satMap.removeLayer(l));
   _satLayers = [];
   _satIdx    = -1;
   _satFrames.forEach(t => {
-    const layer = L.imageOverlay(_satWmsUrl(t), SAT_BOUNDS, {
-      opacity: 0, className: 'sat-frame', crossOrigin: 'anonymous', zIndex: 10,
+    const day = _solarElevationDeg(new Date(t), SAT_REF_LAT, SAT_REF_LON) > SAT_DAY_ELEV;
+    const cfg = day
+      ? { url: SAT_WMS_HRFI, layer: SAT_LAYER_HRFI, maxNative: 10 }  // VIS 0.6 HRFI ≈ 0,5 km
+      : { url: SAT_WMS,      layer: SAT_LAYER,      maxNative: 8 };   // GeoColour ≈ 2 km
+    const layer = L.tileLayer.wms(cfg.url, {
+      layers:      cfg.layer,
+      styles:      '',
+      format:      'image/png',
+      transparent: true,
+      version:     '1.3.0',
+      time:        t,               // → wordt als WMS TIME-parameter meegestuurd
+      tileSize:    512,
+      opacity:     0,
+      zIndex:      10,
+      className:   'sat-frame',
+      crossOrigin: 'anonymous',
+      updateWhenZooming: false,
+      maxNativeZoom: cfg.maxNative,
+      maxZoom:     11,
     });
+    layer._satDay = day;
+    layer._satLoaded = true;
+    layer.on('loading', () => { layer._satLoaded = false; });
+    layer.on('load',    () => { layer._satLoaded = true;  });
     if (_satMap) layer.addTo(_satMap);
     _satLayers.push(layer);
   });
@@ -5682,13 +5715,17 @@ function _satBuildLayers() {
 function _satShowFrame(idx, instant = false) {
   if (!_satLayers.length || idx < 0 || idx >= _satLayers.length) return;
   const old = _satIdx;
+  const newLayer = _satLayers[idx];
   _satIdx = idx;
-  _satLayers[idx].setOpacity(1);
+  newLayer.setOpacity(1);
 
   document.getElementById('satelliet-slider').value = idx;
   const d = new Date(_satFrames[idx]);
   document.getElementById('satelliet-time').textContent =
     d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
+  document.getElementById('satelliet-source').textContent = newLayer._satDay
+    ? 'Bron: EUMETSAT · MTG VIS 0.6 HRFI (0,5 km)'
+    : 'Bron: EUMETSAT · MTG GeoColour (nacht)';
   if (activeLayer === 'satelliet') {
     const latest = new Date(_satFrames[_satFrames.length - 1]);
     setStatus('ok', `MTG satelliet · tot ${latest.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' })}`);
@@ -5697,8 +5734,21 @@ function _satShowFrame(idx, instant = false) {
   if (old < 0 || old === idx || old >= _satLayers.length) return;
   const oldL = _satLayers[old];
   if (instant) { oldL.setOpacity(0); return; }
-  // Oud frame pas verbergen als het nieuwe (ondoorzichtige) frame erover ligt
-  setTimeout(() => { if (_satIdx !== old) oldL.setOpacity(0); }, 260);
+
+  // Oud frame pas verbergen als het nieuwe frame geladen is (voorkomt lege kaart)
+  if (newLayer._satLoaded) {
+    setTimeout(() => { if (_satIdx !== old) oldL.setOpacity(0); }, 260);
+  } else {
+    let resolved = false;
+    const hideOld = () => {
+      if (resolved) return;
+      resolved = true;
+      newLayer.off('load', hideOld);
+      if (_satIdx !== old) oldL.setOpacity(0);
+    };
+    newLayer.on('load', hideOld);
+    setTimeout(hideOld, 6000);
+  }
 }
 
 function _satStep() {
@@ -5724,14 +5774,14 @@ function startSatelliet() {
 
   if (!_satMap) {
     _satMap = L.map('satelliet-map', {
-      center: [54, 5], zoom: 5, minZoom: 3,
+      center: [54, 5], zoom: 5, minZoom: 3, maxZoom: 11,
       zoomControl: true, scrollWheelZoom: true,
     });
     _satMap.zoomControl.setPosition('topright');
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; <a href="https://carto.com/">CARTO</a> · Satelliet &copy; <a href="https://www.eumetsat.int/">EUMETSAT</a> (MTG)',
-      subdomains: 'abcd', maxZoom: 10,
+      subdomains: 'abcd', maxZoom: 11,
     }).addTo(_satMap);
 
     document.getElementById('satelliet-play').addEventListener('click', () => {
