@@ -5784,6 +5784,13 @@ function startSatelliet() {
       subdomains: 'abcd', maxZoom: 11,
     }).addTo(_satMap);
 
+    // Referentielaag bóven het satellietbeeld: kustlijnen, landsgrenzen en plaatsnamen
+    // (witte labels met donkere rand → leesbaar op zowel donkere zee als lichte wolken).
+    L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Grenzen &copy; <a href="https://www.esri.com/">Esri</a>',
+      zIndex: 20, maxZoom: 11, opacity: 0.9,
+    }).addTo(_satMap);
+
     document.getElementById('satelliet-play').addEventListener('click', () => {
       if (_satPlaying) _satPauseAnim(); else _satStartAnim();
     });
