@@ -378,6 +378,10 @@
     }
     .sat-frame { transition: opacity 0.25s ease; }
     #satelliet-map.scrubbing .sat-frame { transition: none !important; }
+    /* Dag (HRFI 0,5 km): fors contrast → wolken springen fel wit uit tegen de donkere grond. */
+    .sat-day   { filter: contrast(1.75) brightness(1.2); }
+    /* Nacht (GeoColour): getemperd → wit niet overbelicht, wolken toch zichtbaar. */
+    .sat-night { filter: contrast(1.1) brightness(0.85); }
 
     /* Radar legenda (Leaflet control) */
     .radar-legend {
@@ -5695,8 +5699,8 @@ function _satBuildLayers() {
       time:        t,               // → wordt als WMS TIME-parameter meegestuurd
       tileSize:    512,
       opacity:     0,
-      pane:        'satImg',        // blend-pane: 'screen' over de gekleurde ondergrond
-      className:   'sat-frame',
+      pane:        'satImg',        // blend-pane: 'screen' over het grondbeeld
+      className:   'sat-frame ' + (day ? 'sat-day' : 'sat-night'),
       crossOrigin: 'anonymous',
       updateWhenZooming: false,
       maxNativeZoom: cfg.maxNative,
@@ -5788,8 +5792,8 @@ function startSatelliet() {
     _satMap.getPane('satBase').style.filter = 'brightness(0.5) saturate(0.8)';
     _satMap.createPane('satImg');  _satMap.getPane('satImg').style.zIndex  = 300;
     _satMap.getPane('satImg').style.mixBlendMode = 'screen';   // wolken lichten fel op
-    // Extra contrast + helderheid op de wolkenlaag → ook dunne bewolking valt op.
-    _satMap.getPane('satImg').style.filter = 'contrast(1.4) brightness(1.25)';
+    // Contrast/helderheid staat per frame ingesteld via .sat-day / .sat-night
+    // (dag = HRFI, fel contrast; nacht = GeoColour, getemperd tegen overbelichting).
     _satMap.createPane('satRef');  _satMap.getPane('satRef').style.zIndex  = 350;
 
     // Grondbeeld: echt satelliet-mozaïek van land én zee (zoals Zoom Earth / Imweather).
