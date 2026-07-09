@@ -460,7 +460,7 @@
       display: none;
       position: absolute;
       top: 12px; right: 12px; bottom: 62px;
-      width: min(480px, 46vw);
+      width: min(720px, 62vw);
       background: rgba(255,255,255,0.97);
       border: 1px solid var(--border);
       border-radius: 12px;
@@ -487,8 +487,8 @@
       display: flex; align-items: center; justify-content: center; flex-shrink: 0;
     }
     #sounding-detail-close:hover { background: var(--surface); color: var(--text); }
-    #sounding-detail-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px 10px; }
-    #sounding-canvas { width: 100%; height: auto; display: block; }
+    #sounding-detail-body { flex: 1; min-height: 0; overflow: hidden; padding: 8px 10px 10px; display: flex; align-items: center; justify-content: center; }
+    #sounding-canvas { max-width: 100%; max-height: 100%; width: auto; height: auto; display: block; }
     #sounding-detail-msg { padding: 24px 12px; text-align: center; color: var(--text-dim); font-size: 0.78rem; }
 
     /* Radar legenda (Leaflet control) */
