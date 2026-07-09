@@ -394,7 +394,7 @@
       position: relative;
     }
     #sounding-panel.active { display: flex; }
-    #sounding-map { flex: 1; min-height: 0; background: #0b1220; }
+    #sounding-map { flex: 1; min-height: 0; background: #dce8f1; }
     #sounding-controls {
       flex-shrink: 0;
       background: var(--surface);
@@ -428,16 +428,32 @@
     #sounding-source { font-size: 0.62rem; color: var(--text-muted); white-space: nowrap; }
     #sounding-count  { font-size: 0.62rem; color: var(--text-dim); margin-left: auto; white-space: nowrap; }
     .snd-marker-tip {
-      background: rgba(12,26,43,0.92);
+      background: rgba(255,255,255,0.96);
       border: 1px solid var(--border);
       color: var(--text);
       font-size: 0.68rem;
       font-weight: 600;
       padding: 3px 7px;
       border-radius: 6px;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+      box-shadow: 0 4px 14px rgba(15,23,42,0.18);
     }
     .snd-marker-tip::before { display: none; }
+    /* Permanente plaatsnaam-labels bij de stations (alleen zichtbaar bij inzoomen) */
+    .snd-label {
+      background: rgba(255,255,255,0.82);
+      border: none;
+      color: #0f172a;
+      font-size: 0.6rem;
+      font-weight: 600;
+      padding: 1px 4px;
+      border-radius: 4px;
+      box-shadow: 0 1px 3px rgba(15,23,42,0.16);
+      white-space: nowrap;
+      pointer-events: none;
+      display: none;
+    }
+    .snd-label::before { display: none; }
+    #sounding-map.snd-show-labels .snd-label { display: block; }
 
     /* Detail-overlay met Skew-T */
     #sounding-detail {
@@ -445,10 +461,10 @@
       position: absolute;
       top: 12px; right: 12px; bottom: 62px;
       width: min(480px, 46vw);
-      background: rgba(10,16,26,0.96);
+      background: rgba(255,255,255,0.97);
       border: 1px solid var(--border);
       border-radius: 12px;
-      box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+      box-shadow: 0 12px 40px rgba(15,23,42,0.22);
       flex-direction: column;
       overflow: hidden;
       z-index: 500;
@@ -6067,11 +6083,20 @@ function startSounding() {
       zoomControl: true, worldCopyJump: true, preferCanvas: true,
     });
     _sndMap.zoomControl.setPosition('topright');
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a> · Soundings: <a href="https://weather.uwyo.edu/upperair/sounding.shtml">Univ. of Wyoming</a>',
-      subdomains: 'abcd', maxZoom: 8,
+    // Zelfde ondergrond als de Golfhoogte-tab (ArcGIS Ocean, lichte modus)
+    L.tileLayer('https://services.arcgisonline.com/arcgis/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', {
+      attribution:
+        '&copy; <a href="https://www.esri.com/">Esri</a>, Garmin, GEBCO, NOAA NGDC | ' +
+        'Soundings: <a href="https://weather.uwyo.edu/upperair/sounding.shtml">Univ. of Wyoming</a>',
+      maxZoom: 13,
+    }).addTo(_sndMap);
+    L.tileLayer('https://services.arcgisonline.com/arcgis/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '', maxZoom: 13, opacity: 0.8,
     }).addTo(_sndMap);
     _sndMarkers = L.layerGroup().addTo(_sndMap);
+
+    // Plaatsnaam-labels alleen tonen bij voldoende zoom (anders te druk wereldwijd)
+    _sndMap.on('zoomend', _sndUpdateLabelVisibility);
 
     document.getElementById('sounding-prev').addEventListener('click', () => _sndShiftTime(-1));
     document.getElementById('sounding-next').addEventListener('click', () => _sndShiftTime(1));
@@ -6115,15 +6140,24 @@ function _sndPlotMarkers() {
   _sndMarkers.clearLayers();
   (_sndStations || []).forEach(st => {
     const m = L.circleMarker([st.lat, st.lon], {
-      radius: 4, weight: 1, color: '#0b1220',
-      fillColor: '#38bdf8', fillOpacity: 0.9,
+      radius: 4, weight: 1.5, color: '#ffffff',
+      fillColor: '#0284c7', fillOpacity: 0.95,
     });
-    m.bindTooltip(`${st.name || 'Station'} · ${st.id}`, {
-      className: 'snd-marker-tip', direction: 'top', offset: [0, -4],
+    // Permanente plaatsnaam bij het station (zichtbaar bij inzoomen)
+    m.bindTooltip(st.name || st.id, {
+      className: 'snd-label', permanent: true, direction: 'right', offset: [6, 0],
     });
     m.on('click', () => _sndOpenStation(st));
     m.addTo(_sndMarkers);
   });
+  _sndUpdateLabelVisibility();
+}
+
+// Toon plaatsnaam-labels alleen vanaf zoomniveau 4 (anders wereldwijd te druk)
+function _sndUpdateLabelVisibility() {
+  if (!_sndMap) return;
+  const el = document.getElementById('sounding-map');
+  if (el) el.classList.toggle('snd-show-labels', _sndMap.getZoom() >= 4);
 }
 
 function _sndCloseDetail() {
@@ -6173,8 +6207,8 @@ async function _sndOpenStation(st) {
 function _sndDrawLoading(cv) {
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, cv.width, cv.height);
-  ctx.fillStyle = '#0a101a'; ctx.fillRect(0, 0, cv.width, cv.height);
-  ctx.fillStyle = '#7b8ba3';
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = '#64748b';
   ctx.font = `${Math.round(cv.width * 0.028)}px Inter, system-ui, sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText('Sounding laden…', cv.width / 2, cv.height / 2);
@@ -6185,7 +6219,7 @@ function _sndDrawSkewT(cv, data) {
   const ctx = cv.getContext('2d');
   const W = cv.width, H = cv.height;
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#0a101a'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
 
   const padL = Math.round(W * 0.085), padR = Math.round(W * 0.155);
   const padT = Math.round(H * 0.03),  padB = Math.round(H * 0.055);
@@ -6210,7 +6244,7 @@ function _sndDrawSkewT(cv, data) {
   ctx.beginPath(); ctx.rect(x0, y0, plotW, plotH); ctx.clip();
   ctx.lineWidth = 1 * s;
   for (let T = -110; T <= 50; T += 10) {
-    ctx.strokeStyle = (T === 0) ? 'rgba(96,165,250,0.55)' : 'rgba(120,140,165,0.18)';
+    ctx.strokeStyle = (T === 0) ? 'rgba(37,99,235,0.45)' : 'rgba(71,105,140,0.16)';
     ctx.beginPath();
     ctx.moveTo(xT(T, y1), y1);
     ctx.lineTo(xT(T, y0), y0);
@@ -6221,8 +6255,8 @@ function _sndDrawSkewT(cv, data) {
   // Isobaren (horizontaal, standaardniveaus) + drukwaarden links
   const plevels = [1000, 850, 700, 500, 400, 300, 250, 200, 150, 100];
   ctx.lineWidth = 1 * s;
-  ctx.strokeStyle = 'rgba(120,140,165,0.28)';
-  ctx.fillStyle = '#93a4bd';
+  ctx.strokeStyle = 'rgba(71,105,140,0.28)';
+  ctx.fillStyle = '#475569';
   ctx.textAlign = 'right';
   plevels.forEach(p => {
     const y = yP(p);
@@ -6231,14 +6265,14 @@ function _sndDrawSkewT(cv, data) {
   });
 
   // Isotherm-labels op de onderrand
-  ctx.textAlign = 'center'; ctx.fillStyle = '#7b8ba3';
+  ctx.textAlign = 'center'; ctx.fillStyle = '#64748b';
   for (let T = -40; T <= 40; T += 10) {
     const x = xT(T, y1);
     if (x >= x0 && x <= x1) ctx.fillText(String(T), x, y1 + 16 * s);
   }
 
   // Kader
-  ctx.strokeStyle = 'rgba(160,180,205,0.45)'; ctx.lineWidth = 1.2 * s;
+  ctx.strokeStyle = 'rgba(71,105,140,0.5)'; ctx.lineWidth = 1.2 * s;
   ctx.strokeRect(x0, y0, plotW, plotH);
 
   const levels = data.levels;
@@ -6259,11 +6293,11 @@ function _sndDrawSkewT(cv, data) {
     if (started) ctx.stroke();
     ctx.restore();
   };
-  drawProfile('td', '#22c55e');
-  drawProfile('t',  '#ef4444');
+  drawProfile('td', '#16a34a');
+  drawProfile('t',  '#dc2626');
 
   // Windveren rechts (op standaard-drukniveaus, dichtstbijzijnde niveau)
-  ctx.strokeStyle = '#dbe4f0'; ctx.fillStyle = '#dbe4f0';
+  ctx.strokeStyle = '#1e293b'; ctx.fillStyle = '#1e293b';
   ctx.lineWidth = 1.6 * s;
   const barbP = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100];
   barbP.forEach(tp => {
@@ -6279,9 +6313,9 @@ function _sndDrawSkewT(cv, data) {
 
   // Legenda
   ctx.textAlign = 'left'; ctx.font = `${Math.round(13 * s)}px Inter, system-ui, sans-serif`;
-  ctx.fillStyle = '#ef4444'; ctx.fillText('■ Temperatuur', x0 + 6 * s, y0 + 14 * s);
-  ctx.fillStyle = '#22c55e'; ctx.fillText('■ Dauwpunt',    x0 + 6 * s, y0 + 32 * s);
-  ctx.fillStyle = '#7b8ba3';
+  ctx.fillStyle = '#dc2626'; ctx.fillText('■ Temperatuur', x0 + 6 * s, y0 + 14 * s);
+  ctx.fillStyle = '#16a34a'; ctx.fillText('■ Dauwpunt',    x0 + 6 * s, y0 + 32 * s);
+  ctx.fillStyle = '#64748b';
   ctx.textAlign = 'right';
   ctx.fillText('hPa', x0 - 6 * s, y0 + 8 * s);
   ctx.textAlign = 'center';
