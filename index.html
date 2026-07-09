@@ -5618,7 +5618,7 @@ async function _sndOpenStation(st) {
 
   try {
     const dt = _sndFmtDatetime(_sndSynoptic(_sndOffset));
-    const r  = await fetch(`${PROXY_URL}/api/sounding?id=${encodeURIComponent(st.id)}&datetime=${encodeURIComponent(dt)}`);
+    const r  = await fetch(`${PROXY_URL}/api/sounding?id=${encodeURIComponent(st.id)}&datetime=${encodeURIComponent(dt)}`, { cache: 'no-store' });
     const d  = await r.json();
     if (seq !== _sndReqSeq) return;   // ondertussen ander station/tijd gekozen
 
