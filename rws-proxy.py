@@ -3360,9 +3360,226 @@ def _sonde_parse(html, stn, datetime_str):
                 if k and v:
                     indices[k] = v
 
+    # Wyoming's WSGI-endpoint levert het indices-blok niet meer, dus berekenen
+    # we CAPE/CIN/LCL/LFC/EL/LI/SI/K-index/Totals/PW zelf uit het profiel.
+    derived = {}
+    try:
+        derived = _sonde_compute_indices(levels)
+    except Exception as exc:                          # nooit de sounding laten sneuvelen
+        print(f"[sounding-indices] {stn}: {exc}")
+
     return {"id": stn, "name": name, "lat": lat, "lon": lon,
             "valid": valid, "datetime": datetime_str,
-            "levels": levels, "indices": indices}
+            "levels": levels, "indices": indices, "derived": derived}
+
+
+def _sonde_compute_indices(levels):
+    """Bereken afgeleide sounding-parameters uit het hoge-resolutie profiel.
+
+    Levert een dict met numerieke waarden (SI-eenheden waar logisch):
+      CAPE, CIN [J/kg]; LCL/LFC/EL druk [hPa] en hoogte [m]; LCL-temp [°C];
+      LI, SI, KI, TT [°C]; PW [mm]. Sleutels ontbreken als ze onberekenbaar zijn.
+    Oppervlaktepakket-methode met virtuele temperatuur; pseudoadiabatische
+    opstijging (RK2) boven het LCL.
+    """
+    exp, log = _math.exp, _math.log
+    Rd, cp, g, eps, Lv = 287.04, 1005.0, 9.80665, 0.622, 2.501e6
+    kappa = Rd / cp
+
+    def es(Tc):                                   # verzadigingsdampdruk [hPa]
+        return 6.112 * exp(17.67 * Tc / (Tc + 243.5))
+    def rsat(Tc, p):                              # verzadigingsmengverhouding [kg/kg]
+        e = min(es(Tc), p * 0.999)
+        return eps * e / (p - e)
+
+    lv = [l for l in levels if l.get("p") and l.get("t") is not None]
+    if len(lv) < 5:
+        return {}
+    lv = sorted(lv, key=lambda x: -x["p"])
+    ps  = [l["p"] for l in lv]
+    ts  = [l["t"] for l in lv]
+    tds = [l.get("td") for l in lv]
+    hs  = [l.get("h") for l in lv]
+
+    def interp(pt, arr):                          # log-p lineaire interpolatie
+        if pt >= ps[0]:  return arr[0]
+        if pt <= ps[-1]: return arr[-1]
+        for i in range(len(ps) - 1):
+            if ps[i] >= pt >= ps[i + 1]:
+                a, b = arr[i], arr[i + 1]
+                if a is None or b is None:
+                    return b if a is None else a
+                f = (log(pt) - log(ps[i])) / (log(ps[i + 1]) - log(ps[i]))
+                return a + f * (b - a)
+        return None
+
+    p0, T0c, Td0c = ps[0], ts[0], tds[0]
+    if Td0c is None:
+        return {}
+    T0k, Td0k = T0c + 273.15, Td0c + 273.15
+    r0 = rsat(Td0c, p0)
+
+    out = {}
+
+    # Lifting Condensation Level (Bolton 1980)
+    Tlcl  = 1.0 / (1.0 / (Td0k - 56.0) + log(T0k / Td0k) / 800.0) + 56.0
+    Plcl  = p0 * (Tlcl / T0k) ** (1.0 / kappa)
+    theta = T0k * (1000.0 / p0) ** kappa
+    zlcl  = interp(Plcl, hs)
+    out["LCL_P"] = round(Plcl, 1)
+    out["LCL_T"] = round(Tlcl - 273.15, 1)
+    if zlcl is not None: out["LCL_Z"] = round(zlcl)
+
+    # Fijn drukraster (oppervlak → 100 hPa of hoogste niveau)
+    ptop = max(100.0, ps[-1])
+    grid = []
+    p = p0
+    while p > ptop:
+        grid.append(p); p -= 5.0
+    grid.append(ptop)
+    if ptop < Plcl < p0:
+        grid.append(Plcl)
+    grid = sorted(set(grid), reverse=True)
+
+    # Pakkettemperatuur langs opstijging
+    parcelTk = {}
+    for gp in grid:                               # droogadiabatisch onder LCL
+        if gp >= Plcl:
+            parcelTk[gp] = theta * (gp / 1000.0) ** kappa
+    Tk, p_prev = Tlcl, Plcl                        # pseudoadiabatisch boven LCL
+    for gp in [q for q in grid if q < Plcl]:
+        lnp1, lnp2 = log(p_prev), log(gp)
+        dlnp = lnp2 - lnp1
+        rs = rsat(Tk - 273.15, p_prev)
+        k1 = (Rd * Tk + Lv * rs) / (cp + (Lv * Lv * rs * eps) / (Rd * Tk * Tk))
+        Tmid = Tk + k1 * dlnp * 0.5
+        pmid = exp(lnp1 + dlnp * 0.5)
+        rs2 = rsat(Tmid - 273.15, pmid)
+        k2 = (Rd * Tmid + Lv * rs2) / (cp + (Lv * Lv * rs2 * eps) / (Rd * Tmid * Tmid))
+        Tk += k2 * dlnp
+        parcelTk[gp] = Tk
+        p_prev = gp
+
+    pkeys = sorted(parcelTk.keys(), reverse=True)
+    def parcel_at(pt):
+        if pt >= pkeys[0]:  return parcelTk[pkeys[0]]
+        if pt <= pkeys[-1]: return parcelTk[pkeys[-1]]
+        for i in range(len(pkeys) - 1):
+            if pkeys[i] >= pt >= pkeys[i + 1]:
+                a, b = parcelTk[pkeys[i]], parcelTk[pkeys[i + 1]]
+                f = (log(pt) - log(pkeys[i])) / (log(pkeys[i + 1]) - log(pkeys[i]))
+                return a + f * (b - a)
+        return None
+
+    # Virtuele temperatuur van pakket en omgeving op het raster
+    Tvp, Tve = {}, {}
+    for gp in grid:
+        Tpk = parcelTk[gp]; Tpc = Tpk - 273.15
+        rp = r0 if gp >= Plcl else rsat(Tpc, gp)
+        Tvp[gp] = Tpk * (1.0 + 0.608 * rp)
+        Tec = interp(gp, ts); Tdc = interp(gp, tds)
+        re = rsat(Tdc, gp) if Tdc is not None else 0.0
+        Tve[gp] = (Tec + 273.15) * (1.0 + 0.608 * re)
+
+    # Drijfvermogen op het raster (oppervlak → top)
+    gs = sorted(grid, reverse=True)
+    b  = [Rd * (Tvp[p] - Tve[p]) for p in gs]
+
+    # LFC = eerste overgang naar positief drijfvermogen bóven het LCL
+    lfc_i = None
+    for i in range(1, len(gs)):
+        if gs[i] <= Plcl and b[i] > 0 and b[i - 1] <= 0:
+            lfc_i = i; break
+    # EL = hoogste overgang van positief naar negatief boven het LFC
+    el_i = None
+    if lfc_i is not None:
+        for i in range(lfc_i + 1, len(gs)):
+            if b[i] <= 0 and b[i - 1] > 0:
+                el_i = i
+        if el_i is None:
+            el_i = len(gs) - 1
+
+    cape = cin = 0.0
+    if lfc_i is not None:
+        for i in range(lfc_i, el_i):                 # CAPE: positieve arbeid LFC→EL
+            bavg = 0.5 * (b[i] + b[i + 1])
+            if bavg > 0:
+                cape += bavg * log(gs[i] / gs[i + 1])
+        for i in range(0, lfc_i):                    # CIN: negatieve arbeid opp.→LFC
+            bavg = 0.5 * (b[i] + b[i + 1])
+            if bavg < 0:
+                cin += bavg * log(gs[i] / gs[i + 1])
+    out["CAPE"] = round(cape)
+    out["CIN"]  = round(cin)
+    if lfc_i is not None:
+        lfc_p = gs[lfc_i]
+        out["LFC_P"] = round(lfc_p, 1)
+        zl = interp(lfc_p, hs)
+        if zl is not None: out["LFC_Z"] = round(zl)
+        if el_i is not None and cape > 0:
+            el_p = gs[el_i]
+            out["EL_P"] = round(el_p, 1)
+            ze = interp(el_p, hs)
+            if ze is not None: out["EL_Z"] = round(ze)
+
+    # Standaardindices op vaste drukvlakken
+    T850, Td850 = interp(850, ts), interp(850, tds)
+    T700, Td700 = interp(700, ts), interp(700, tds)
+    T500        = interp(500, ts)
+    if p0 >= 850 and None not in (T850, Td850, T700, Td700, T500):
+        out["KI"] = round((T850 - T500) + Td850 - (T700 - Td700), 1)
+        out["TT"] = round((T850 - T500) + (Td850 - T500), 1)
+    if T500 is not None:
+        pp500 = parcel_at(500.0)
+        if pp500 is not None:
+            out["LI"] = round(T500 - (pp500 - 273.15), 1)
+        if p0 >= 850 and T850 is not None and Td850 is not None:
+            out["SI"] = round(T500 - _sonde_lift_temp(850.0, T850, Td850, 500.0), 1)
+
+    # Precipitable water [mm]
+    pw = 0.0
+    for i in range(len(lv) - 1):
+        if tds[i] is None or tds[i + 1] is None:
+            continue
+        r1 = rsat(tds[i], ps[i]); r2 = rsat(tds[i + 1], ps[i + 1])
+        pw += 0.5 * (r1 + r2) * (ps[i] - ps[i + 1])
+    out["PW"] = round(pw * 100.0 / g, 1)
+
+    # Opstijgende-luchtbel-temperatuur [[p, °C], …] voor CAPE/CIN-arcering in de Skew-T
+    out["parcel"] = [[round(gp, 1), round(parcelTk[gp] - 273.15, 2)]
+                     for gp in sorted(parcelTk.keys(), reverse=True)]
+
+    return out
+
+
+def _sonde_lift_temp(p_start, T_start_c, Td_start_c, p_end):
+    """Til een pakket (p_start, T, Td) pseudoadiabatisch naar p_end; geef T [°C]."""
+    exp, log = _math.exp, _math.log
+    Rd, cp, eps, Lv = 287.04, 1005.0, 0.622, 2.501e6
+    kappa = Rd / cp
+    def rsat(Tc, p):
+        e = min(6.112 * exp(17.67 * Tc / (Tc + 243.5)), p * 0.999)
+        return eps * e / (p - e)
+    Tk, Tdk = T_start_c + 273.15, Td_start_c + 273.15
+    Tl = 1.0 / (1.0 / (Tdk - 56.0) + log(Tk / Tdk) / 800.0) + 56.0
+    Pl = p_start * (Tl / Tk) ** (1.0 / kappa)
+    theta = Tk * (1000.0 / p_start) ** kappa
+    if p_end >= Pl:
+        return theta * (p_end / 1000.0) ** kappa - 273.15
+    Tk = Tl
+    steps = max(1, int((Pl - p_end) / 5.0))
+    lnp1, lnp2 = log(Pl), log(p_end)
+    dl = (lnp2 - lnp1) / steps
+    for s in range(steps):
+        p_here = exp(lnp1 + dl * s)
+        rs = rsat(Tk - 273.15, p_here)
+        k1 = (Rd * Tk + Lv * rs) / (cp + (Lv * Lv * rs * eps) / (Rd * Tk * Tk))
+        Tmid = Tk + k1 * dl * 0.5
+        pmid = exp(lnp1 + dl * (s + 0.5))
+        rs2 = rsat(Tmid - 273.15, pmid)
+        k2 = (Rd * Tmid + Lv * rs2) / (cp + (Lv * Lv * rs2 * eps) / (Rd * Tmid * Tmid))
+        Tk += k2 * dl
+    return Tk - 273.15
 
 
 def _fetch_sounding(stn, datetime_str):
@@ -3381,7 +3598,7 @@ def _fetch_sounding(stn, datetime_str):
         if e.code in (400, 404):
             return {"id": stn, "name": "", "lat": None, "lon": None,
                     "valid": "", "datetime": datetime_str,
-                    "levels": [], "indices": {}}
+                    "levels": [], "indices": {}, "derived": {}}
         raise
     return _sonde_parse(html, stn, datetime_str)
 

@@ -471,9 +471,27 @@
       display: flex; align-items: center; justify-content: center; flex-shrink: 0;
     }
     #sounding-detail-close:hover { background: var(--surface); color: var(--text); }
-    #sounding-detail-body { flex: 1; min-height: 0; overflow: hidden; padding: 8px 10px 10px; display: flex; align-items: center; justify-content: center; }
+    #sounding-detail-body { flex: 1; min-height: 0; overflow: hidden; padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+    #sounding-canvas-wrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
     #sounding-canvas { max-width: 100%; max-height: 100%; width: auto; height: auto; display: block; }
     #sounding-detail-msg { padding: 24px 12px; text-align: center; color: var(--text-dim); font-size: 0.78rem; }
+    #sounding-indices {
+      flex-shrink: 0;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 5px 8px;
+    }
+    #sounding-indices:empty { display: none; }
+    .snd-ix {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 4px 7px;
+      line-height: 1.2;
+    }
+    .snd-ix .snd-ix-lbl { font-size: 0.58rem; color: var(--text-dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; }
+    .snd-ix .snd-ix-val { font-size: 0.8rem; color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+    .snd-ix .snd-ix-val span { font-size: 0.6rem; color: var(--text-dim); font-weight: 600; margin-left: 2px; }
 
     /* Radar legenda (Leaflet control) */
     .radar-legend {
@@ -1418,8 +1436,11 @@
           <button id="sounding-detail-close" title="Sluiten">&#10005;</button>
         </div>
         <div id="sounding-detail-body">
-          <canvas id="sounding-canvas" width="1000" height="1200"></canvas>
-          <div id="sounding-detail-msg" style="display:none"></div>
+          <div id="sounding-canvas-wrap">
+            <canvas id="sounding-canvas" width="1000" height="1200"></canvas>
+            <div id="sounding-detail-msg" style="display:none"></div>
+          </div>
+          <div id="sounding-indices"></div>
         </div>
       </div>
     </div>
@@ -6148,6 +6169,7 @@ async function _sndOpenStation(st) {
   const cv  = document.getElementById('sounding-canvas');
   const msg = document.getElementById('sounding-detail-msg');
   msg.style.display = 'none'; cv.style.display = 'block';
+  _sndRenderIndices(null);
   _sndDrawLoading(cv);
 
   try {
@@ -6161,6 +6183,7 @@ async function _sndOpenStation(st) {
       msg.style.display = 'block';
       msg.textContent = `Geen sounding beschikbaar voor station ${st.id} op ${_sndCurrentLabel()}.`;
       document.getElementById('sounding-detail-sub').textContent = _sndCurrentLabel();
+      _sndRenderIndices(null);
       return;
     }
     const validTxt = (d.valid || '').replace(/^Observations for Station \S+ at\s*/i, '');
@@ -6168,13 +6191,38 @@ async function _sndOpenStation(st) {
     document.getElementById('sounding-detail-sub').textContent =
       `Station ${st.id} · ${validTxt || _sndCurrentLabel()} · ${d.levels.length} niveaus`;
     _sndDrawSkewT(cv, d);
+    _sndRenderIndices(d.derived);
   } catch (e) {
     if (seq !== _sndReqSeq) return;
     console.error('[sounding] detail', e);
     cv.style.display = 'none';
     msg.style.display = 'block';
     msg.textContent = 'Fout bij het laden van de sounding.';
+    _sndRenderIndices(null);
   }
+}
+
+// Compacte weergave van de afgeleide parameters (CAPE, CIN, LCL, LFC, EL, …).
+function _sndRenderIndices(derived) {
+  const box = document.getElementById('sounding-indices');
+  if (!box) return;
+  if (!derived || !Object.keys(derived).length) { box.innerHTML = ''; return; }
+  const cell = (lbl, val, unit) =>
+    `<div class="snd-ix"><div class="snd-ix-lbl">${lbl}</div>` +
+    `<div class="snd-ix-val">${val}${unit ? `<span>${unit}</span>` : ''}</div></div>`;
+  const has = k => derived[k] !== undefined && derived[k] !== null;
+  const cells = [];
+  if (has('CAPE')) cells.push(cell('CAPE', Math.round(derived.CAPE), 'J/kg'));
+  if (has('CIN'))  cells.push(cell('CIN',  Math.round(derived.CIN),  'J/kg'));
+  if (has('LI'))   cells.push(cell('LI',   derived.LI.toFixed(1),    '°C'));
+  if (has('SI'))   cells.push(cell('SI',   derived.SI.toFixed(1),    '°C'));
+  if (has('KI'))   cells.push(cell('K-index', derived.KI.toFixed(1), ''));
+  if (has('TT'))   cells.push(cell('Totals', derived.TT.toFixed(1),  ''));
+  if (has('PW'))   cells.push(cell('PW',   derived.PW.toFixed(1),    'mm'));
+  if (has('LCL_P')) cells.push(cell('LCL', Math.round(derived.LCL_P), 'hPa'));
+  if (has('LFC_P')) cells.push(cell('LFC', Math.round(derived.LFC_P), 'hPa'));
+  if (has('EL_P'))  cells.push(cell('EL',  Math.round(derived.EL_P),  'hPa'));
+  box.innerHTML = cells.join('');
 }
 
 function _sndDrawLoading(cv) {
@@ -6250,6 +6298,46 @@ function _sndDrawSkewT(cv, data) {
 
   const levels = data.levels;
 
+  // ── Luchtbel-opstijging + CAPE/CIN-arcering ────────────────────────────────
+  const der = data.derived || {};
+  let parcelPts = null;
+  if (der.parcel && der.parcel.length > 1) {
+    const envL = levels.filter(l => l.p != null && l.t != null).sort((a, b) => b.p - a.p);
+    const envT = p => {                        // omgevingstemp [°C] op druk p (log-p)
+      if (!envL.length) return null;
+      if (p >= envL[0].p) return envL[0].t;
+      if (p <= envL[envL.length - 1].p) return envL[envL.length - 1].t;
+      for (let i = 0; i < envL.length - 1; i++) {
+        if (envL[i].p >= p && p >= envL[i + 1].p) {
+          const f = (Math.log(p) - Math.log(envL[i].p)) / (Math.log(envL[i + 1].p) - Math.log(envL[i].p));
+          return envL[i].t + f * (envL[i + 1].t - envL[i].t);
+        }
+      }
+      return null;
+    };
+    parcelPts = der.parcel.filter(pt => pt[0] >= Ptop).map(([p, tp]) => {
+      const y = yP(p), te = envT(p);
+      return { p, y, xp: xT(tp, y), xe: te == null ? null : xT(te, y) };
+    }).filter(q => q.xe != null);
+
+    const band = (pHi, pLo, color) => {         // vul vlak tussen luchtbel- en omgevingscurve
+      const seg = parcelPts.filter(q => q.p <= pHi && q.p >= pLo);
+      if (seg.length < 2) return;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x0, y0, plotW, plotH); ctx.clip();
+      ctx.beginPath();
+      ctx.moveTo(seg[0].xe, seg[0].y);
+      for (let i = 1; i < seg.length; i++) ctx.lineTo(seg[i].xe, seg[i].y);
+      for (let i = seg.length - 1; i >= 0; i--) ctx.lineTo(seg[i].xp, seg[i].y);
+      ctx.closePath();
+      ctx.fillStyle = color; ctx.fill();
+      ctx.restore();
+    };
+    const pSurf = der.parcel[0][0];
+    if (der.LFC_P)             band(pSurf, der.LFC_P, 'rgba(37,99,235,0.16)');    // CIN (blauw)
+    if (der.LFC_P && der.EL_P) band(der.LFC_P, der.EL_P, 'rgba(220,38,38,0.18)'); // CAPE (rood)
+  }
+
   // Profielen (temp = rood, dauwpunt = groen) — alle niveaus
   const drawProfile = (key, color) => {
     ctx.save();
@@ -6268,6 +6356,34 @@ function _sndDrawSkewT(cv, data) {
   };
   drawProfile('td', '#16a34a');
   drawProfile('t',  '#dc2626');
+
+  // Luchtbel-curve (gestippeld) + LCL/LFC/EL-markeringen
+  if (parcelPts && parcelPts.length > 1) {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x0, y0, plotW, plotH); ctx.clip();
+    ctx.setLineDash([7 * s, 5 * s]);
+    ctx.strokeStyle = '#334155'; ctx.lineWidth = 1.8 * s;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.beginPath();
+    parcelPts.forEach((q, i) => i ? ctx.lineTo(q.xp, q.y) : ctx.moveTo(q.xp, q.y));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    const mark = (p, lbl, col) => {
+      if (!p) return;
+      const y = yP(p);
+      if (y < y0 || y > y1) return;
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.4 * s;
+      ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0 + 18 * s, y); ctx.stroke();
+      ctx.textAlign = 'left';
+      ctx.font = `700 ${Math.round(12 * s)}px Inter, system-ui, sans-serif`;
+      ctx.fillText(lbl, x0 + 21 * s, y + 4 * s);
+    };
+    mark(der.LCL_P, 'LCL', '#0891b2');
+    mark(der.LFC_P, 'LFC', '#dc2626');
+    mark(der.EL_P,  'EL',  '#7c3aed');
+  }
 
   // Windveren rechts (op standaard-drukniveaus, dichtstbijzijnde niveau)
   ctx.strokeStyle = '#1e293b'; ctx.fillStyle = '#1e293b';
@@ -6288,6 +6404,7 @@ function _sndDrawSkewT(cv, data) {
   ctx.textAlign = 'left'; ctx.font = `${Math.round(13 * s)}px Inter, system-ui, sans-serif`;
   ctx.fillStyle = '#dc2626'; ctx.fillText('■ Temperatuur', x0 + 6 * s, y0 + 14 * s);
   ctx.fillStyle = '#16a34a'; ctx.fillText('■ Dauwpunt',    x0 + 6 * s, y0 + 32 * s);
+  ctx.fillStyle = '#334155'; ctx.fillText('╌ Luchtbel',    x0 + 6 * s, y0 + 50 * s);
   ctx.fillStyle = '#64748b';
   ctx.textAlign = 'right';
   ctx.fillText('hPa', x0 - 6 * s, y0 + 8 * s);
