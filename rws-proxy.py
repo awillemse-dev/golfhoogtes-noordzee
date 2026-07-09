@@ -3485,11 +3485,21 @@ def _sonde_compute_indices(levels):
     gs = sorted(grid, reverse=True)
     b  = [Rd * (Tvp[p] - Tve[p]) for p in gs]
 
-    # LFC = eerste overgang naar positief drijfvermogen bóven het LCL
+    # Index van het LCL in het raster (Plcl is aan het raster toegevoegd)
+    lcl_i = 0
+    for i in range(len(gs)):
+        if gs[i] <= Plcl:
+            lcl_i = i; break
+    # LFC = laagste niveau ≥ LCL met positief drijfvermogen. Drijft het pakket al
+    # op het LCL positief (vochtige (sub)tropische lucht), dan ligt het LFC op het
+    # LCL zelf — anders bij de eerste overgang naar positief drijfvermogen erboven.
     lfc_i = None
-    for i in range(1, len(gs)):
-        if gs[i] <= Plcl and b[i] > 0 and b[i - 1] <= 0:
-            lfc_i = i; break
+    if b[lcl_i] > 0:
+        lfc_i = lcl_i
+    else:
+        for i in range(lcl_i + 1, len(gs)):
+            if b[i] > 0 and b[i - 1] <= 0:
+                lfc_i = i; break
     # EL = hoogste overgang van positief naar negatief boven het LFC
     el_i = None
     if lfc_i is not None:
