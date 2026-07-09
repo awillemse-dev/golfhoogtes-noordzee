@@ -18,6 +18,7 @@ import random as _random
 import collections
 import queue as _queue
 import gzip as _gzip
+import re
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -3191,6 +3192,200 @@ def get_metar_data():
     return _metar_cache or _EMPTY_METAR
 
 
+# ── Radiosonde-soundings (University of Wyoming, WSGI) ─────────────────────────
+# Stationslijst: IGRA2 (NOAA) → filtert op recent-actieve WMO-stations wereldwijd.
+# Sounding-detail: University of Wyoming WSGI (hoge-resolutie BUFR-niveaus).
+SONDE_IGRA_URL   = "https://www.ncei.noaa.gov/pub/data/igra/igra2-station-list.txt"
+SONDE_WYO_URL    = "https://weather.uwyo.edu/wsgi/sounding"
+SONDE_STAT_TTL   = 24 * 60 * 60   # stationslijst 24 uur cachen
+SONDE_MIN_LASTYR = 2025           # alleen stations die in/na dit jaar rapporteerden
+
+SONDE_STATIONS_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "sounding-stations.json")
+
+_sonde_stations      = None
+_sonde_stations_time = 0.0
+_sonde_lock          = threading.Lock()
+
+
+def _sonde_clean_name(raw):
+    """Maak IGRA-stationsnaam leesbaar: strip [..]-codes, nette hoofdletters."""
+    name = re.sub(r"\[[^\]]*\]", "", raw).strip()
+    name = re.sub(r"\s+", " ", name)
+    parts = []
+    for w in name.split(" "):
+        parts.append(w.capitalize() if (w.isupper() and len(w) > 1) else w)
+    return " ".join(parts)
+
+
+def _parse_igra_stations(text):
+    """Filter de IGRA2-stationslijst tot recent-actieve WMO-stations.
+
+    We houden alleen WMO-stations (netwerk-teken 'M') over die recent nog
+    rapporteerden; het 5-cijferige WMO-nummer werkt direct als Wyoming-id.
+    """
+    out = []
+    for line in text.splitlines():
+        if len(line) < 82 or line[2] != "M":        # alleen WMO-netwerkstations
+            continue
+        try:
+            lastyr = int(line[77:81])
+        except ValueError:
+            continue
+        if lastyr < SONDE_MIN_LASTYR:               # alleen recent-actief
+            continue
+        try:
+            lat = float(line[12:20]); lon = float(line[21:30])
+        except ValueError:
+            continue
+        if lat < -90 or lat > 90 or lon < -180 or lon > 180:
+            continue
+        wmo  = line[6:11]                            # 5-cijferig WMO-nummer (voorloopnullen behouden)
+        name = _sonde_clean_name(line[41:71])
+        out.append({"id": wmo, "name": name,
+                    "lat": round(lat, 4), "lon": round(lon, 4)})
+    return out
+
+
+def _fetch_igra_stations():
+    """Haal de IGRA2-stationslijst live op (fallback — kan traag zijn)."""
+    req = urllib.request.Request(SONDE_IGRA_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=45) as r:
+        text = r.read().decode("utf-8", "replace")
+    return _parse_igra_stations(text)
+
+
+def _load_sonde_stations():
+    """Geef (gecached) de wereldwijde lijst radiosonde-stations terug.
+
+    Leest bij voorkeur de gebundelde snapshot (sounding-stations.json) — snel en
+    betrouwbaar. Alleen als die ontbreekt valt hij terug op een live IGRA-fetch.
+    """
+    global _sonde_stations, _sonde_stations_time
+    with _sonde_lock:
+        if _sonde_stations is not None:
+            return _sonde_stations
+
+    stns = None
+    try:                                            # 1) gebundelde snapshot
+        with open(SONDE_STATIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        stns = data["stations"] if isinstance(data, dict) else data
+        if stns:
+            print(f"[SONDE] {len(stns)} stations uit snapshot geladen")
+    except Exception as e:
+        print(f"[SONDE] snapshot niet beschikbaar ({e}) — live IGRA-fetch")
+
+    if not stns:                                    # 2) fallback: live IGRA
+        stns = _fetch_igra_stations()
+        print(f"[SONDE] {len(stns)} stations live van IGRA geladen")
+
+    with _sonde_lock:
+        _sonde_stations      = stns
+        _sonde_stations_time = time.time()
+    return stns
+
+
+def _sonde_latest_synoptic(offset=0):
+    """Meest recente hoofd-sondeertijd (00/12 UTC) als 'YYYY-MM-DD HH:00:00'.
+
+    offset schuift in stappen van 12 uur terug (negatief) of vooruit (positief).
+    """
+    now  = datetime.now(timezone.utc) - timedelta(hours=2)   # ~2 uur verwerkingslag
+    hour = 12 if now.hour >= 12 else 0
+    base = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    base = base + timedelta(hours=12 * offset)
+    return base.strftime("%Y-%m-%d %H:00:00")
+
+
+def _sonde_parse(html, stn, datetime_str):
+    """Parse Wyoming TEXT:LIST-HTML naar gestructureerde JSON."""
+    name = ""
+    m = html.find("<H3>")
+    if m != -1:
+        name = html[m + 4: html.find("</H3>", m)].strip()
+
+    lat = lon = None
+    li = html.find("Latitude:")
+    if li != -1:
+        seg = html[li:li + 120]
+        mlat = re.search(r"Latitude:\s*(-?\d+(?:\.\d+)?)", seg)
+        mlon = re.search(r"Longitude:\s*(-?\d+(?:\.\d+)?)", seg)
+        if mlat: lat = float(mlat.group(1))
+        if mlon: lon = float(mlon.group(1))
+
+    valid = ""
+    h1 = html.find("<H1>")
+    if h1 != -1:
+        valid = html[h1 + 4: html.find("</H1>", h1)].strip()
+
+    # Eerste <PRE>-blok = de niveautabel (vaste kolommen van 7 tekens breed).
+    levels = []
+    p0 = html.find("<PRE>")
+    if p0 != -1:
+        block = html[p0 + 5: html.find("</PRE>", p0)]
+        def _num(row, a, b):
+            s = row[a:b].strip()
+            if not s:
+                return None
+            try:
+                return float(s)
+            except ValueError:
+                return None
+        for row in block.splitlines():
+            if len(row) < 21:
+                continue
+            p = _num(row, 0, 7)
+            t = _num(row, 14, 21)
+            if p is None or t is None:                # kop-/scheidingsregels overslaan
+                continue
+            levels.append({
+                "p":   p,
+                "h":   _num(row, 7, 14),
+                "t":   t,
+                "td":  _num(row, 21, 28),
+                "dir": _num(row, 42, 49),
+                "spd": _num(row, 49, 56),
+            })
+
+    # Tweede <PRE>-blok = afgeleide indices (CAPE, PW, LI, …) als label:waarde.
+    indices = {}
+    p1 = html.find("<PRE>", html.find("</PRE>", p0) + 1) if p0 != -1 else -1
+    if p1 != -1:
+        block2 = html[p1 + 5: html.find("</PRE>", p1)]
+        for row in block2.splitlines():
+            if ":" in row:
+                k, v = row.rsplit(":", 1)
+                k = k.strip(); v = v.strip()
+                if k and v:
+                    indices[k] = v
+
+    return {"id": stn, "name": name, "lat": lat, "lon": lon,
+            "valid": valid, "datetime": datetime_str,
+            "levels": levels, "indices": indices}
+
+
+def _fetch_sounding(stn, datetime_str):
+    """Haal één sounding op bij Wyoming WSGI en parse hem.
+
+    Wyoming geeft HTTP 400/404 als er voor die tijd geen sounding is; dat
+    behandelen we als 'geen data' (lege niveaus) i.p.v. een fout.
+    """
+    q   = urlencode({"datetime": datetime_str, "id": stn, "type": "TEXT:LIST"})
+    req = urllib.request.Request(f"{SONDE_WYO_URL}?{q}",
+                                 headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            html = r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 404):
+            return {"id": stn, "name": "", "lat": None, "lon": None,
+                    "valid": "", "datetime": datetime_str,
+                    "levels": [], "indices": {}}
+        raise
+    return _sonde_parse(html, stn, datetime_str)
+
+
 def fetch_knmi_data():
     """Haalt actuele waarnemingen op van Buienradar (elke 10 min, geen API key)."""
     global _knmi_vis_features, _vis_cache_ready
@@ -3781,6 +3976,54 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
                 self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 print(f"[FOUT metar] {exc}")
+                body = json.dumps({"error": str(exc)}).encode()
+                self.send_response(500)
+                self.send_header("Content-Type",   "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+
+        # ── /api/sounding-stations  (wereldwijde radiosonde-stations) ────
+        elif path == "/api/sounding-stations":
+            try:
+                stns = _load_sonde_stations()
+                self.send_response(200)
+                self._send_json(
+                    json.dumps({"stations": stns, "count": len(stns)}).encode("utf-8"),
+                    max_age=3600)
+            except Exception as exc:
+                print(f"[FOUT sounding-stations] {exc}")
+                body = json.dumps({"error": str(exc)}).encode()
+                self.send_response(500)
+                self.send_header("Content-Type",   "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+
+        # ── /api/sounding  (één sounding, hoge-resolutie BUFR-niveaus) ───
+        elif path == "/api/sounding":
+            qs  = parse_qs(urlparse(self.path).query)
+            stn = (qs.get("id", [""])[0] or "").strip()
+            dt  = (qs.get("datetime", [""])[0] or "").strip()
+            if not stn:
+                body = json.dumps({"error": "id ontbreekt"}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type",   "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if not dt:
+                dt = _sonde_latest_synoptic()
+            try:
+                data = _fetch_sounding(stn, dt)
+                self.send_response(200)
+                self._send_json(_safe_json(data).encode("utf-8"), max_age=300)
+            except Exception as exc:
+                print(f"[FOUT sounding] {stn} {dt}: {exc}")
                 body = json.dumps({"error": str(exc)}).encode()
                 self.send_response(500)
                 self.send_header("Content-Type",   "application/json")

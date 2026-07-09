@@ -384,6 +384,97 @@
     /* Nacht (GeoColour): getemperd → wit niet overbelicht, wolken toch zichtbaar. */
     .sat-night { filter: url(#satSharpen) contrast(1.1) brightness(0.85); }
 
+    /* ── Sounding-paneel (radiosonde / Skew-T) ───────────────────────────── */
+    #sounding-panel {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      background: var(--bg);
+      overflow: hidden;
+      position: relative;
+    }
+    #sounding-panel.active { display: flex; }
+    #sounding-map { flex: 1; min-height: 0; background: #0b1220; }
+    #sounding-controls {
+      flex-shrink: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    #sounding-controls button.snd-nav {
+      width: 30px; height: 30px;
+      border-radius: 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.9rem;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    #sounding-controls button.snd-nav:hover { background: var(--accent); color: #0c1a2b; }
+    #sounding-time {
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      min-width: 128px;
+      text-align: center;
+    }
+    #sounding-source { font-size: 0.62rem; color: var(--text-muted); white-space: nowrap; }
+    #sounding-count  { font-size: 0.62rem; color: var(--text-dim); margin-left: auto; white-space: nowrap; }
+    .snd-marker-tip {
+      background: rgba(12,26,43,0.92);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 3px 7px;
+      border-radius: 6px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+    }
+    .snd-marker-tip::before { display: none; }
+
+    /* Detail-overlay met Skew-T */
+    #sounding-detail {
+      display: none;
+      position: absolute;
+      top: 12px; right: 12px; bottom: 62px;
+      width: min(480px, 46vw);
+      background: rgba(10,16,26,0.96);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 500;
+      backdrop-filter: blur(6px);
+    }
+    #sounding-detail.open { display: flex; }
+    #sounding-detail-head {
+      flex-shrink: 0;
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    #sounding-detail-title { font-size: 0.82rem; font-weight: 700; color: var(--accent); line-height: 1.3; }
+    #sounding-detail-sub   { font-size: 0.66rem; color: var(--text-dim); margin-top: 2px; }
+    #sounding-detail-close {
+      margin-left: auto;
+      width: 26px; height: 26px; border-radius: 6px;
+      background: var(--surface-2); border: 1px solid var(--border);
+      color: var(--text-dim); cursor: pointer; font-size: 0.9rem;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    #sounding-detail-close:hover { background: var(--surface); color: var(--text); }
+    #sounding-detail-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px 10px; }
+    #sounding-canvas { width: 100%; height: auto; display: block; }
+    #sounding-detail-msg { padding: 24px 12px; text-align: center; color: var(--text-dim); font-size: 0.78rem; }
+
     /* Radar legenda (Leaflet control) */
     .radar-legend {
       background: rgba(255,255,255,0.92);
@@ -932,6 +1023,15 @@
       </svg>
       Satelliet MTG
     </button>
+    <button class="nav-btn" id="nav-sounding" onclick="selectLayer('sounding')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="8" r="6"/>
+        <path d="M10.5 13.7 12 22l1.5-8.3"/>
+        <path d="M12 22h.01"/>
+      </svg>
+      Sounding
+    </button>
     <button class="nav-btn" id="nav-stormen" onclick="selectLayer('stormen')">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1294,6 +1394,33 @@
         <input id="satelliet-slider" type="range" min="0" max="11" value="11" step="1">
         <span id="satelliet-time">–:––</span>
         <span id="satelliet-source">Bron: EUMETSAT · MTG GeoColour</span>
+      </div>
+    </div>
+
+    <!-- Sounding-paneel (radiosonde-waarnemingen wereldwijd) -->
+    <div id="sounding-panel">
+      <div id="sounding-map"></div>
+      <div id="sounding-controls">
+        <button class="snd-nav" id="sounding-prev" title="Vorige sondeertijd (−12u)">&#9664;</button>
+        <span id="sounding-time">–</span>
+        <button class="snd-nav" id="sounding-next" title="Volgende sondeertijd (+12u)">&#9654;</button>
+        <span id="sounding-source">Bron: University of Wyoming (WSGI)</span>
+        <span id="sounding-count"></span>
+      </div>
+
+      <!-- Detail-overlay met hoge-resolutie Skew-T -->
+      <div id="sounding-detail">
+        <div id="sounding-detail-head">
+          <div>
+            <div id="sounding-detail-title">—</div>
+            <div id="sounding-detail-sub"></div>
+          </div>
+          <button id="sounding-detail-close" title="Sluiten">&#10005;</button>
+        </div>
+        <div id="sounding-detail-body">
+          <canvas id="sounding-canvas" width="1000" height="1200"></canvas>
+          <div id="sounding-detail-msg" style="display:none"></div>
+        </div>
       </div>
     </div>
 
@@ -2422,11 +2549,13 @@ function selectLayer(layer) {
   const mapEl      = document.getElementById('map');
   const radarEl    = document.getElementById('radar-panel');
   const satEl      = document.getElementById('satelliet-panel');
+  const sndEl      = document.getElementById('sounding-panel');
   const comingSoon = document.getElementById('coming-soon');
 
   // Verberg altijd de radar bij wissel naar andere tab
   if (layer !== 'radar') { radarEl.classList.remove('active'); stopRadar(); }
   if (layer !== 'satelliet') { satEl.classList.remove('active'); stopSatelliet(); }
+  if (layer !== 'sounding') { sndEl.classList.remove('active'); stopSounding(); }
   if (layer !== 'stormen') stopStormen();
 
   if (layer === 'golf') {
@@ -2468,6 +2597,11 @@ function selectLayer(layer) {
     comingSoon.style.display = 'none';
     satEl.classList.add('active');
     startSatelliet();
+  } else if (layer === 'sounding') {
+    mapEl.style.display      = 'none';
+    comingSoon.style.display = 'none';
+    sndEl.classList.add('active');
+    startSounding();
   } else if (layer === 'stormen') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
@@ -5894,6 +6028,308 @@ function startSatelliet() {
 function stopSatelliet() {
   _satPauseAnim();
   if (_satRefreshT) { clearInterval(_satRefreshT); _satRefreshT = null; }
+}
+
+// ── Sounding (radiosonde-waarnemingen wereldwijd — University of Wyoming) ──────
+let _sndMap = null, _sndMarkers = null, _sndStations = null;
+let _sndOffset = 0;          // 0 = meest recente sondeertijd; −1 = 12u eerder, enz.
+let _sndActiveStn = null;    // laatst geopende station (voor tijd-navigatie)
+let _sndReqSeq = 0;          // volgnummer tegen verouderde detail-responses
+
+// Meest recente hoofd-sondeertijd (00/12 UTC) als Date, met stap van 12u.
+function _sndSynoptic(offset) {
+  const now  = new Date(Date.now() - 2 * 3600 * 1000);   // ~2u verwerkingslag
+  const hour = now.getUTCHours() >= 12 ? 12 : 0;
+  const base = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, 0, 0));
+  base.setUTCHours(base.getUTCHours() + 12 * offset);
+  return base;
+}
+function _sndFmtDatetime(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:00:00`;
+}
+function _sndFmtLabel(d) {
+  const mon = ['jan','feb','mrt','apr','mei','jun','jul','aug','sep','okt','nov','dec'];
+  const p = n => String(n).padStart(2, '0');
+  return `${p(d.getUTCHours())}Z · ${p(d.getUTCDate())} ${mon[d.getUTCMonth()]}`;
+}
+function _sndCurrentLabel() { return _sndFmtLabel(_sndSynoptic(_sndOffset)); }
+function _sndUpdateTimeLabel() {
+  document.getElementById('sounding-time').textContent = _sndCurrentLabel();
+}
+
+function startSounding() {
+  setStatus('loading', 'Soundings laden…');
+
+  if (!_sndMap) {
+    _sndMap = L.map('sounding-map', {
+      center: [30, 10], zoom: 2, minZoom: 1, maxZoom: 8,
+      zoomControl: true, worldCopyJump: true, preferCanvas: true,
+    });
+    _sndMap.zoomControl.setPosition('topright');
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a> · Soundings: <a href="https://weather.uwyo.edu/upperair/sounding.shtml">Univ. of Wyoming</a>',
+      subdomains: 'abcd', maxZoom: 8,
+    }).addTo(_sndMap);
+    _sndMarkers = L.layerGroup().addTo(_sndMap);
+
+    document.getElementById('sounding-prev').addEventListener('click', () => _sndShiftTime(-1));
+    document.getElementById('sounding-next').addEventListener('click', () => _sndShiftTime(1));
+    document.getElementById('sounding-detail-close').addEventListener('click', _sndCloseDetail);
+  }
+
+  setTimeout(() => _sndMap.invalidateSize(), 60);
+  _sndUpdateTimeLabel();
+
+  if (!_sndStations) _sndLoadStations();
+  else setStatus('ok', `${_sndStations.length} sonderingen · ${_sndCurrentLabel()}`);
+}
+
+function stopSounding() {
+  if (typeof _sndCloseDetail === 'function') _sndCloseDetail();
+}
+
+function _sndShiftTime(delta) {
+  _sndOffset = Math.min(0, _sndOffset + delta);   // niet in de toekomst
+  _sndUpdateTimeLabel();
+  if (_sndStations) setStatus('ok', `${_sndStations.length} sonderingen · ${_sndCurrentLabel()}`);
+  if (_sndActiveStn) _sndOpenStation(_sndActiveStn);   // heropen voor nieuwe tijd
+}
+
+async function _sndLoadStations() {
+  try {
+    const r = await fetch(`${PROXY_URL}/api/sounding-stations`);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    _sndStations = d.stations || [];
+    _sndPlotMarkers();
+    document.getElementById('sounding-count').textContent = `${_sndStations.length} stations`;
+    setStatus('ok', `${_sndStations.length} sonderingen · ${_sndCurrentLabel()}`);
+  } catch (e) {
+    console.error('[sounding] stations', e);
+    setStatus('error', 'Stations niet beschikbaar');
+  }
+}
+
+function _sndPlotMarkers() {
+  _sndMarkers.clearLayers();
+  (_sndStations || []).forEach(st => {
+    const m = L.circleMarker([st.lat, st.lon], {
+      radius: 4, weight: 1, color: '#0b1220',
+      fillColor: '#38bdf8', fillOpacity: 0.9,
+    });
+    m.bindTooltip(`${st.name || 'Station'} · ${st.id}`, {
+      className: 'snd-marker-tip', direction: 'top', offset: [0, -4],
+    });
+    m.on('click', () => _sndOpenStation(st));
+    m.addTo(_sndMarkers);
+  });
+}
+
+function _sndCloseDetail() {
+  const d = document.getElementById('sounding-detail');
+  if (d) d.classList.remove('open');
+  _sndActiveStn = null;
+}
+
+async function _sndOpenStation(st) {
+  _sndActiveStn = st;
+  const seq = ++_sndReqSeq;
+  document.getElementById('sounding-detail').classList.add('open');
+  document.getElementById('sounding-detail-title').textContent = `${st.name || 'Station'} · ${st.id}`;
+  document.getElementById('sounding-detail-sub').textContent   = 'Laden…';
+  const cv  = document.getElementById('sounding-canvas');
+  const msg = document.getElementById('sounding-detail-msg');
+  msg.style.display = 'none'; cv.style.display = 'block';
+  _sndDrawLoading(cv);
+
+  try {
+    const dt = _sndFmtDatetime(_sndSynoptic(_sndOffset));
+    const r  = await fetch(`${PROXY_URL}/api/sounding?id=${encodeURIComponent(st.id)}&datetime=${encodeURIComponent(dt)}`);
+    const d  = await r.json();
+    if (seq !== _sndReqSeq) return;   // ondertussen ander station/tijd gekozen
+
+    if (!d.levels || d.levels.length < 3) {
+      cv.style.display = 'none';
+      msg.style.display = 'block';
+      msg.textContent = `Geen sounding beschikbaar voor station ${st.id} op ${_sndCurrentLabel()}.`;
+      document.getElementById('sounding-detail-sub').textContent = _sndCurrentLabel();
+      return;
+    }
+    const validTxt = (d.valid || '').replace(/^Observations for Station \S+ at\s*/i, '');
+    document.getElementById('sounding-detail-title').textContent = d.name || st.name || st.id;
+    document.getElementById('sounding-detail-sub').textContent =
+      `Station ${st.id} · ${validTxt || _sndCurrentLabel()} · ${d.levels.length} niveaus`;
+    _sndDrawSkewT(cv, d);
+  } catch (e) {
+    if (seq !== _sndReqSeq) return;
+    console.error('[sounding] detail', e);
+    cv.style.display = 'none';
+    msg.style.display = 'block';
+    msg.textContent = 'Fout bij het laden van de sounding.';
+  }
+}
+
+function _sndDrawLoading(cv) {
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = '#0a101a'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = '#7b8ba3';
+  ctx.font = `${Math.round(cv.width * 0.028)}px Inter, system-ui, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('Sounding laden…', cv.width / 2, cv.height / 2);
+}
+
+// Hoge-resolutie Skew-T log-p diagram op canvas (alle BUFR-niveaus + windveren).
+function _sndDrawSkewT(cv, data) {
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0a101a'; ctx.fillRect(0, 0, W, H);
+
+  const padL = Math.round(W * 0.085), padR = Math.round(W * 0.155);
+  const padT = Math.round(H * 0.03),  padB = Math.round(H * 0.055);
+  const x0 = padL, x1 = W - padR, plotW = x1 - x0;
+  const y0 = padT, y1 = H - padB, plotH = y1 - y0;
+  const xBarb = W - Math.round(padR * 0.45);
+  const s = W / 1000;                       // schaalfactor voor lijnen/fonts
+
+  const Pbot = 1050, Ptop = 100;
+  const lnB = Math.log(Pbot), lnT = Math.log(Ptop);
+  const Tmin = -40, Tmax = 45;              // °C op de onderrand
+  const SKEW = plotW * 0.95;                // horizontale verschuiving onder→boven
+
+  const yP = p => y0 + (Math.log(p) - lnT) / (lnB - lnT) * plotH;
+  const xT = (T, y) => x0 + (T - Tmin) / (Tmax - Tmin) * plotW + (y1 - y) / plotH * SKEW;
+
+  ctx.font = `${Math.round(13 * s)}px Inter, system-ui, sans-serif`;
+  ctx.textBaseline = 'middle';
+
+  // Isothermen (schuin, elke 10 °C)
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x0, y0, plotW, plotH); ctx.clip();
+  ctx.lineWidth = 1 * s;
+  for (let T = -110; T <= 50; T += 10) {
+    ctx.strokeStyle = (T === 0) ? 'rgba(96,165,250,0.55)' : 'rgba(120,140,165,0.18)';
+    ctx.beginPath();
+    ctx.moveTo(xT(T, y1), y1);
+    ctx.lineTo(xT(T, y0), y0);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Isobaren (horizontaal, standaardniveaus) + drukwaarden links
+  const plevels = [1000, 850, 700, 500, 400, 300, 250, 200, 150, 100];
+  ctx.lineWidth = 1 * s;
+  ctx.strokeStyle = 'rgba(120,140,165,0.28)';
+  ctx.fillStyle = '#93a4bd';
+  ctx.textAlign = 'right';
+  plevels.forEach(p => {
+    const y = yP(p);
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    ctx.fillText(String(p), x0 - 6 * s, y);
+  });
+
+  // Isotherm-labels op de onderrand
+  ctx.textAlign = 'center'; ctx.fillStyle = '#7b8ba3';
+  for (let T = -40; T <= 40; T += 10) {
+    const x = xT(T, y1);
+    if (x >= x0 && x <= x1) ctx.fillText(String(T), x, y1 + 16 * s);
+  }
+
+  // Kader
+  ctx.strokeStyle = 'rgba(160,180,205,0.45)'; ctx.lineWidth = 1.2 * s;
+  ctx.strokeRect(x0, y0, plotW, plotH);
+
+  const levels = data.levels;
+
+  // Profielen (temp = rood, dauwpunt = groen) — alle niveaus
+  const drawProfile = (key, color) => {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x0, y0, plotW, plotH); ctx.clip();
+    ctx.strokeStyle = color; ctx.lineWidth = 2.6 * s;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    let started = false;
+    for (const lv of levels) {
+      if (lv.p == null || lv[key] == null || lv.p < Ptop) continue;
+      const x = xT(lv[key], yP(lv.p)), y = yP(lv.p);
+      if (!started) { ctx.beginPath(); ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    if (started) ctx.stroke();
+    ctx.restore();
+  };
+  drawProfile('td', '#22c55e');
+  drawProfile('t',  '#ef4444');
+
+  // Windveren rechts (op standaard-drukniveaus, dichtstbijzijnde niveau)
+  ctx.strokeStyle = '#dbe4f0'; ctx.fillStyle = '#dbe4f0';
+  ctx.lineWidth = 1.6 * s;
+  const barbP = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100];
+  barbP.forEach(tp => {
+    if (tp > (levels[0] ? levels[0].p : 0)) return;
+    let best = null, bd = 1e9;
+    for (const lv of levels) {
+      if (lv.dir == null || lv.spd == null) continue;
+      const dd = Math.abs(lv.p - tp);
+      if (dd < bd) { bd = dd; best = lv; }
+    }
+    if (best && bd < 25) _sndBarb(ctx, xBarb, yP(best.p), best.dir, best.spd, s);
+  });
+
+  // Legenda
+  ctx.textAlign = 'left'; ctx.font = `${Math.round(13 * s)}px Inter, system-ui, sans-serif`;
+  ctx.fillStyle = '#ef4444'; ctx.fillText('■ Temperatuur', x0 + 6 * s, y0 + 14 * s);
+  ctx.fillStyle = '#22c55e'; ctx.fillText('■ Dauwpunt',    x0 + 6 * s, y0 + 32 * s);
+  ctx.fillStyle = '#7b8ba3';
+  ctx.textAlign = 'right';
+  ctx.fillText('hPa', x0 - 6 * s, y0 + 8 * s);
+  ctx.textAlign = 'center';
+  ctx.fillText('°C', (x0 + x1) / 2, y1 + 34 * s);
+  ctx.save();
+  ctx.translate(xBarb, y0 + 10 * s); ctx.textAlign = 'center';
+  ctx.fillText('wind (kt)', 0, 0);
+  ctx.restore();
+}
+
+// Windveer (meteorologische richting in graden, snelheid in m/s)
+function _sndBarb(ctx, cx, cy, dirDeg, spdMs, s) {
+  if (dirDeg == null || spdMs == null || spdMs < 0) return;
+  let kt = Math.round(spdMs * 1.94384 / 5) * 5;
+  const rad = dirDeg * Math.PI / 180;
+  const ux = Math.sin(rad), uy = -Math.cos(rad);   // staf wijst naar de bron (noord = boven)
+  const px = -uy, py = ux;                          // loodrecht (weerhaken)
+  const L = 40 * s;
+  const ex = cx + ux * L, ey = cy + uy * L;
+
+  if (kt < 5) { ctx.beginPath(); ctx.arc(cx, cy, 4 * s, 0, 2 * Math.PI); ctx.stroke(); return; }
+
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey); ctx.stroke();
+
+  let x = ex, y = ey;
+  const bl = 13 * s, gap = 7 * s, back = 6 * s;
+  while (kt >= 50) {                    // wimpel = 50 kt
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + px * bl - ux * back, y + py * bl - uy * back);
+    ctx.lineTo(x - ux * back * 2, y - uy * back * 2);
+    ctx.closePath(); ctx.fill();
+    x -= ux * back * 2; y -= uy * back * 2; kt -= 50;
+  }
+  while (kt >= 10) {                    // hele weerhaak = 10 kt
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + px * bl - ux * back, y + py * bl - uy * back);
+    ctx.stroke();
+    x -= ux * gap; y -= uy * gap; kt -= 10;
+  }
+  if (kt >= 5) {                        // halve weerhaak = 5 kt
+    if (x === ex && y === ey) { x -= ux * gap; y -= uy * gap; }
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + px * bl * 0.5 - ux * back * 0.5, y + py * bl * 0.5 - uy * back * 0.5);
+    ctx.stroke();
+  }
 }
 
 // ── Stormen (orkanen, tyfonen, cyclonen) ──────────────────────────────────────
