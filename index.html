@@ -438,22 +438,6 @@
       box-shadow: 0 4px 14px rgba(15,23,42,0.18);
     }
     .snd-marker-tip::before { display: none; }
-    /* Permanente plaatsnaam-labels bij de stations (alleen zichtbaar bij inzoomen) */
-    .snd-label {
-      background: rgba(255,255,255,0.82);
-      border: none;
-      color: #0f172a;
-      font-size: 0.6rem;
-      font-weight: 600;
-      padding: 1px 4px;
-      border-radius: 4px;
-      box-shadow: 0 1px 3px rgba(15,23,42,0.16);
-      white-space: nowrap;
-      pointer-events: none;
-      display: none;
-    }
-    .snd-label::before { display: none; }
-    #sounding-map.snd-show-labels .snd-label { display: block; }
 
     /* Detail-overlay met Skew-T */
     #sounding-detail {
@@ -6095,9 +6079,6 @@ function startSounding() {
     }).addTo(_sndMap);
     _sndMarkers = L.layerGroup().addTo(_sndMap);
 
-    // Plaatsnaam-labels alleen tonen bij voldoende zoom (anders te druk wereldwijd)
-    _sndMap.on('zoomend', _sndUpdateLabelVisibility);
-
     document.getElementById('sounding-prev').addEventListener('click', () => _sndShiftTime(-1));
     document.getElementById('sounding-next').addEventListener('click', () => _sndShiftTime(1));
     document.getElementById('sounding-detail-close').addEventListener('click', _sndCloseDetail);
@@ -6143,21 +6124,13 @@ function _sndPlotMarkers() {
       radius: 4, weight: 1.5, color: '#ffffff',
       fillColor: '#0284c7', fillOpacity: 0.95,
     });
-    // Permanente plaatsnaam bij het station (zichtbaar bij inzoomen)
-    m.bindTooltip(st.name || st.id, {
-      className: 'snd-label', permanent: true, direction: 'right', offset: [6, 0],
+    // Plaatsnaam alleen tonen bij muis-hover
+    m.bindTooltip(`${st.name || 'Station'} · ${st.id}`, {
+      className: 'snd-marker-tip', direction: 'top', offset: [0, -4],
     });
     m.on('click', () => _sndOpenStation(st));
     m.addTo(_sndMarkers);
   });
-  _sndUpdateLabelVisibility();
-}
-
-// Toon plaatsnaam-labels alleen vanaf zoomniveau 4 (anders wereldwijd te druk)
-function _sndUpdateLabelVisibility() {
-  if (!_sndMap) return;
-  const el = document.getElementById('sounding-map');
-  if (el) el.classList.toggle('snd-show-labels', _sndMap.getZoom() >= 4);
 }
 
 function _sndCloseDetail() {
