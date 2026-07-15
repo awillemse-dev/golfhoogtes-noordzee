@@ -3600,10 +3600,11 @@ WAVE_FC_TTL    = 60 * 60      # 1 uur (ECMWF WAM draait elke 6-12 uur)
 
 
 def fetch_wave_forecast(lat, lon):
-    """48-uurs golfhoogteverwachting (ECMWF WAM) voor een punt.
+    """Golfhoogteverwachting (ECMWF WAM) voor een punt.
 
     Geeft {"model": "ECMWF WAM", "data": [{"t": ISO, "v": Hm0_m}, …]} terug —
-    alleen tijdstippen vanaf nu tot +48u. Bij geen data een lege lijst.
+    tijdstippen van 24u terug tot +48u vooruit, zodat de verwachting ook de
+    door de waarnemingen bestreken 24u dekt. Bij geen data een lege lijst.
     """
     key = (round(lat, 2), round(lon, 2))
     now = time.time()
@@ -3617,6 +3618,7 @@ def fetch_wave_forecast(lat, lon):
         "hourly":       "wave_height",
         "models":       "ecmwf_wam025",
         "forecast_days": 3,
+        "past_days":     1,
         "timezone":     "UTC",
     })
     req = urllib.request.Request(f"{WAVE_FC_URL}?{q}",
@@ -3637,7 +3639,7 @@ def fetch_wave_forecast(lat, lon):
             dt = datetime.fromisoformat(t).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
-        if dt < now_dt - timedelta(hours=1) or dt > horizon:
+        if dt < now_dt - timedelta(hours=24) or dt > horizon:
             continue
         data.append({"t": dt.isoformat(), "v": round(float(v), 2)})
 

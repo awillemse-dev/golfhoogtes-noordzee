@@ -643,7 +643,7 @@
       transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
       flex-shrink: 0;
     }
-    #chart-panel.open { width: 360px; }
+    #chart-panel.open { width: 480px; }
 
     #chart-header {
       padding: 14px 16px 12px;
@@ -701,6 +701,21 @@
     }
     #chart-hm0-label { font-size: 0.72rem; color: var(--text-dim); padding-bottom: 5px; font-weight: 500; }
     #chart-time { font-size: 0.68rem; color: var(--text-muted); text-align: right; padding-bottom: 5px; }
+    #chart-diff {
+      grid-column: 1 / -1;
+      margin-top: 10px;
+      padding: 8px 11px;
+      border-radius: 8px;
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    #chart-diff .diff-val { font-size: 0.95rem; font-weight: 700; letter-spacing: -0.01em; }
+    #chart-diff .diff-sub { color: var(--text-muted); font-size: 0.66rem; }
 
     #chart-body {
       flex: 1;
@@ -1297,6 +1312,7 @@
       <div id="chart-hm0" style="color:var(--text-muted)">–</div>
       <div id="chart-hm0-label">m Hm0</div>
       <div id="chart-time">–</div>
+      <div id="chart-diff" style="display:none"></div>
     </div>
     <div id="chart-body">
       <div id="chart-period-label">Afgelopen 24 uur</div>
@@ -2567,6 +2583,7 @@ function _restoreChartPanel() {
   document.getElementById('chart-current').style.display = '';
   document.getElementById('chart-body').style.display    = '';
   document.getElementById('metar-body').style.display    = 'none';
+  document.getElementById('chart-diff').style.display     = 'none';
 }
 
 document.getElementById('chart-close').addEventListener('click', () => {
@@ -2687,6 +2704,27 @@ async function openChart(code, naam, huidigHm0, tijdstip, lat, lon) {
       data: { datasets },
       options: opts,
     });
+
+    // Actueel verschil obs − ECMWF: verwachting op het tijdstip van de waarneming
+    const diffEl = document.getElementById('chart-diff');
+    const obsTime = tijdstip ? new Date(tijdstip).getTime() : Date.now();
+    let fcNow = null, best = Infinity;
+    for (const p of forecast) {
+      const d = Math.abs(p.x.getTime() - obsTime);
+      if (d < best) { best = d; fcNow = p.y; }
+    }
+    if (huidigHm0 !== null && fcNow !== null && best <= 3 * 3600 * 1000) {
+      const diff  = huidigHm0 - fcNow;
+      const sign  = diff >= 0 ? '+' : '−';
+      const dcol  = Math.abs(diff) >= 0.5 ? '#dc2626' : (Math.abs(diff) >= 0.25 ? '#d97706' : '#059669');
+      diffEl.innerHTML =
+        `<span>Verschil actueel</span>` +
+        `<span class="diff-val" style="color:${dcol}">${sign}${Math.abs(diff).toFixed(2)} m</span>` +
+        `<span class="diff-sub">obs ${huidigHm0.toFixed(2)} m − ECMWF ${fcNow.toFixed(2)} m</span>`;
+      diffEl.style.display = 'flex';
+    } else {
+      diffEl.style.display = 'none';
+    }
 
   } catch (err) {
     console.error(err);
