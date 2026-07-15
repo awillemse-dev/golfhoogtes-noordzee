@@ -3592,6 +3592,60 @@ def _sonde_lift_temp(p_start, T_start_c, Td_start_c, p_end):
     return Tk - 273.15
 
 
+# ── Golfverwachting (ECMWF WAM via Open-Meteo Marine) ──────────────────────────
+WAVE_FC_URL   = "https://marine-api.open-meteo.com/v1/marine"
+WAVE_FC_HOURS = 48            # uren vooruit
+_wave_fc_cache = {}           # {(lat,lon): (tijd, data)}
+WAVE_FC_TTL    = 60 * 60      # 1 uur (ECMWF WAM draait elke 6-12 uur)
+
+
+def fetch_wave_forecast(lat, lon):
+    """48-uurs golfhoogteverwachting (ECMWF WAM) voor een punt.
+
+    Geeft {"model": "ECMWF WAM", "data": [{"t": ISO, "v": Hm0_m}, …]} terug —
+    alleen tijdstippen vanaf nu tot +48u. Bij geen data een lege lijst.
+    """
+    key = (round(lat, 2), round(lon, 2))
+    now = time.time()
+    hit = _wave_fc_cache.get(key)
+    if hit and (now - hit[0]) < WAVE_FC_TTL:
+        return hit[1]
+
+    q = urlencode({
+        "latitude":     f"{lat:.4f}",
+        "longitude":    f"{lon:.4f}",
+        "hourly":       "wave_height",
+        "models":       "ecmwf_wam025",
+        "forecast_days": 3,
+        "timezone":     "UTC",
+    })
+    req = urllib.request.Request(f"{WAVE_FC_URL}?{q}",
+                                 headers={"User-Agent": "RWS-Golfhoogte-Proxy/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        raw = json.loads(r.read().decode("utf-8"))
+
+    hourly = raw.get("hourly", {})
+    times  = hourly.get("time", [])
+    vals   = hourly.get("wave_height", [])
+    now_dt = datetime.now(timezone.utc)
+    horizon = now_dt + timedelta(hours=WAVE_FC_HOURS)
+    data = []
+    for t, v in zip(times, vals):
+        if v is None:
+            continue
+        try:
+            dt = datetime.fromisoformat(t).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if dt < now_dt - timedelta(hours=1) or dt > horizon:
+            continue
+        data.append({"t": dt.isoformat(), "v": round(float(v), 2)})
+
+    result = {"model": "ECMWF WAM", "data": data}
+    _wave_fc_cache[key] = (now, result)
+    return result
+
+
 def _fetch_sounding(stn, datetime_str):
     """Haal één sounding op bij Wyoming WSGI en parse hem.
 
@@ -4186,6 +4240,35 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
                 self._send_json(_safe_json(data).encode("utf-8"))
             except Exception as exc:
                 print(f"[FOUT history] {exc}")
+                body = json.dumps({"error": str(exc)}).encode()
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+
+        # ── /api/wave-forecast?lat=..&lon=.. (ECMWF WAM, 48u) ────────────
+        elif path == "/api/wave-forecast":
+            params = parse_qs(urlparse(self.path).query)
+            try:
+                lat = float((params.get("lat") or [None])[0])
+                lon = float((params.get("lon") or [None])[0])
+            except (TypeError, ValueError):
+                body = json.dumps({"error": "lat en lon parameters verplicht"}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            try:
+                data = fetch_wave_forecast(lat, lon)
+                self.send_response(200)
+                self._send_json(_safe_json(data).encode("utf-8"), max_age=1800)
+            except Exception as exc:
+                print(f"[FOUT wave-forecast] {exc}")
                 body = json.dumps({"error": str(exc)}).encode()
                 self.send_response(500)
                 self.send_header("Content-Type", "application/json")

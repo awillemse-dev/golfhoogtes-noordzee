@@ -2117,6 +2117,7 @@ async function openZichtChart(code, naam, huidigVv, tijdstip) {
 
   document.getElementById('chart-naam').textContent      = naam || code;
   document.getElementById('chart-subtitle').textContent  = 'Zicht afgelopen 24 uur';
+  document.getElementById('chart-period-label').textContent = 'Afgelopen 24 uur';
   document.getElementById('chart-hm0-label').textContent = 'km';
   const color = zichtColor(huidigVv);
   document.getElementById('chart-hm0').textContent  = huidigVv !== null ? huidigVv.toFixed(1) : '–';
@@ -2204,6 +2205,7 @@ async function openWindChart(code, naam, huidigWind, tijdstip) {
 
   document.getElementById('chart-naam').textContent      = naam || code;
   document.getElementById('chart-subtitle').textContent  = 'Windsnelheid afgelopen 24 uur';
+  document.getElementById('chart-period-label').textContent = 'Afgelopen 24 uur';
   document.getElementById('chart-hm0-label').textContent = 'kt';
   const color = windColor(huidigWind);
   const huidigKt = msToKt(huidigWind);
@@ -2515,7 +2517,7 @@ function renderMarkers(geojson) {
     const p = f.properties;
     const h = p.hm0_m;
     const marker = L.marker([lat, lon], { icon: makeIcon(h) });
-    marker.on('click', () => openChart(p.code, p.naam, h, p.tijdstip));
+    marker.on('click', () => openChart(p.code, p.naam, h, p.tijdstip, lat, lon));
     _waveGroup.addLayer(marker);
   });
   if (activeLayer === 'golf') { _hideAllGroups(); _waveGroup.addTo(map); }
@@ -2605,63 +2607,84 @@ const CHART_OPTS = (color) => ({
   },
 });
 
-async function openChart(code, naam, huidigHm0, tijdstip) {
+async function openChart(code, naam, huidigHm0, tijdstip, lat, lon) {
   _restoreChartPanel();
   panel.classList.add('open');
   setTimeout(() => map.invalidateSize({ pan: false }), 320);
 
   document.getElementById('chart-naam').textContent      = naam || code;
-  document.getElementById('chart-subtitle').textContent  = 'Golfhoogte afgelopen 24 uur';
+  document.getElementById('chart-subtitle').textContent  = 'Waarneming (24u) + ECMWF WAM-verwachting (48u)';
+  document.getElementById('chart-period-label').textContent = 'Waarneming + verwachting';
   document.getElementById('chart-hm0-label').textContent = 'm Hm0';
   const color = waveColor(huidigHm0);
   document.getElementById('chart-hm0').textContent  = huidigHm0 !== null ? huidigHm0.toFixed(2) : '–';
   document.getElementById('chart-hm0').style.color  = color;
   document.getElementById('chart-time').textContent = formatTijdstip(tijdstip);
 
-  loadingEl.textContent   = 'Geschiedenis laden…';
+  loadingEl.textContent   = 'Waarneming + verwachting laden…';
   loadingEl.style.display = 'flex';
   canvasEl.style.display  = 'none';
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
 
+  const FC_COLOR = '#7c3aed';
   try {
-    const resp = await fetch(historyUrl(code), { cache: 'no-store' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const json = await resp.json();
-    if (!json.data || json.data.length === 0) {
-      loadingEl.textContent = 'Geen historische data beschikbaar.';
+    const [histRes, fcRes] = await Promise.allSettled([
+      fetch(historyUrl(code), { cache: 'no-store' }).then(r => r.ok ? r.json() : null),
+      (lat != null && lon != null)
+        ? fetch(`${PROXY_URL}/api/wave-forecast?lat=${lat}&lon=${lon}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
+        : Promise.resolve(null),
+    ]);
+
+    const hist = histRes.status === 'fulfilled' ? histRes.value : null;
+    const fc   = fcRes.status   === 'fulfilled' ? fcRes.value   : null;
+    const obs      = (hist && hist.data) ? hist.data.map(d => ({ x: new Date(d.t), y: d.v })) : [];
+    const forecast = (fc && fc.data)     ? fc.data.map(d => ({ x: new Date(d.t), y: d.v }))   : [];
+
+    if (!obs.length && !forecast.length) {
+      loadingEl.textContent = 'Geen data beschikbaar.';
       return;
     }
 
     loadingEl.style.display = 'none';
     canvasEl.style.display  = 'block';
 
-    const labels = json.data.map(d => new Date(d.t));
-    const values = json.data.map(d => d.v);
-    const maxVal = Math.max(...values);
+    const allVals = obs.concat(forecast).map(p => p.y);
+    const maxVal  = Math.max(...allVals);
 
     const opts = CHART_OPTS(color);
+    opts.plugins.legend = {
+      display: true, position: 'bottom',
+      labels: { boxWidth: 24, boxHeight: 2, font: { size: 10, family: 'Inter' }, color: '#3d5167' },
+    };
     opts.plugins.tooltip.callbacks = {
       title: items => new Date(items[0].parsed.x).toLocaleString('nl-NL', {
         day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
         timeZone: 'Europe/Amsterdam',
       }),
-      label: item => ` ${item.parsed.y.toFixed(2)} m`,
+      label: item => ` ${item.dataset.label}: ${item.parsed.y.toFixed(2)} m`,
     };
+    delete opts.scales.x.time.unit;   // auto-schaal over 24u+48u
+    opts.scales.x.time.displayFormats = { hour: 'HH:mm', day: 'd MMM' };
     opts.scales.y.min          = 0;
     opts.scales.y.suggestedMax = Math.max(maxVal * 1.2, 0.5);
     opts.scales.y.ticks.callback = v => v.toFixed(1) + ' m';
 
+    const datasets = [];
+    if (obs.length) datasets.push({
+      label: 'Waarneming', data: obs, borderColor: color,
+      backgroundColor: color + '18', borderWidth: 2, pointRadius: 0, pointHoverRadius: 4,
+      fill: true, tension: 0.35,
+    });
+    if (forecast.length) datasets.push({
+      label: (fc && fc.model ? fc.model : 'ECMWF WAM') + '-verwachting',
+      data: forecast, borderColor: FC_COLOR, backgroundColor: 'transparent',
+      borderWidth: 2, borderDash: [6, 4], pointRadius: 0, pointHoverRadius: 4,
+      fill: false, tension: 0.35,
+    });
+
     chartInstance = new Chart(canvasEl, {
       type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          data: values, borderColor: color,
-          backgroundColor: color + '18',
-          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4,
-          fill: true, tension: 0.35,
-        }],
-      },
+      data: { datasets },
       options: opts,
     });
 
@@ -2681,6 +2704,7 @@ async function openTempChart(code, naam, huidigTemp, tijdstip) {
 
   document.getElementById('chart-naam').textContent      = naam || code;
   document.getElementById('chart-subtitle').textContent  = 'Temperatuur afgelopen 24 uur';
+  document.getElementById('chart-period-label').textContent = 'Afgelopen 24 uur';
   document.getElementById('chart-hm0-label').textContent = '°C';
   const color = tempColor(huidigTemp);
   document.getElementById('chart-hm0').textContent  = huidigTemp !== null ? huidigTemp.toFixed(1) : '–';
