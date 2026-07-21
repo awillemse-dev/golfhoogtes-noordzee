@@ -649,7 +649,27 @@
       border-bottom: 1px dashed var(--border);
       margin-bottom: 2px;
     }
-    .vk-card.vk-flash { box-shadow: 0 0 0 2px #1d4ed8; transition: box-shadow 0.2s; }
+    .vk-card { transition: box-shadow 0.2s, border-color 0.2s; }
+    .vk-card.vk-active { border-color: #1d4ed8; box-shadow: 0 0 0 2px rgba(29,78,216,0.35); }
+    .vk-storm {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid;
+      border-radius: 7px;
+      padding: 6px 10px;
+      margin-bottom: 4px;
+    }
+    .vk-storm-icon { font-size: 1rem; line-height: 1; }
+    .vk-storm-label {
+      font-size: 0.6rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-weight: 600;
+    }
+    .vk-storm-val { margin-left: auto; font-size: 0.8rem; font-weight: 700; }
 
     /* ── Route forecast kaartjes ─────────────────────────────────────────── */
     .route-fc-card {
@@ -5129,6 +5149,23 @@ const _vkWmo = c => VK_WMO[c] || ['—','·'];
 const VK_DIRS = ['N','NNO','NO','ONO','O','OZO','ZO','ZZO','Z','ZZW','ZW','WZW','W','WNW','NW','NNW'];
 const _vkDir = d => (d == null) ? '' : VK_DIRS[Math.round(d/22.5) % 16];
 
+// Onweerskans afgeleid uit CAPE (J/kg) + WMO-code (95/96/99 = onweer)
+function _vkOnweer(cape, code) {
+  const isTS = [95, 96, 99].includes(code);
+  let lvl, col;
+  if (cape == null)       { lvl = 'onbekend';  col = '#64748b'; }
+  else if (cape < 300)    { lvl = 'Laag';      col = '#059669'; }
+  else if (cape < 800)    { lvl = 'Matig';     col = '#d97706'; }
+  else if (cape < 1500)   { lvl = 'Verhoogd';  col = '#ea580c'; }
+  else                    { lvl = 'Hoog';      col = '#dc2626'; }
+  if (isTS)               { lvl = 'Onweer verwacht'; col = '#dc2626'; }
+  return { lvl, col, isTS };
+}
+
+let _vkMarkers   = [];
+let _vkHighlight = null;
+let _vkActiveIdx = -1;
+
 function _ensureVakantieMap() {
   if (_vkMap) { _vkMap.invalidateSize(); return; }
   _vkMap = L.map('vakantie-map', { zoomControl:true, scrollWheelZoom:true, attributionControl:false });
@@ -5137,6 +5174,10 @@ function _ensureVakantieMap() {
   }).addTo(_vkMap);
   const latlngs = VAKANTIE_ROUTE.map(w => [w.lat, w.lon]);
   L.polyline(latlngs, { color:'#1d4ed8', weight:3, opacity:0.7 }).addTo(_vkMap);
+  _vkHighlight = L.circleMarker(latlngs[0], {
+    radius:15, color:'#1d4ed8', weight:3, fill:false, opacity:0,
+  }).addTo(_vkMap);
+  _vkMarkers = [];
   VAKANTIE_ROUTE.forEach((w, i) => {
     const last = i === VAKANTIE_ROUTE.length - 1;
     const col  = i === 0 ? '#059669' : last ? '#dc2626' : '#1d4ed8';
@@ -5146,10 +5187,36 @@ function _ensureVakantieMap() {
     m.bindTooltip(`${i+1}. ${w.naam}`, { direction:'top' });
     m.on('click', () => {
       const el = document.getElementById(`vk-card-${i}`);
-      if (el) { el.scrollIntoView({ behavior:'smooth', block:'center' }); el.classList.add('vk-flash'); setTimeout(()=>el.classList.remove('vk-flash'), 1200); }
+      if (el) { el.scrollIntoView({ behavior:'smooth', block:'center' }); }
+      _vkSetActive(i, true);
     });
+    _vkMarkers.push(m);
   });
   _vkMap.fitBounds(latlngs, { padding:[30,30] });
+}
+
+// Markeer de actieve etappe op de kaart (highlight-ring)
+function _vkSetActive(i, pan) {
+  if (i === _vkActiveIdx || !_vkHighlight) { if (pan && _vkMap) _vkMap.panTo([VAKANTIE_ROUTE[i].lat, VAKANTIE_ROUTE[i].lon], { animate:true }); return; }
+  _vkActiveIdx = i;
+  const w = VAKANTIE_ROUTE[i];
+  _vkHighlight.setLatLng([w.lat, w.lon]).setStyle({ opacity:1 });
+  if (pan && _vkMap) _vkMap.panTo([w.lat, w.lon], { animate:true });
+  document.querySelectorAll('.vk-card.vk-active').forEach(el => el.classList.remove('vk-active'));
+  const card = document.getElementById(`vk-card-${i}`);
+  if (card) card.classList.add('vk-active');
+}
+
+// Bij scrollen door de lijst: bepaal welke etappe boven in beeld staat
+function _vkOnScroll() {
+  const list = document.getElementById('vakantie-list');
+  const top  = list.getBoundingClientRect().top + 90;
+  let idx = 0;
+  for (let i = 0; i < VAKANTIE_ROUTE.length; i++) {
+    const c = document.getElementById(`vk-card-${i}`);
+    if (c && c.getBoundingClientRect().top <= top) idx = i; else break;
+  }
+  _vkSetActive(idx, false);
 }
 
 function _vkInitDeparture() {
@@ -5195,7 +5262,7 @@ async function _fetchVakantieWeer() {
   const fetchWp = async (w, eta) => {
     const isoDate = _vkLocalDate(eta);
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${w.lat.toFixed(4)}&longitude=${w.lon.toFixed(4)}`
-      + `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,weather_code,cloud_cover,relative_humidity_2m,wind_speed_10m,wind_gusts_10m,wind_direction_10m`
+      + `&hourly=temperature_2m,apparent_temperature,dew_point_2m,relative_humidity_2m,precipitation,precipitation_probability,rain,showers,snowfall,weather_code,cloud_cover,surface_pressure,cape,wind_speed_10m,wind_gusts_10m,wind_direction_10m`
       + `&models=ecmwf_ifs025&timezone=Europe%2FParis&start_date=${isoDate}&end_date=${isoDate}&wind_speed_unit=kmh`;
     try {
       const j = await fetch(url).then(r => r.ok ? r.json() : null);
@@ -5206,9 +5273,11 @@ async function _fetchVakantieWeer() {
       times.forEach((t, idx) => { const diff = Math.abs(parseInt(t.slice(11,13)) - targetH); if (diff < bd) { bd = diff; best = idx; } });
       const g = k => { const a = j.hourly[k]; return a ? a[best] : null; };
       return {
-        temp:g('temperature_2m'), feels:g('apparent_temperature'),
-        precip:g('precipitation'), pprob:g('precipitation_probability'),
-        code:g('weather_code'), cloud:g('cloud_cover'), rh:g('relative_humidity_2m'),
+        temp:g('temperature_2m'), feels:g('apparent_temperature'), dew:g('dew_point_2m'),
+        rh:g('relative_humidity_2m'), precip:g('precipitation'), pprob:g('precipitation_probability'),
+        rain:g('rain'), showers:g('showers'), snow:g('snowfall'),
+        code:g('weather_code'), cloud:g('cloud_cover'), pres:g('surface_pressure'),
+        cape:g('cape'),
         wind:g('wind_speed_10m'), gust:g('wind_gusts_10m'), wdir:g('wind_direction_10m'),
       };
     } catch { return null; }
@@ -5234,19 +5303,35 @@ async function _fetchVakantieWeer() {
       +   `<div class="vk-card-temp">${t}°</div>`
       + `</div>`;
     if (r) {
+      const ow = _vkOnweer(r.cape, r.code);
+      const capeTxt = r.cape != null ? ` · CAPE ${Math.round(r.cape)} J/kg` : '';
       html += `<div class="vk-card-body" id="vk-body-${i}">`
         + `<div class="vk-desc">${desc}</div>`
-        + _vkMetric('Gevoelstemp.',      r.feels  != null ? Math.round(r.feels) + '°C' : '–')
+        + `<div class="vk-storm" style="border-color:${ow.col}55;background:${ow.col}12;">`
+        +   `<span class="vk-storm-icon">⛈️</span>`
+        +   `<span class="vk-storm-label">Onweerskans</span>`
+        +   `<span class="vk-storm-val" style="color:${ow.col}">${ow.lvl}${capeTxt}</span>`
+        + `</div>`
+        + _vkMetric('Gevoelstemp.',      r.feels  != null ? Math.round(r.feels) + ' °C' : '–')
+        + _vkMetric('Dauwpunt',          r.dew    != null ? Math.round(r.dew) + ' °C' : '–')
         + _vkMetric('Neerslag',          r.precip != null ? r.precip.toFixed(1) + ' mm' + (r.pprob != null ? ` · ${r.pprob}%` : '') : '–')
+        + _vkMetric('Sneeuwval',         r.snow   != null ? r.snow.toFixed(1) + ' cm' : '–')
         + _vkMetric('Wind',              r.wind   != null ? Math.round(r.wind) + ' km/u ' + _vkDir(r.wdir) : '–')
         + _vkMetric('Windstoten',        r.gust   != null ? Math.round(r.gust) + ' km/u' : '–')
         + _vkMetric('Bewolking',         r.cloud  != null ? r.cloud + ' %' : '–')
         + _vkMetric('Luchtvochtigheid',  r.rh     != null ? r.rh + ' %' : '–')
+        + _vkMetric('Luchtdruk',         r.pres   != null ? Math.round(r.pres) + ' hPa' : '–')
+        + _vkMetric('CAPE',              r.cape   != null ? Math.round(r.cape) + ' J/kg' : '–')
         + `</div>`;
     }
     html += `</div>`;
   });
   listEl.innerHTML = html;
+
+  _vkActiveIdx = -1;
+  const list = document.getElementById('vakantie-list');
+  list.onscroll = _vkOnScroll;
+  _vkSetActive(0, false);
 }
 
 // ── Waarnemingen Nederland ────────────────────────────────────────────────────
