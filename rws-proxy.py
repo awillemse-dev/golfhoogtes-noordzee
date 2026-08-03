@@ -252,7 +252,18 @@ def _bliksem_bg():
 
 # ── Hulpfunctie: POST naar RWS API ──────────────────────────────────────────
 
-def rws_post(path, body):
+class RwsAntwoordTeGroot(Exception):
+    """Een RWS-antwoord overschrijdt de toegestane grootte."""
+
+
+# Een "laatste waarneming" is normaal < 0,5 MB. Sommige stations geven echter
+# hun volledige meetreeks terug: gemeten tot 58 MB JSON voor één batch, wat als
+# Python-objecten ~400 MB wordt en het proces op Render omver duwde. Deze grens
+# vangt zulke uitschieters af voordat ze geparsed worden.
+RWS_MAX_ANTWOORD = 4 * 1024 * 1024
+
+
+def rws_post(path, body, max_bytes=None):
     data = json.dumps(body).encode("utf-8")
     req  = urllib.request.Request(
         RWS_BASE + path,
@@ -265,7 +276,14 @@ def rws_post(path, body):
         },
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        if max_bytes is None:
+            return json.loads(resp.read().decode("utf-8"))
+        # Lees één byte meer dan toegestaan: is die er, dan is het antwoord te
+        # groot en breken we af zonder het te parsen.
+        raw = resp.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise RwsAntwoordTeGroot(f"{path}: antwoord groter dan {max_bytes // (1024*1024)} MB")
+        return json.loads(raw.decode("utf-8"))
 
 
 # ── Stap 1: catalogus laden en Hm0-stations selecteren ──────────────────────
@@ -324,20 +342,33 @@ def fetch_latest_values(stations):
         batch = stations[i:i + BATCH]
         print(f"[RWS] Waarnemingen {i+1}–{min(i+BATCH, len(stations))} "
               f"van {len(stations)}…")
-        resp = rws_post(
-            "/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen",
-            {
-                "AquoPlusWaarnemingMetadataLijst": [{
-                    "AquoMetadata": {
-                        "Compartiment": {"Code": "OW"},
-                        "Eenheid":      {"Code": "cm"},
-                        "Grootheid":    {"Code": "Hm0"},
-                    }
-                }],
-                "LocatieLijst": [{"Code": s["Code"]} for s in batch],
-            },
-        )
-        results.extend(resp.get("WaarnemingenLijst", []))
+        def _haal_hm0(codes):
+            return rws_post(
+                "/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen",
+                {
+                    "AquoPlusWaarnemingMetadataLijst": [{
+                        "AquoMetadata": {
+                            "Compartiment": {"Code": "OW"},
+                            "Eenheid":      {"Code": "cm"},
+                            "Grootheid":    {"Code": "Hm0"},
+                        }
+                    }],
+                    "LocatieLijst": [{"Code": c} for c in codes],
+                },
+                max_bytes=RWS_MAX_ANTWOORD,
+            )
+
+        codes = [s["Code"] for s in batch]
+        try:
+            results.extend(_haal_hm0(codes).get("WaarnemingenLijst", []))
+        except RwsAntwoordTeGroot:
+            # Eén station geeft een buitensporig antwoord; los ophalen zodat
+            # alleen dat station wegvalt in plaats van de hele batch.
+            for c in codes:
+                try:
+                    results.extend(_haal_hm0([c]).get("WaarnemingenLijst", []))
+                except Exception:
+                    continue
 
     return results
 
@@ -2569,6 +2600,12 @@ _TEMP_INLAND = [
     "zwembad", "badstrand", "recreatie", "triathlon", "bosbaan",
 ]
 
+# Afstemming van de RWS-temperatuurophaal: kleinere batches en minder
+# parallellisme drukken de piek, want het parsen van één groot antwoord is
+# de duurste stap. Zie de meting in de commit-boodschap.
+_RWS_TEMP_BATCH   = 10
+_RWS_TEMP_WORKERS = 1
+
 def _fetch_rws_temp():
     """RWS zeewatertemperatuur (Noordzee-stations). Eén catalogusverzoek + parallelle batches."""
     now      = datetime.now(timezone.utc)
@@ -2594,57 +2631,90 @@ def _fetch_rws_temp():
                 and not any(kw in l.get("Code","").lower() or kw in l.get("Naam","").lower()
                             for kw in _TEMP_INLAND)]
 
-    BATCH = 20
+    BATCH = _RWS_TEMP_BATCH
     station_map  = {s["Code"]: s for s in stations}
     batches      = [stations[i:i + BATCH] for i in range(0, len(stations), BATCH)]
 
     def fetch_batch(batch):
-        return rws_post("/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen", {
-            "AquoPlusWaarnemingMetadataLijst": [{"AquoMetadata": {
-                "Compartiment": {"Code": "OW"},
-                "Eenheid":      {"Code": "oC"},
-                "Grootheid":    {"Code": "T"},
-            }}],
-            "LocatieLijst": [{"Code": s["Code"]} for s in batch],
-        })
+        """Haal één batch op en reduceer hem meteen tot het minimum per station.
+
+        Cruciaal voor het geheugen: de rauwe antwoorden zijn samen ~25 MB JSON,
+        wat als Python-objecten tot ~360 MB piek oploopt. Door hier al terug te
+        brengen tot (tijdstip, locatie, waarde) per station wordt elk groot
+        antwoord direct vrijgegeven, in plaats van tot het eind bewaard te
+        blijven omdat alle futures tegelijk werden uitgelezen.
+        """
+        def _haal(codes):
+            return rws_post("/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen", {
+                "AquoPlusWaarnemingMetadataLijst": [{"AquoMetadata": {
+                    "Compartiment": {"Code": "OW"},
+                    "Eenheid":      {"Code": "oC"},
+                    "Grootheid":    {"Code": "T"},
+                }}],
+                "LocatieLijst": [{"Code": c} for c in codes],
+            }, max_bytes=RWS_MAX_ANTWOORD)
+
+        def _reduceer(resp, best):
+            for w in resp.get("WaarnemingenLijst", []):
+                loc = w.get("Locatie") or {}
+                loc_code = loc.get("Code")
+                if not loc_code:
+                    continue
+                metingen = w.get("MetingenLijst") or []
+                meting   = metingen[0] if metingen else {}
+                tijdstip = meting.get("Tijdstip")
+                huidig   = best.get(loc_code)
+                if huidig is None or (tijdstip or "") > (huidig[0] or ""):
+                    best[loc_code] = (
+                        tijdstip,
+                        loc.get("Naam"), loc.get("Lat"), loc.get("Lon"),
+                        (meting.get("Meetwaarde") or {}).get("Waarde_Numeriek"),
+                    )
+
+        codes = [s["Code"] for s in batch]
+        best  = {}
+        try:
+            _reduceer(_haal(codes), best)
+        except RwsAntwoordTeGroot:
+            # Eén station in deze batch geeft een buitensporig antwoord. Haal de
+            # stations los op, zodat we alleen de boosdoener overslaan in plaats
+            # van de hele batch te verliezen.
+            for c in codes:
+                try:
+                    _reduceer(_haal([c]), best)
+                except Exception:
+                    continue
+        return best
 
     from concurrent.futures import wait as _wt
-    ex_rws  = ThreadPoolExecutor(max_workers=min(len(batches), 3) or 1)
+    # Twee werkers i.p.v. drie: het parsen van een groot antwoord is de piek,
+    # en die schaalt recht mee met het aantal dat tegelijk binnenkomt.
+    ex_rws  = ThreadPoolExecutor(max_workers=min(len(batches), _RWS_TEMP_WORKERS) or 1)
     futs    = [ex_rws.submit(fetch_batch, b) for b in batches]
-    _wt(futs, timeout=20)
-    ex_rws.shutdown(wait=False)
+    _wt(futs, timeout=75)
+    # Belangrijk: géén shutdown(wait=False). Dat liet de nog niet afgeronde
+    # batches gewoon doordraaien, zodat hun geheugengebruik overlapte met de
+    # taken die daarna kwamen. De achtergrondlus is juist sequentieel gemaakt om
+    # dat te voorkomen; zo liepen de pieken alsnog op tot boven de Render-limiet.
+    # cancel_futures ruimt de wachtrij op, wait=True wacht de lopende af.
+    ex_rws.shutdown(wait=True, cancel_futures=True)
 
     for fut in futs:
         if not fut.done():
             continue
         try:
-            resp = fut.result()
+            best = fut.result()
         except Exception:
             continue
-        best = {}
-        for w in resp.get("WaarnemingenLijst", []):
-            loc_code = (w.get("Locatie") or {}).get("Code")
-            if not loc_code:
-                continue
-            metingen = w.get("MetingenLijst") or []
-            tijdstip = metingen[0].get("Tijdstip") if metingen else None
-            if loc_code not in best or (tijdstip or "") > (
-                ((best[loc_code].get("MetingenLijst") or [{}])[0]).get("Tijdstip") or ""
-            ):
-                best[loc_code] = w
 
-        for loc_code, w in best.items():
-            station  = station_map.get(loc_code) or w.get("Locatie") or {}
-            lat = station.get("Lat") or (w.get("Locatie") or {}).get("Lat")
-            lon = station.get("Lon") or (w.get("Locatie") or {}).get("Lon")
+        for loc_code, (tijdstip, w_naam, w_lat, w_lon, waarde) in best.items():
+            station  = station_map.get(loc_code) or {}
+            lat = station.get("Lat") or w_lat
+            lon = station.get("Lon") or w_lon
             if lat is None or lon is None:
                 continue
-            naam     = (w.get("Locatie") or {}).get("Naam") or station.get("Naam") or loc_code
-            metingen = w.get("MetingenLijst") or []
-            meting   = metingen[0] if metingen else {}
-            waarde   = (meting.get("Meetwaarde") or {}).get("Waarde_Numeriek")
+            naam     = w_naam or station.get("Naam") or loc_code
             temp_c   = round(waarde, 1) if waarde is not None else None
-            tijdstip = meting.get("Tijdstip")
             if tijdstip:
                 try:
                     dt = datetime.fromisoformat(tijdstip)
@@ -2761,7 +2831,7 @@ def _refresh_temp_bg():
         fut_imi   = ex.submit(_fetch_imi_temp)
         fut_lb    = ex.submit(_fetch_labouee_temp)
         fut_sst   = ex.submit(fetch_ocean_sst)
-        _wait_t([fut_rws, fut_cefas, fut_ndbc, fut_imi, fut_lb, fut_sst], timeout=45)
+        _wait_t([fut_rws, fut_cefas, fut_ndbc, fut_imi, fut_lb, fut_sst], timeout=100)
     # with-blok: resterende taken gecanceld, lopende threads netjes afgewacht
 
     features = []
@@ -2847,7 +2917,24 @@ def _fetch_wind_batch(batch, station_map, now):
                     "Grootheid":    {"Code": grootheid},
                 }}],
                 "LocatieLijst": loc_list,
-            })
+            }, max_bytes=RWS_MAX_ANTWOORD)
+        except RwsAntwoordTeGroot:
+            # Losse stations proberen zodat alleen de boosdoener wegvalt
+            samen = {"WaarnemingenLijst": []}
+            for lc in loc_list:
+                try:
+                    deel = rws_post("/ONLINEWAARNEMINGENSERVICES/OphalenLaatsteWaarnemingen", {
+                        "AquoPlusWaarnemingMetadataLijst": [{"AquoMetadata": {
+                            "Compartiment": {"Code": "LT"},
+                            "Eenheid":      {"Code": eenheid},
+                            "Grootheid":    {"Code": grootheid},
+                        }}],
+                        "LocatieLijst": [lc],
+                    }, max_bytes=RWS_MAX_ANTWOORD)
+                except Exception:
+                    continue
+                samen["WaarnemingenLijst"].extend(deel.get("WaarnemingenLijst", []))
+            return samen
         except Exception:
             return {}
 
