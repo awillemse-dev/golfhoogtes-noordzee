@@ -1905,8 +1905,8 @@ async function fetchWindData() {
     }
   } catch (err) {
     console.error('[wind]', err);
-    if (activeLayer === 'wind') setStatus('error', 'Opnieuw laden…');
     _retryLater('wind', fetchWindData, () => activeLayer === 'wind');
+    if (activeLayer === 'wind') setStatus('error', _foutTekst(err, 'wind'));
   }
 }
 
@@ -2077,7 +2077,7 @@ async function fetchMetarData() {
     const resp = await fetchWithTimeout(metarUrl(), 60000);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) { _retryLater('metar', fetchMetarData, () => activeLayer === 'metar', 2000); return; }
+    if (geojson.laden) { _pollAgain('metar', fetchMetarData, () => activeLayer === 'metar'); return; }
     renderMetarMarkers(geojson);
     _markFetched('metar');
     if (activeLayer === 'metar') {
@@ -2088,8 +2088,8 @@ async function fetchMetarData() {
     }
   } catch (err) {
     console.error('[metar]', err);
-    if (activeLayer === 'metar') setStatus('error', 'Opnieuw laden…');
     _retryLater('metar', fetchMetarData, () => activeLayer === 'metar');
+    if (activeLayer === 'metar') setStatus('error', _foutTekst(err, 'metar'));
   }
 }
 
@@ -2398,7 +2398,7 @@ async function fetchZichtData() {
     const resp = await fetchWithTimeout(zichtUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) { _retryLater('zicht', fetchZichtData, () => activeLayer === 'zicht', 2000); return; }
+    if (geojson.laden) { _pollAgain('zicht', fetchZichtData, () => activeLayer === 'zicht'); return; }
     renderZichtMarkers(geojson);
     _markFetched('zicht');
     if (activeLayer === 'zicht') {
@@ -2409,8 +2409,8 @@ async function fetchZichtData() {
     }
   } catch (err) {
     console.error('[zicht]', err);
-    if (activeLayer === 'zicht') setStatus('error', 'Opnieuw laden…');
     _retryLater('zicht', fetchZichtData, () => activeLayer === 'zicht');
+    if (activeLayer === 'zicht') setStatus('error', _foutTekst(err, 'zicht'));
   }
 }
 
@@ -2532,7 +2532,7 @@ async function fetchTempData() {
     const resp = await fetchWithTimeout(tempUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) { _retryLater('temp', fetchTempData, () => activeLayer === 'temp', 2000); return; }
+    if (geojson.laden) { _pollAgain('temp', fetchTempData, () => activeLayer === 'temp'); return; }
     renderTempMarkers(geojson);
     _markFetched('temp');
     if (activeLayer === 'temp') {
@@ -2543,8 +2543,8 @@ async function fetchTempData() {
     }
   } catch (err) {
     console.error('[temp]', err);
-    if (activeLayer === 'temp') setStatus('error', 'Opnieuw laden…');
     _retryLater('temp', fetchTempData, () => activeLayer === 'temp');
+    if (activeLayer === 'temp') setStatus('error', _foutTekst(err, 'temp'));
   }
 }
 
@@ -2775,6 +2775,32 @@ function _retryReset(name) {
   s.tries = 0;
 }
 
+// Vertelt wát er mis is in plaats van een eeuwig "Opnieuw laden…". Bij een
+// onbereikbare proxy (server plat of aan het opstarten) is dat een ander
+// verhaal dan een losse mislukte request.
+function _foutTekst(err, naam) {
+  const s = _retry[naam];
+  const nog = s && s.tid ? ` · nieuwe poging over ${Math.round(_retryDelay(naam) / 1000)}s` : '';
+  const netwerk = err && (err.name === 'TypeError' || err.name === 'AbortError');
+  return (netwerk ? 'Server niet bereikbaar' : 'Laden mislukt') + nog;
+}
+
+// Opwarmen van de proxy is geen fout: dan willen we juist een vaste, korte
+// tussenpoos zodat de kaart zich vult zodra de data er is — niet de oplopende
+// wachttijd van _retryLater, die daar tot 48 seconden vertraging op zou zetten.
+function _pollAgain(name, fn, isActive, ms = 2500) {
+  const s = _retry[name] || (_retry[name] = { tid: null, tries: 0 });
+  if (s.tid || !isActive()) return;
+  s.tid = setTimeout(() => {
+    s.tid = null;
+    if (!isActive()) return;
+    if (document.hidden) { _pollAgain(name, fn, isActive, ms); return; }
+    fn();
+  }, ms);
+}
+
+function _retryDelay(name) { const s = _retry[name]; return (s && s.delay) || 3000; }
+
 function _retryLater(name, fn, isActive, baseMs = 3000) {
   const s = _retry[name] || (_retry[name] = { tid: null, tries: 0 });
   if (s.tid) return;                          // er staat er al een gepland
@@ -2784,6 +2810,7 @@ function _retryLater(name, fn, isActive, baseMs = 3000) {
   // allemaal tegelijk terugkomen
   const delay = Math.min(baseMs * Math.pow(2, s.tries - 1), 48000)
               + Math.floor(Math.random() * 1000);
+  s.delay = delay;
   s.tid = setTimeout(() => {
     s.tid = null;
     if (!isActive()) { s.tries = 0; return; }
@@ -2804,11 +2831,19 @@ async function fetchWithTimeout(url, timeoutMs = 90000) {
   try {
     const prev    = _etagCache.get(url);
     const headers = prev ? { 'If-None-Match': prev.etag } : undefined;
-    const resp    = await fetch(url, { cache: 'no-cache', signal: ctrl.signal, headers });
+    let resp      = await fetch(url, { cache: 'no-cache', signal: ctrl.signal, headers });
 
-    if (resp.status === 304 && prev) {
-      // Ongewijzigd → hergebruik het eerder geparste antwoord
-      return { ok: true, status: 200, unchanged: true, json: async () => prev.data };
+    if (resp.status === 304) {
+      if (prev) {
+        // Ongewijzigd → hergebruik het eerder geparste antwoord
+        return { ok: true, status: 200, unchanged: true, json: async () => prev.data };
+      }
+      // 304 terwijl wij zelf niets bewaard hebben. Dat gebeurt na een refresh:
+      // de browsercache heeft nog een ETag, onze map is leeg. Dit mag nooit als
+      // fout naar boven komen — anders blijft de pagina op "Opnieuw laden…"
+      // hangen omdat elke nieuwe poging dezelfde 304 oplevert. Forceer daarom
+      // één verse ophaalactie die de cache overslaat.
+      resp = await fetch(url, { cache: 'reload', signal: ctrl.signal });
     }
     if (resp.ok) {
       const etag = resp.headers.get('etag');
@@ -2830,7 +2865,7 @@ async function fetchWaveData() {
     const resp = await fetchWithTimeout(wavesUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) { _retryLater('golf', fetchWaveData, () => activeLayer === 'golf', 2000); return; }
+    if (geojson.laden) { _pollAgain('golf', fetchWaveData, () => activeLayer === 'golf'); return; }
     renderMarkers(geojson);
     _markFetched('golf');
     if (activeLayer === 'golf') {
@@ -2841,8 +2876,8 @@ async function fetchWaveData() {
     }
   } catch (err) {
     console.error('[waves]', err);
-    if (activeLayer === 'golf') setStatus('error', 'Opnieuw laden…');
     _retryLater('golf', fetchWaveData, () => activeLayer === 'golf');
+    if (activeLayer === 'golf') setStatus('error', _foutTekst(err, 'golf'));
   }
 }
 
@@ -5692,8 +5727,8 @@ async function fetchNlTempData() {
     }
   } catch (err) {
     console.error('[nl-temp]', err);
-    if (activeSection === 'nederland') setStatus('error', 'Opnieuw laden…');
     _retryLater('nl-temp', fetchNlTempData, () => activeSection === 'nederland');
+    if (activeSection === 'nederland') setStatus('error', _foutTekst(err, 'nl-temp'));
   }
 }
 

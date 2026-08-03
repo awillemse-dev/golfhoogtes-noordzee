@@ -3901,7 +3901,11 @@ class Handler(BaseHTTPRequestHandler):
     def send_cors(self):
         self.send_header("Access-Control-Allow-Origin",  "*")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # If-None-Match moet expliciet toegestaan zijn, anders blokkeert de
+        # preflight de conditionele request vanaf GitHub Pages. En zonder
+        # Expose-Headers kan JavaScript de ETag cross-origin niet eens lezen.
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, If-None-Match")
+        self.send_header("Access-Control-Expose-Headers", "ETag")
 
     def _accepts_gzip(self):
         return "gzip" in self.headers.get("Accept-Encoding", "")
