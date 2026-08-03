@@ -1076,6 +1076,7 @@ def fetch_ndbc_wind_history(station_id):
 _ndbc_wind_features = []   # gevuld door fetch_ndbc_data(), gebruikt door get_wind_data()
 _ndbc_vis_features  = []   # gevuld door fetch_ndbc_data(), gebruikt door /api/visibility
 _ocean_vis_features = []   # gevuld door _refresh_ocean_vis_bg(), gebruikt door /api/visibility
+_vis_rev            = 0    # loopt op bij elke verversing → sleutel voor de payload-cache
 
 def fetch_ndbc_data():
     req = urllib.request.Request(
@@ -1185,6 +1186,7 @@ def fetch_ndbc_data():
 
     _ndbc_wind_features = wind_features
     _ndbc_vis_features  = vis_features
+    global _vis_rev; _vis_rev += 1
     print(f"[NDBC] {len(wave_features)} golfstations, {len(wind_features)} windstations, {len(vis_features)} zichtstations geladen")
     return wave_features
 
@@ -1991,6 +1993,7 @@ def _refresh_ocean_vis_bg():
     try:
         features = fetch_ocean_visibility()
         _ocean_vis_features = features
+        global _vis_rev; _vis_rev += 1
         print(f"[Ocean VIS bg] {len(features)} oceaanpunten geladen")
     except Exception as e:
         print(f"[Ocean VIS bg] Fout: {e}")
@@ -3644,6 +3647,10 @@ def fetch_wave_forecast(lat, lon):
         data.append({"t": dt.isoformat(), "v": round(float(v), 2)})
 
     result = {"model": "ECMWF WAM", "data": data}
+    # Verlopen entries opruimen: zonder dit groeide de cache door met elk
+    # aangeklikt station en werd er nooit iets vrijgegeven.
+    for k in [k for k, (t, _) in _wave_fc_cache.items() if (now - t) >= WAVE_FC_TTL]:
+        _wave_fc_cache.pop(k, None)
     _wave_fc_cache[key] = (now, result)
     return result
 
@@ -3769,6 +3776,7 @@ def fetch_knmi_data():
 
     _knmi_vis_features = vis_list
     _vis_cache_ready   = True
+    global _vis_rev; _vis_rev += 1
     print(f"[KNMI/BR] {len(features)} temp-stations, {len(vis_list)} zicht-stations geladen")
     return {
         "type":           "FeatureCollection",
@@ -3815,6 +3823,75 @@ def _safe_json(obj):
     return json.dumps(_sanitize(obj), ensure_ascii=False)
 
 
+# ── Geheugen daadwerkelijk teruggeven aan het OS ──────────────────────────────
+# gc.collect() geeft objecten vrij binnen Python, maar glibc houdt de vrijgekomen
+# blokken vast; de RSS die Render meet zakt daardoor niet. malloc_trim() geeft ze
+# alsnog terug. Alleen aanwezig op Linux (Render) — elders stil overslaan.
+try:
+    import ctypes as _ctypes
+    _libc = _ctypes.CDLL("libc.so.6")
+    _libc.malloc_trim(0)
+except Exception:
+    _libc = None
+
+def _release_memory():
+    """Ruim op én geef het geheugen terug aan het besturingssysteem."""
+    import gc as _gc
+    _gc.collect()
+    if _libc is not None:
+        try:
+            _libc.malloc_trim(0)
+        except Exception:
+            pass
+
+
+# ── Payload-cache: serialiseer + gzip één keer per data-versie ────────────────
+# Zonder deze cache deed élke request _sanitize() + json.dumps() + gzip over de
+# volledige GeoJSON. Voor /api/wind is dat ~14 ms CPU en ~2 MB tijdelijke
+# allocatie per request, terwijl de onderliggende data maar eens per 9 minuten
+# verandert. Bij 20 gelijktijdige requests liep het geheugen daardoor vol.
+_payload_cache = {}                 # key → (token, raw_bytes, gzip_bytes, etag)
+_payload_lock  = threading.Lock()
+_PAYLOAD_MAX   = 24                 # veiligheidsklep tegen ongebreidelde groei
+
+def _payload_token(obj):
+    """Goedkoop versie-kenmerk: verandert zodra de data ververst is."""
+    if isinstance(obj, dict):
+        feats = obj.get("features")
+        return (obj.get("opgehaald"), obj.get("aantalStations"),
+                len(feats) if isinstance(feats, list) else None)
+    return None
+
+def _cached_payload(key, obj=None, token=None, build=None):
+    """Geef (raw, gzip, etag) terug; serialiseert alleen als de versie wijzigde.
+
+    `build` is een callable die de payload pas opbouwt bij een cache-miss —
+    zo hoeft er bij een hit niets gealloceerd te worden.
+    """
+    if token is None and obj is not None:
+        token = _payload_token(obj)
+    if token is not None:
+        with _payload_lock:
+            hit = _payload_cache.get(key)
+            if hit is not None and hit[0] == token:
+                return hit[1], hit[2], hit[3]
+
+    if obj is None and build is not None:
+        obj = build()
+    raw = _safe_json(obj).encode("utf-8")
+
+    if token is None:                       # niet cachebaar → per request
+        return raw, None, None
+
+    gz   = _gzip.compress(raw, compresslevel=6)
+    etag = '"%s"' % _hashlib.md5(raw).hexdigest()[:16]
+    with _payload_lock:
+        if len(_payload_cache) >= _PAYLOAD_MAX and key not in _payload_cache:
+            _payload_cache.clear()
+        _payload_cache[key] = (token, raw, gz, etag)
+    return raw, gz, etag
+
+
 class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
@@ -3829,21 +3906,42 @@ class Handler(BaseHTTPRequestHandler):
     def _accepts_gzip(self):
         return "gzip" in self.headers.get("Accept-Encoding", "")
 
-    def _send_json(self, data_bytes, max_age=0):
-        """Stuur JSON met optionele gzip-compressie en cache-headers."""
+    def _send_json(self, data_bytes, max_age=0, gz=None):
+        """Stuur JSON met optionele gzip-compressie en cache-headers.
+
+        `gz` is de vooraf gecomprimeerde variant uit de payload-cache; is die er,
+        dan hoeft er per request niet opnieuw gecomprimeerd te worden.
+        """
         if self._accepts_gzip() and len(data_bytes) > 500:
-            body = _gzip.compress(data_bytes, compresslevel=6)
+            body = gz if gz is not None else _gzip.compress(data_bytes, compresslevel=6)
             self.send_header("Content-Encoding", "gzip")
         else:
             body = data_bytes
+        # 'no-cache' i.p.v. 'no-store': de browser mág opslaan maar moet altijd
+        # revalideren — samen met de ETag levert dat goedkope 304's op.
         ct = max_age if isinstance(max_age, str) else (
-            f"public, max-age={max_age}" if max_age > 0 else "no-cache, no-store")
+            f"public, max-age={max_age}" if max_age > 0 else "no-cache")
         self.send_header("Content-Type",   "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control",  ct)
         self.send_cors()
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_cached(self, key, obj=None, max_age=0, token=None, build=None):
+        """Stuur een payload uit de serialisatie-cache; 304 als de client hem al heeft."""
+        raw, gz, etag = _cached_payload(key, obj, token=token, build=build)
+        if etag and self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag",          etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.send_cors()
+            self.end_headers()
+            return
+        self.send_response(200)
+        if etag:
+            self.send_header("ETag", etag)
+        self._send_json(raw, max_age=max_age, gz=gz)
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -3956,9 +4054,7 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
         # ── /api/waves ──────────────────────────────────────────────────────
         elif path == "/api/waves":
             try:
-                data = get_data()
-                self.send_response(200)
-                self._send_json(_safe_json(data).encode("utf-8"))
+                self._send_cached("waves", get_data())
             except Exception as exc:
                 print(f"[FOUT] {exc}")
                 body = json.dumps({"error": str(exc)}).encode("utf-8")
@@ -3972,9 +4068,7 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
         # ── /api/temp ────────────────────────────────────────────────────
         elif path == "/api/temp":
             try:
-                data = get_temp_data()
-                self.send_response(200)
-                self._send_json(_safe_json(data).encode("utf-8"))
+                self._send_cached("temp", get_temp_data())
             except Exception as exc:
                 print(f"[FOUT temp] {exc}")
                 body = json.dumps({"error": str(exc)}).encode("utf-8")
@@ -3993,15 +4087,17 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
                     self._send_json(json.dumps({"type": "FeatureCollection", "features": [],
                                                 "aantalStations": 0, "laden": True}).encode())
                     return
-                features = _knmi_vis_features + _ndbc_vis_features + _ocean_vis_features
-                data = {
-                    "type": "FeatureCollection",
-                    "features": features,
-                    "aantalStations": len(features),
-                    "opgehaald": datetime.now(timezone.utc).isoformat(),
-                }
-                self.send_response(200)
-                self._send_json(_safe_json(data).encode("utf-8"))
+                def _build_vis():
+                    feats = _knmi_vis_features + _ndbc_vis_features + _ocean_vis_features
+                    return {
+                        "type": "FeatureCollection",
+                        "features": feats,
+                        "aantalStations": len(feats),
+                        "opgehaald": datetime.now(timezone.utc).isoformat(),
+                    }
+                # Eigen revisieteller: de payload krijgt elke request een nieuwe
+                # tijdstempel, dus daar kan de cache niet op vertrouwen.
+                self._send_cached("visibility", token=("vis", _vis_rev), build=_build_vis)
             except Exception as exc:
                 body = json.dumps({"error": str(exc)}).encode("utf-8")
                 self.send_response(500)
@@ -4074,9 +4170,7 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
         # ── /api/wind ────────────────────────────────────────────────────
         elif path == "/api/wind":
             try:
-                data = get_wind_data()
-                self.send_response(200)
-                self._send_json(_safe_json(data).encode("utf-8"))
+                self._send_cached("wind", get_wind_data())
             except Exception as exc:
                 body = json.dumps({"error": str(exc)}).encode("utf-8")
                 self.send_response(500)
@@ -4142,9 +4236,7 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
         # ── /api/knmi ────────────────────────────────────────────────────
         elif path == "/api/knmi":
             try:
-                data = get_knmi_data()
-                self.send_response(200)
-                self._send_json(_safe_json(data).encode("utf-8"))
+                self._send_cached("knmi", get_knmi_data())
             except Exception as exc:
                 print(f"[FOUT knmi] {exc}")
                 body = json.dumps({"error": str(exc)}).encode("utf-8")
@@ -4283,9 +4375,7 @@ for (const host of ['ws1.blitzortung.org','ws2.blitzortung.org']) {
         # ── /api/metar ───────────────────────────────────────────────────
         elif path == "/api/metar":
             try:
-                data = get_metar_data()
-                self.send_response(200)
-                self._send_json(_safe_json(data).encode("utf-8"))
+                self._send_cached("metar", get_metar_data())
             except Exception as exc:
                 print(f"[FOUT metar] {exc}")
                 body = json.dumps({"error": str(exc)}).encode()
@@ -4658,13 +4748,13 @@ if __name__ == "__main__":
                 _taak()
             except Exception as e:
                 print(f"[CACHE] {_taak.__name__} mislukt: {e}")
-            _gc.collect()   # direct na elke taak geheugen vrijgeven
+            _release_memory()   # direct na elke taak geheugen teruggeven aan het OS
         # Waves opnieuw cachen nu CDIP + SOCIB gevuld zijn
         try:
             _refresh_waves()
         except Exception as e:
             print(f"[CACHE] Waves na fase 2 mislukt: {e}")
-        _gc.collect()
+        _release_memory()
         print("[CACHE] Alles klaar.\n")
 
         # Daarna elke 9 minuten herhalen — ook sequentieel
@@ -4676,12 +4766,12 @@ if __name__ == "__main__":
                     _taak()
                 except Exception as e:
                     print(f"[CACHE] {_taak.__name__} mislukt: {e}")
-                _gc.collect()   # direct na elke taak geheugen vrijgeven
+                _release_memory()   # direct na elke taak geheugen teruggeven aan het OS
             try:
                 _refresh_waves()
             except Exception as e:
                 print(f"[CACHE] Waves refresh mislukt: {e}")
-            _gc.collect()
+            _release_memory()
             print("[CACHE] Achtergrond-refresh klaar.")
 
     threading.Thread(target=_background_loop, daemon=True).start()

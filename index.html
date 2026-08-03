@@ -1906,7 +1906,7 @@ async function fetchWindData() {
   } catch (err) {
     console.error('[wind]', err);
     if (activeLayer === 'wind') setStatus('error', 'Opnieuw laden…');
-    setTimeout(fetchWindData, 3000);
+    _retryLater('wind', fetchWindData, () => activeLayer === 'wind');
   }
 }
 
@@ -2077,7 +2077,7 @@ async function fetchMetarData() {
     const resp = await fetchWithTimeout(metarUrl(), 60000);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) { setTimeout(fetchMetarData, 3000); return; }
+    if (geojson.laden) { _retryLater('metar', fetchMetarData, () => activeLayer === 'metar', 2000); return; }
     renderMetarMarkers(geojson);
     _markFetched('metar');
     if (activeLayer === 'metar') {
@@ -2089,7 +2089,7 @@ async function fetchMetarData() {
   } catch (err) {
     console.error('[metar]', err);
     if (activeLayer === 'metar') setStatus('error', 'Opnieuw laden…');
-    setTimeout(fetchMetarData, 3000);
+    _retryLater('metar', fetchMetarData, () => activeLayer === 'metar');
   }
 }
 
@@ -2398,7 +2398,7 @@ async function fetchZichtData() {
     const resp = await fetchWithTimeout(zichtUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) { setTimeout(fetchZichtData, 3000); return; }
+    if (geojson.laden) { _retryLater('zicht', fetchZichtData, () => activeLayer === 'zicht', 2000); return; }
     renderZichtMarkers(geojson);
     _markFetched('zicht');
     if (activeLayer === 'zicht') {
@@ -2410,7 +2410,7 @@ async function fetchZichtData() {
   } catch (err) {
     console.error('[zicht]', err);
     if (activeLayer === 'zicht') setStatus('error', 'Opnieuw laden…');
-    setTimeout(fetchZichtData, 3000);
+    _retryLater('zicht', fetchZichtData, () => activeLayer === 'zicht');
   }
 }
 
@@ -2532,7 +2532,7 @@ async function fetchTempData() {
     const resp = await fetchWithTimeout(tempUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) { setTimeout(fetchTempData, 3000); return; }
+    if (geojson.laden) { _retryLater('temp', fetchTempData, () => activeLayer === 'temp', 2000); return; }
     renderTempMarkers(geojson);
     _markFetched('temp');
     if (activeLayer === 'temp') {
@@ -2544,7 +2544,7 @@ async function fetchTempData() {
   } catch (err) {
     console.error('[temp]', err);
     if (activeLayer === 'temp') setStatus('error', 'Opnieuw laden…');
-    setTimeout(fetchTempData, 3000);
+    _retryLater('temp', fetchTempData, () => activeLayer === 'temp');
   }
 }
 
@@ -2760,11 +2760,64 @@ function renderMarkers(geojson) {
   if (activeLayer === 'golf') { _hideAllGroups(); _waveGroup.addTo(map); }
 }
 
+// ── Herlaad-planner met backoff ───────────────────────────────────────────────
+// Voorheen probeerde elke laag na een fout élke 3 seconden opnieuw — oneindig
+// lang, óók als je die laag niet meer bekeek of het tabblad op de achtergrond
+// stond. Zodra de proxy traag werd bleven alle open tabbladen hem bestoken,
+// waardoor hij helemaal omviel. Nu loopt de wachttijd op en stopt het zodra de
+// laag niet meer in beeld is.
+const _retry = {};   // naam → { tid, tries }
+
+function _retryReset(name) {
+  const s = _retry[name];
+  if (!s) return;
+  if (s.tid) { clearTimeout(s.tid); s.tid = null; }
+  s.tries = 0;
+}
+
+function _retryLater(name, fn, isActive, baseMs = 3000) {
+  const s = _retry[name] || (_retry[name] = { tid: null, tries: 0 });
+  if (s.tid) return;                          // er staat er al een gepland
+  if (!isActive()) { s.tries = 0; return; }   // laag niet in beeld → laat rusten
+  s.tries = Math.min(s.tries + 1, 5);
+  // 3s → 6 → 12 → 24 → 48s (plafond), met jitter zodat tabbladen niet
+  // allemaal tegelijk terugkomen
+  const delay = Math.min(baseMs * Math.pow(2, s.tries - 1), 48000)
+              + Math.floor(Math.random() * 1000);
+  s.tid = setTimeout(() => {
+    s.tid = null;
+    if (!isActive()) { s.tries = 0; return; }
+    if (document.hidden) { _retryLater(name, fn, isActive, baseMs); return; }
+    fn();
+  }, delay);
+}
+
+// Onthoudt per URL de laatste ETag + het al geparste antwoord. Is de data op de
+// server niet gewijzigd, dan antwoordt hij met een lege 304 en hergebruiken we
+// het geparste object — dat scheelt zowel de download als het opnieuw parsen
+// van ~100 kB JSON bij elke poll.
+const _etagCache = new Map();   // url → { etag, data }
+
 async function fetchWithTimeout(url, timeoutMs = 90000) {
   const ctrl = new AbortController();
   const tid  = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const resp = await fetch(url, { cache: 'no-store', signal: ctrl.signal });
+    const prev    = _etagCache.get(url);
+    const headers = prev ? { 'If-None-Match': prev.etag } : undefined;
+    const resp    = await fetch(url, { cache: 'no-cache', signal: ctrl.signal, headers });
+
+    if (resp.status === 304 && prev) {
+      // Ongewijzigd → hergebruik het eerder geparste antwoord
+      return { ok: true, status: 200, unchanged: true, json: async () => prev.data };
+    }
+    if (resp.ok) {
+      const etag = resp.headers.get('etag');
+      if (etag) {
+        const data = await resp.json();
+        _etagCache.set(url, { etag, data });
+        return { ok: true, status: resp.status, json: async () => data };
+      }
+    }
     return resp;
   } finally {
     clearTimeout(tid);
@@ -2777,7 +2830,7 @@ async function fetchWaveData() {
     const resp = await fetchWithTimeout(wavesUrl());
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
-    if (geojson.laden) { setTimeout(fetchWaveData, 3000); return; }
+    if (geojson.laden) { _retryLater('golf', fetchWaveData, () => activeLayer === 'golf', 2000); return; }
     renderMarkers(geojson);
     _markFetched('golf');
     if (activeLayer === 'golf') {
@@ -2789,7 +2842,7 @@ async function fetchWaveData() {
   } catch (err) {
     console.error('[waves]', err);
     if (activeLayer === 'golf') setStatus('error', 'Opnieuw laden…');
-    setTimeout(fetchWaveData, 3000);
+    _retryLater('golf', fetchWaveData, () => activeLayer === 'golf');
   }
 }
 
@@ -3048,6 +3101,7 @@ function _isFresh(layer) {
 
 function _markFetched(layer) {
   _layerFetchedAt[layer] = Date.now();
+  _retryReset(layer);   // geslaagd → backoff terug naar nul
 }
 
 // ── Route Forecast ────────────────────────────────────────────────────────────
@@ -5625,7 +5679,7 @@ function renderNlTempMarkers(geojson) {
 async function fetchNlTempData() {
   if (activeSection === 'nederland') setStatus('loading', 'laden…');
   try {
-    const resp = await fetch(`${PROXY_URL}/api/knmi`, { cache: 'no-store' });
+    const resp = await fetch(`${PROXY_URL}/api/knmi`, { cache: 'no-cache' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const geojson = await resp.json();
     renderNlTempMarkers(geojson);
@@ -5639,7 +5693,7 @@ async function fetchNlTempData() {
   } catch (err) {
     console.error('[nl-temp]', err);
     if (activeSection === 'nederland') setStatus('error', 'Opnieuw laden…');
-    setTimeout(fetchNlTempData, 3000);
+    _retryLater('nl-temp', fetchNlTempData, () => activeSection === 'nederland');
   }
 }
 
