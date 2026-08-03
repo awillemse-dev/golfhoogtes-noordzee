@@ -179,12 +179,16 @@ _LMAPS_VERSION = 24
 
 def _bliksem_bg():
     """Verbindt met lightningmaps.org WebSocket relay en buffert strikes."""
-    server_idx = 0
+    server_idx  = 0
+    mislukt     = 0      # aantal mislukte pogingen op rij
+    laatste_log = None   # laatst gelogde fouttekst (om herhaling te dempen)
     while True:
         ws = None
+        verbonden = False
         server = _LMAPS_SERVERS[server_idx % len(_LMAPS_SERVERS)]
         try:
-            print(f"[BLIKSEM] Verbinden met {server}")
+            if mislukt == 0:
+                print(f"[BLIKSEM] Verbinden met {server}")
             ws = _WS(
                 host=server, port=443, path="/",
                 origin="https://www.lightningmaps.org",
@@ -198,6 +202,7 @@ def _bliksem_bg():
                 "p": [90, 180, -90, -180],
             })
             ws.send(init_msg)
+            verbonden = True
             print("[BLIKSEM] Verbonden, wacht op strokes…")
             ws.settimeout(30)
             while True:
@@ -222,14 +227,28 @@ def _bliksem_bg():
                 except Exception:
                     break
         except Exception as e:
-            print(f"[BLIKSEM] Verbindingsfout: {e}")
+            # Log dezelfde fout niet eindeloos opnieuw. Zonder deze demping
+            # schreef een blijvend probleem (bron blokkeert ons) elke 5 seconden
+            # een identieke regel — duizenden per dag in de Render-logs.
+            tekst = f"[BLIKSEM] Verbindingsfout: {e}"
+            if tekst != laatste_log:
+                print(tekst)
+                laatste_log = tekst
         finally:
             try:
                 if ws: ws.close()
             except Exception:
                 pass
+
+        if verbonden:
+            mislukt     = 0
+            laatste_log = None
+        else:
+            mislukt = min(mislukt + 1, 6)
         server_idx += 1
-        time.sleep(5)
+        # Oplopende wachttijd: 5s → 10 → 20 → 40 → 80 → 160 → 300s (plafond),
+        # zodat een onbereikbare bron geen CPU en logruimte blijft opsouperen.
+        time.sleep(min(5 * (2 ** mislukt), 300))
 
 # ── Hulpfunctie: POST naar RWS API ──────────────────────────────────────────
 
@@ -2289,11 +2308,20 @@ _EMPTY_WAVES = {
     "laden": True,
 }
 
+_startup_klaar = False   # True zodra de achtergrondlus fase 1 heeft afgerond
+
 def get_data():
     global _cache, _cache_time
 
     if _cache and (time.time() - _cache_time) < CACHE_S:
         return _cache
+
+    # Tijdens het opstarten vult de achtergrondlus de cache al. Een binnenkomend
+    # verzoek mag daar geen tweede, blokkerende ophaalronde overheen doen: dat
+    # verdubbelde het werk bij elke herstart én liet de eerste bezoeker tot ~35s
+    # wachten. Geef zolang de "laden"-placeholder terug; de kaart vult zichzelf.
+    if not _startup_klaar:
+        return _cache if _cache else _EMPTY_WAVES
 
     # Probeer lock te krijgen zonder te blokkeren (max 2 seconden).
     # Als de achtergrond-thread al aan het verversen is, geef meteen terug
@@ -4739,6 +4767,7 @@ if __name__ == "__main__":
             print("[CACHE] Waves klaar.\n")
         except Exception as e:
             print(f"[CACHE] Waves fout: {e}\n")
+        globals()["_startup_klaar"] = True   # vanaf nu mogen requests zelf verversen
 
         # Fase 2: CDIP + SOCIB + temp + wind + oceaanzicht — SEQUENTIEEL om RAM te sparen.
         # Elke taak spawnt intern al meerdere threads; parallel draaien verveelvoudigt dat.
@@ -4792,7 +4821,9 @@ if __name__ == "__main__":
                     print("[PING] Render self-ping OK")
                 except Exception as e:
                     print(f"[PING] Self-ping fout: {e}")
-            time.sleep(14 * 60)
+            # 10 i.p.v. 14 minuten: Render laat een inactieve service na 15 min
+            # inslapen, en 14 min gaf te weinig marge bij een trage ping.
+            time.sleep(10 * 60)
 
     if os.environ.get("RENDER"):
         threading.Thread(target=_self_ping, daemon=True).start()

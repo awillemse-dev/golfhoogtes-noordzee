@@ -2794,27 +2794,87 @@ function _pollAgain(name, fn, isActive, ms = 2500) {
   s.tid = setTimeout(() => {
     s.tid = null;
     if (!isActive()) return;
-    if (document.hidden) { _pollAgain(name, fn, isActive, ms); return; }
+    // Bewust géén document.hidden-controle: opwarmen duurt kort en is goedkoop,
+    // en zolang we nog niets hebben moet de kaart zich hoe dan ook vullen.
+    // Anders blijft een tabblad dat als verborgen geldt eeuwig op "laden…".
     fn();
   }, ms);
 }
 
 function _retryDelay(name) { const s = _retry[name]; return (s && s.delay) || 3000; }
 
+// Welke laag hoort bij welke ophaalfunctie — nodig om na een storing meteen
+// de juiste laag te kunnen herladen.
+const _laagFetchers = {
+  'golf':    { fn: () => fetchWaveData(),   actief: () => activeLayer === 'golf'  },
+  'wind':    { fn: () => fetchWindData(),   actief: () => activeLayer === 'wind'  },
+  'temp':    { fn: () => fetchTempData(),   actief: () => activeLayer === 'temp'  },
+  'zicht':   { fn: () => fetchZichtData(),  actief: () => activeLayer === 'zicht' },
+  'metar':   { fn: () => fetchMetarData(),  actief: () => activeLayer === 'metar' },
+  'nl-temp': { fn: () => fetchNlTempData(), actief: () => activeSection === 'nederland' },
+};
+
+// Is de proxy onbereikbaar, dan pollen we niet de zware endpoints maar het
+// piepkleine /api/ping (11 bytes). Zodra die antwoordt halen we meteen de echte
+// data op. Zo staat de kaart er binnen enkele seconden weer, in plaats van te
+// moeten wachten tot de oplopende hersteltijd is verstreken — dát was de reden
+// dat het na een storing een halve minuut duurde.
+let _probeTid = null;
+
+function _startProbe() {
+  if (_probeTid) return;
+  _probeTid = setInterval(async () => {
+    // Alleen stilzitten bij een verborgen tabblad dát al data heeft; zonder
+    // data blijven we zoeken naar de server.
+    if (document.hidden && Object.keys(_layerFetchedAt).length) return;
+    try {
+      const r = await fetch(`${PROXY_URL}/api/ping`, { cache: 'no-store' });
+      if (!r.ok) return;
+    } catch { return; }
+    _stopProbe();
+    _herstelNu();
+  }, 3000);
+}
+
+function _stopProbe() {
+  if (_probeTid) { clearInterval(_probeTid); _probeTid = null; }
+}
+
+// Server is terug (of we komen weer online / het tabblad komt in beeld):
+// wachttijden wissen en de laag die in beeld staat direct opnieuw ophalen.
+function _herstelNu() {
+  for (const naam of Object.keys(_laagFetchers)) {
+    const s = _retry[naam];
+    if (s && s.tid) { clearTimeout(s.tid); s.tid = null; }
+    if (s) { s.tries = 0; s.delay = 0; }
+  }
+  for (const [naam, l] of Object.entries(_laagFetchers)) {
+    if (l.actief()) { l.fn(); break; }
+  }
+}
+
+window.addEventListener('online', _herstelNu);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) _herstelNu(); });
+
 function _retryLater(name, fn, isActive, baseMs = 3000) {
   const s = _retry[name] || (_retry[name] = { tid: null, tries: 0 });
   if (s.tid) return;                          // er staat er al een gepland
   if (!isActive()) { s.tries = 0; return; }   // laag niet in beeld → laat rusten
   s.tries = Math.min(s.tries + 1, 5);
-  // 3s → 6 → 12 → 24 → 48s (plafond), met jitter zodat tabbladen niet
-  // allemaal tegelijk terugkomen
-  const delay = Math.min(baseMs * Math.pow(2, s.tries - 1), 48000)
+  // 3s → 6 → 12 → 20s (plafond), met jitter zodat tabbladen niet allemaal
+  // tegelijk terugkomen. Het plafond mag laag blijven omdat de goedkope
+  // ping-probe hieronder het echte herstel doet.
+  const delay = Math.min(baseMs * Math.pow(2, s.tries - 1), 20000)
               + Math.floor(Math.random() * 1000);
   s.delay = delay;
+  _startProbe();   // ondertussen elke 3s kijken of de server er weer is
   s.tid = setTimeout(() => {
     s.tid = null;
     if (!isActive()) { s.tries = 0; return; }
-    if (document.hidden) { _retryLater(name, fn, isActive, baseMs); return; }
+    // Alleen pauzeren als er al iets op de kaart staat. Hebben we nog niets,
+    // dan doorgaan — anders blijft de pagina leeg als de browser het tabblad
+    // als verborgen beschouwt.
+    if (document.hidden && _layerFetchedAt[name]) { _retryLater(name, fn, isActive, baseMs); return; }
     fn();
   }, delay);
 }
@@ -3137,6 +3197,7 @@ function _isFresh(layer) {
 function _markFetched(layer) {
   _layerFetchedAt[layer] = Date.now();
   _retryReset(layer);   // geslaagd → backoff terug naar nul
+  _stopProbe();         // server leeft → geen ping-probe meer nodig
 }
 
 // ── Route Forecast ────────────────────────────────────────────────────────────
