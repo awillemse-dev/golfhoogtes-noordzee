@@ -558,6 +558,29 @@
     }
     #route-clear-btn:hover { border-color: #ef4444; color: #ef4444; }
 
+    /* ── Modellen (Windy) ───────────────────────────────────────────────── */
+    #modellen-panel { display: none; flex: 1; flex-direction: column; overflow: hidden; background: var(--bg); }
+    #modellen-panel.active { display: flex; }
+    #md-toolbar {
+      display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+      padding: 10px 16px; background: var(--surface);
+      border-bottom: 1px solid var(--border); flex-shrink: 0;
+    }
+    .md-groep { display: flex; align-items: center; gap: 8px; }
+    .md-label { font-size: 0.64rem; font-weight: 600; color: var(--text-dim);
+                text-transform: uppercase; letter-spacing: 0.08em; }
+    .md-seg { display: flex; gap: 2px; background: var(--surface-2);
+              border: 1px solid var(--border); border-radius: var(--r-md); padding: 3px; }
+    .md-seg button {
+      border: none; background: none; font: inherit; font-size: 0.76rem; font-weight: 500;
+      color: var(--text-muted); padding: 5px 10px; border-radius: var(--r-sm); cursor: pointer;
+    }
+    .md-seg button:hover { color: var(--text); background: rgba(255,255,255,0.7); }
+    .md-seg button.active { background: var(--surface); color: var(--accent); font-weight: 600; box-shadow: var(--shadow-sm); }
+    .md-check { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--text-muted); cursor: pointer; }
+    .md-bron { margin-left: auto; font-size: 0.66rem; color: var(--text-dim); }
+    #md-frame { flex: 1; width: 100%; border: 0; display: block; }
+
     /* ── Vakantieweer ────────────────────────────────────────────────────── */
     #vakantie-panel {
       display: none;
@@ -1220,6 +1243,14 @@
       </svg>
       <span class="tab-label">Vakantieweer</span>
     </div>
+    <div class="sidebar-tab" id="tab-modellen" onclick="selectSection('modellen')">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>
+      </svg>
+      <span class="tab-label">Modellen</span>
+    </div>
   </div>
 
   <!-- ── Kaartgebied ────────────────────────────────────────────────────── -->
@@ -1479,6 +1510,36 @@
           <button onclick="routeEdit()" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-muted);font-size:0.75rem;padding:7px;cursor:pointer;">Route bewerken</button>
         </div>
       </div>
+    </div>
+
+    <!-- Modellen: officiële Windy-embed met eigen keuze voor model en laag -->
+    <div id="modellen-panel">
+      <div id="md-toolbar">
+        <div class="md-groep">
+          <span class="md-label">Model</span>
+          <div class="md-seg" id="md-model">
+            <button data-v="ecmwf" class="active">ECMWF</button>
+            <button data-v="gfs">GFS</button>
+            <button data-v="iconEu">ICON-EU</button>
+          </div>
+        </div>
+        <div class="md-groep">
+          <span class="md-label">Laag</span>
+          <div class="md-seg" id="md-overlay">
+            <button data-v="pressure" class="active">Luchtdruk</button>
+            <button data-v="wind">Wind</button>
+            <button data-v="gust">Windstoten</button>
+            <button data-v="rain">Neerslag</button>
+            <button data-v="temp">Temperatuur</button>
+            <button data-v="clouds">Bewolking</button>
+            <button data-v="waves">Golven</button>
+            <button data-v="cape">CAPE</button>
+          </div>
+        </div>
+        <label class="md-check"><input type="checkbox" id="md-isobaren" checked> Isobaren</label>
+        <span class="md-bron">Kaart: Windy.com</span>
+      </div>
+      <iframe id="md-frame" title="Windy modelkaart" loading="lazy" allowfullscreen></iframe>
     </div>
 
     <!-- Vakantieweer paneel (autoroute Wateringen → Guillestre) -->
@@ -2637,6 +2698,7 @@ function selectSection(section) {
     document.getElementById('nl-panel').classList.remove('active');
     document.getElementById('route-panel').classList.remove('active');
     document.getElementById('vakantie-panel').classList.remove('active');
+    document.getElementById('modellen-panel').classList.remove('active');
     mapEl.style.display      = '';
     const layer = _lastWaarLayer;
     activeLayer = '';
@@ -2649,12 +2711,30 @@ function selectSection(section) {
     mapEl.style.display      = 'none';
     document.getElementById('nl-panel').classList.remove('active');
     document.getElementById('vakantie-panel').classList.remove('active');
+    document.getElementById('modellen-panel').classList.remove('active');
     document.getElementById('route-panel').classList.add('active');
     document.getElementById('chart-panel').classList.remove('open');
     clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem(); stopStormen();
     activeLayer = '';
     _setRouteMode(section);
     setTimeout(() => _ensureRouteMap(), 50);
+  } else if (section === 'modellen') {
+    if (activeLayer) _lastWaarLayer = activeLayer;
+    nav.style.display        = 'none';
+    nlNav.style.display      = 'none';
+    comingSoon.style.display = 'none';
+    mapEl.style.display      = 'none';
+    document.getElementById('nl-panel').classList.remove('active');
+    document.getElementById('route-panel').classList.remove('active');
+    document.getElementById('vakantie-panel').classList.remove('active');
+    document.getElementById('modellen-panel').classList.add('active');
+    document.getElementById('chart-panel').classList.remove('open');
+    clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem(); stopStormen();
+    activeLayer = '';
+    setStatus('', '–');
+    document.getElementById('status').className = '';
+    document.getElementById('countdown').textContent = '';
+    _mdLaad();
   } else if (section === 'vakantie') {
     if (activeLayer) _lastWaarLayer = activeLayer;
     nav.style.display        = 'none';
@@ -2664,6 +2744,7 @@ function selectSection(section) {
     document.getElementById('nl-panel').classList.remove('active');
     document.getElementById('route-panel').classList.remove('active');
     document.getElementById('vakantie-panel').classList.add('active');
+    document.getElementById('modellen-panel').classList.remove('active');
     document.getElementById('chart-panel').classList.remove('open');
     clearMarkers(); clearTempMarkers(); clearWindMarkers(); clearZichtMarkers(); clearMetarMarkers(); stopBliksem(); stopStormen();
     activeLayer = '';
@@ -2682,6 +2763,7 @@ function selectSection(section) {
     document.getElementById('nl-panel').classList.remove('active');
     document.getElementById('route-panel').classList.remove('active');
     document.getElementById('vakantie-panel').classList.remove('active');
+    document.getElementById('modellen-panel').classList.remove('active');
     setStatus('', '–');
     document.getElementById('status').className = '';
     document.getElementById('countdown').textContent = '';
@@ -5334,6 +5416,48 @@ async function _doGeneratePdf() {
   const dateStr = _routeFcDep ? _routeFcDep.toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
   doc.save(`route-forecast-${dateStr}.pdf`);
 }
+
+// ── Modellen (Windy-embed) ─────────────────────────────────────────────────────
+// Windy's eigen kaartengine en modeldata zijn niet na te bouwen; hun officiële
+// embed geeft exact dezelfde kaart, inclusief isobaren en H/L-drukgebieden.
+const _md = { model: 'ecmwf', overlay: 'pressure', isobaren: true, geladen: '' };
+
+function _mdUrl() {
+  const q = new URLSearchParams({
+    lat: 50, lon: 5, zoom: 3,
+    level: 'surface',
+    overlay: _md.overlay,
+    product: _md.model,
+    menu: '', message: 'true', marker: '', calendar: 'now',
+    pressure: _md.isobaren ? 'true' : '',
+    type: 'map', location: 'coordinates', detail: '',
+    metricWind: 'kt', metricTemp: '°C', radarRange: '-1',
+  });
+  return 'https://embed.windy.com/embed2.html?' + q.toString();
+}
+
+function _mdLaad() {
+  const url = _mdUrl();
+  if (url === _md.geladen) return;          // niet onnodig herladen bij terugkeren
+  _md.geladen = url;
+  document.getElementById('md-frame').src = url;
+}
+
+function _mdKoppelSeg(id, sleutel) {
+  document.getElementById(id).addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    document.querySelectorAll(`#${id} button`).forEach(x => x.classList.toggle('active', x === b));
+    _md[sleutel] = b.dataset.v;
+    _mdLaad();
+  });
+}
+_mdKoppelSeg('md-model', 'model');
+_mdKoppelSeg('md-overlay', 'overlay');
+document.getElementById('md-isobaren').addEventListener('change', e => {
+  _md.isobaren = e.target.checked;
+  _mdLaad();
+});
 
 // ── Vakantieweer (autoroute Wateringen → Guillestre, ECMWF) ─────────────────────
 let _vkMap = null;
