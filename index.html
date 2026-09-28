@@ -622,6 +622,8 @@
     }
     #md-schuif-wrap { flex: 1; min-width: 0; }
     #md-schuif { width: 100%; accent-color: var(--accent); cursor: pointer; display: block; }
+    /* Laadbalk: per tijdstap zichtbaar wat al in het geheugen staat */
+    #md-buffer { height: 3px; border-radius: 2px; margin: 3px 0 1px; background: var(--surface-3); }
     #md-dagen { display: flex; margin-top: 3px; font-size: 0.64rem; color: var(--text-dim); }
     #md-dagen span { flex: 1; text-align: left; border-left: 1px solid var(--border); padding-left: 5px; white-space: nowrap; overflow: hidden; }
 
@@ -1644,6 +1646,7 @@
           <div id="md-tijdlabel">–</div>
           <div id="md-schuif-wrap">
             <input id="md-schuif" type="range" min="0" max="0" value="0" step="1">
+            <div id="md-buffer" title="Geladen tijdstappen"></div>
             <div id="md-dagen"></div>
           </div>
         </div>
@@ -6114,6 +6117,35 @@ function _mdOpruimen() {
   }
 }
 
+// Welke tijdstappen voor de huidige laag al volledig in het geheugen staan
+function _mdTijdlijnGeladen() {
+  const run = _md.runs[_md.model], ec = _md.runs.ecmwf;
+  if (!run) return null;
+  const nodig = [..._mdNodigeVelden()];
+  return MD_STAPPEN.map(h => nodig.every(n => {
+    if (n !== 'golf') return _md.velden.has(`${_md.model}|${run.D}${run.hh}|${h}|${n}`);
+    if (!ec) return false;
+    const stap = Math.round((run.t + h * 3600e3 - ec.t) / 3600e3);
+    return _md.velden.has(`ecmwf|${ec.D}${ec.hh}|${stap}|golf`);
+  }));
+}
+
+function _mdBuffer() {
+  if (_md.bufferGepland) return;
+  _md.bufferGepland = true;
+  requestAnimationFrame(() => {
+    _md.bufferGepland = false;
+    const g = _mdTijdlijnGeladen(), el = document.getElementById('md-buffer');
+    if (!g || !el) return;
+    const n = g.length, aantal = g.filter(Boolean).length;
+    el.style.background = 'linear-gradient(90deg, ' + g.map((ok, k) =>
+      `${ok ? 'rgba(3,105,161,0.5)' : 'var(--surface-3)'} ${(k / n * 100).toFixed(2)}% ${((k + 1) / n * 100).toFixed(2)}%`).join(', ') + ')';
+    el.title = `${aantal} van ${n} tijdstappen geladen`;
+    if (_md.statusBasis && document.getElementById('md-status').className === 'ok')
+      _mdStatus('ok', _md.statusBasis + (aantal < n ? ` · tijdlijn ${aantal}/${n} geladen` : ''));
+  });
+}
+
 function _mdVeldUit(sleutel, ingang) {
   let f = _md.uitgepakt.get(sleutel);
   if (!f) f = _mdUitpakken(ingang.c);
@@ -6154,6 +6186,7 @@ async function _mdVeld(model, naam, geldig, prio = -1) {
       const ingang = { c: _mdInpakken(d.f), lijnen: d.lijnen || null, centra: d.centra || null };
       _md.velden.set(sleutel, ingang);
       _mdOpruimen();
+      _mdBuffer();
       if (taak.prio < 1) _mdLruZet(_md.uitgepakt, sleutel, d.f, MD_UITGEPAKT_MAX);   // vooruit geladen niet in de kleine uitgepakte cache
       return ingang;
     })();
@@ -6618,7 +6651,9 @@ async function _mdTeken() {
     _mdStroming();
     if (_md.detail) _mdDetailNu();
     const opm = !velden.laag && MD_LAGEN[_md.laag].veld !== 'druk' ? ' · deze laag is niet beschikbaar op dit tijdstip' : '';
-    _mdStatus('ok', `${MD_MODELLEN[model].lang} · run ${_mdRunTekst(run)}${opm}`);
+    _md.statusBasis = `${MD_MODELLEN[model].lang} · run ${_mdRunTekst(run)}${opm}`;
+    _mdStatus('ok', _md.statusBasis);
+    _mdBuffer();
     _mdVooruit(model, run);                      // de rest van de tijdlijn op de achtergrond
   } catch (e) {
     if (nr !== _md.tekenNr) return;
