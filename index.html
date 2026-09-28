@@ -558,28 +558,121 @@
     }
     #route-clear-btn:hover { border-color: #ef4444; color: #ef4444; }
 
-    /* ── Modellen (Windy) ───────────────────────────────────────────────── */
-    #modellen-panel { display: none; flex: 1; flex-direction: column; overflow: hidden; background: var(--bg); }
+    /* ── Modellen (eigen modelkaart, geïnspireerd op Windy) ─────────────── */
+    #modellen-panel { display: none; flex: 1; overflow: hidden; background: var(--bg); }
     #modellen-panel.active { display: flex; }
+    #md-kaartvak { flex: 1; min-width: 0; display: flex; flex-direction: column; }
     #md-toolbar {
-      display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+      display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
       padding: 10px 16px; background: var(--surface);
       border-bottom: 1px solid var(--border); flex-shrink: 0;
     }
-    .md-groep { display: flex; align-items: center; gap: 8px; }
+    .md-groep { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
     .md-label { font-size: 0.64rem; font-weight: 600; color: var(--text-dim);
                 text-transform: uppercase; letter-spacing: 0.08em; }
-    .md-seg { display: flex; gap: 2px; background: var(--surface-2);
-              border: 1px solid var(--border); border-radius: var(--r-md); padding: 3px; }
+    .md-seg { display: flex; gap: 2px; background: var(--surface-2); min-width: 0;
+              border: 1px solid var(--border); border-radius: var(--r-md); padding: 3px;
+              overflow-x: auto; scrollbar-width: none; }
+    .md-seg::-webkit-scrollbar { display: none; }
     .md-seg button {
       border: none; background: none; font: inherit; font-size: 0.76rem; font-weight: 500;
       color: var(--text-muted); padding: 5px 10px; border-radius: var(--r-sm); cursor: pointer;
+      white-space: nowrap; transition: background 0.15s, color 0.15s;
     }
     .md-seg button:hover { color: var(--text); background: rgba(255,255,255,0.7); }
     .md-seg button.active { background: var(--surface); color: var(--accent); font-weight: 600; box-shadow: var(--shadow-sm); }
-    .md-check { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--text-muted); cursor: pointer; }
-    .md-bron { margin-left: auto; font-size: 0.66rem; color: var(--text-dim); }
-    #md-frame { flex: 1; width: 100%; border: 0; display: block; }
+    .md-check { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--text-muted); cursor: pointer; user-select: none; }
+    .md-check input { accent-color: var(--accent); }
+    #md-status { margin-left: auto; font-size: 0.72rem; color: var(--text-dim); display: flex; align-items: center; gap: 7px; }
+    #md-status .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-2); }
+    #md-status.laden .status-dot { background: var(--yellow); box-shadow: 0 0 0 3px rgba(217,119,6,0.14); }
+    #md-status.ok    .status-dot { background: var(--green);  box-shadow: 0 0 0 3px rgba(22,163,74,0.14); }
+    #md-status.fout  .status-dot { background: var(--red);    box-shadow: 0 0 0 3px rgba(220,38,38,0.14); }
+
+    #md-kaartgebied { flex: 1; position: relative; min-height: 0; }
+    #md-map { position: absolute; inset: 0; background: #eef2f7; }
+    #md-map.leaflet-container { cursor: crosshair; }
+
+    .md-legenda {
+      position: absolute; left: 14px; bottom: 14px; z-index: 800;
+      background: rgba(255,255,255,0.94); border: 1px solid var(--border);
+      border-radius: var(--r-lg); padding: 11px 14px 10px; box-shadow: var(--shadow-lg);
+      backdrop-filter: blur(10px); min-width: 240px; pointer-events: none;
+    }
+    .md-legenda h4 { font-size: 0.64rem; color: var(--text-dim); font-weight: 600;
+                     text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+    .md-legenda-balk { height: 9px; border-radius: 5px; border: 1px solid rgba(15,23,42,0.08); }
+    .md-legenda-ticks { display: flex; justify-content: space-between; margin-top: 5px;
+                        font-size: 0.64rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+    #md-tijdbalk {
+      flex-shrink: 0; background: var(--surface); border-top: 1px solid var(--border);
+      padding: 10px 16px 12px; display: flex; align-items: center; gap: 14px;
+    }
+    #md-play {
+      width: 34px; height: 34px; border-radius: 50%; border: none; cursor: pointer; flex-shrink: 0;
+      background: var(--accent); display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s;
+    }
+    #md-play:hover { background: #075985; }
+    #md-play svg { width: 14px; height: 14px; fill: #fff; }
+    #md-tijdlabel {
+      font-size: 0.8rem; font-weight: 600; color: var(--text); white-space: nowrap;
+      min-width: 118px; font-variant-numeric: tabular-nums;
+    }
+    #md-schuif-wrap { flex: 1; min-width: 0; }
+    #md-schuif { width: 100%; accent-color: var(--accent); cursor: pointer; display: block; }
+    #md-dagen { display: flex; margin-top: 3px; font-size: 0.64rem; color: var(--text-dim); }
+    #md-dagen span { flex: 1; text-align: left; border-left: 1px solid var(--border); padding-left: 5px; white-space: nowrap; overflow: hidden; }
+
+    /* Drukcentra en isobaarlabels */
+    .md-hl { font-family: Inter, system-ui, sans-serif; text-align: center; line-height: 1; pointer-events: none;
+             text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 5px #fff; }
+    .md-hl b { display: block; font-size: 20px; font-weight: 700; }
+    .md-hl span { display: block; font-size: 10px; font-weight: 600; margin-top: 2px; color: var(--text-muted); }
+    .md-hl.H b { color: #b91c1c; }
+    .md-hl.L b { color: #1d4ed8; }
+    .md-iso-label { font: 600 9.5px Inter, system-ui, sans-serif; color: #334155; pointer-events: none;
+                    white-space: nowrap; text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff; }
+    .md-pin { width: 14px; height: 14px; border-radius: 50%; background: var(--accent);
+              border: 3px solid #fff; box-shadow: 0 1px 4px rgba(15,23,42,0.35); }
+
+    /* Detailpaneel na een klik — eigen DOM, dus gewoon scrollbaar */
+    #md-detail {
+      width: 0; overflow: hidden; flex-shrink: 0; background: var(--surface);
+      border-left: 1px solid var(--border); display: flex; flex-direction: column;
+      transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    #md-detail.open { width: 440px; }
+    #md-detail-kop { padding: 16px 18px 14px; border-bottom: 1px solid var(--border);
+                     display: flex; align-items: flex-start; gap: 10px; flex-shrink: 0; }
+    #md-detail-titel { font-size: 1rem; font-weight: 600; letter-spacing: -0.015em; color: var(--text); }
+    #md-detail-sub { font-size: 0.68rem; color: var(--text-dim); margin-top: 3px; }
+    #md-detail-sluit {
+      margin-left: auto; background: none; border: none; color: var(--text-dim); cursor: pointer;
+      width: 26px; height: 26px; border-radius: var(--r-sm); font-size: 0.8rem; flex-shrink: 0;
+    }
+    #md-detail-sluit:hover { background: var(--surface-3); color: var(--text); }
+    #md-detail-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 18px 24px; }
+    #md-detail-body > :first-child { margin-top: 16px; }
+    .md-nu { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 18px; }
+    .md-nu-kaart { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 9px 11px; }
+    .md-nu-kaart .k { font-size: 0.6rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+    .md-nu-kaart .v { font-size: 1.05rem; font-weight: 650; color: var(--text); margin-top: 3px; font-variant-numeric: tabular-nums; }
+    .md-nu-kaart .v small { font-size: 0.66rem; font-weight: 500; color: var(--text-dim); margin-left: 2px; }
+    .md-sectie { font-size: 0.64rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em;
+                 font-weight: 600; margin: 4px 0 8px; }
+    .md-grafiek { height: 170px; position: relative; margin-bottom: 18px; }
+    .md-tabel { width: 100%; border-collapse: collapse; font-size: 0.74rem; font-variant-numeric: tabular-nums; }
+    .md-tabel th { position: sticky; top: 0; z-index: 1; background: var(--surface); text-align: right; font-weight: 600;
+                   font-size: 0.62rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em;
+                   padding: 7px 6px; border-bottom: 1px solid var(--border); }
+    .md-tabel th:first-child, .md-tabel td:first-child { text-align: left; }
+    .md-tabel td { text-align: right; padding: 6px; border-bottom: 1px solid var(--surface-3); color: var(--text); white-space: nowrap; }
+    .md-tabel tr.dag td { background: var(--surface-2); color: var(--text-muted); font-weight: 600; font-size: 0.68rem; padding: 6px; }
+    .md-tabel tr.nu td { background: var(--accent-soft); }
+    .md-pijl { display: inline-block; color: var(--text-dim); margin-right: 3px; }
+    .md-laden { padding: 40px 0; text-align: center; color: var(--text-dim); font-size: 0.82rem; }
 
     /* ── Vakantieweer ────────────────────────────────────────────────────── */
     #vakantie-panel {
@@ -1512,34 +1605,60 @@
       </div>
     </div>
 
-    <!-- Modellen: officiële Windy-embed met eigen keuze voor model en laag -->
+    <!-- Modellen: eigen modelkaart (ECMWF / GFS / ICON) met isobaren, drukcentra en windstroming -->
     <div id="modellen-panel">
-      <div id="md-toolbar">
-        <div class="md-groep">
-          <span class="md-label">Model</span>
-          <div class="md-seg" id="md-model">
-            <button data-v="ecmwf" class="active">ECMWF</button>
-            <button data-v="gfs">GFS</button>
-            <button data-v="iconEu">ICON-EU</button>
+      <div id="md-kaartvak">
+        <div id="md-toolbar">
+          <div class="md-groep">
+            <span class="md-label">Model</span>
+            <div class="md-seg" id="md-model">
+              <button data-v="ecmwf" class="active">ECMWF</button>
+              <button data-v="gfs">GFS</button>
+              <button data-v="icon">ICON</button>
+            </div>
+          </div>
+          <div class="md-groep">
+            <span class="md-label">Laag</span>
+            <div class="md-seg" id="md-laag">
+              <button data-v="druk" class="active">Luchtdruk</button>
+              <button data-v="wind">Wind</button>
+              <button data-v="stoten">Windstoten</button>
+              <button data-v="neerslag">Neerslag</button>
+              <button data-v="temp">Temperatuur</button>
+              <button data-v="wolken">Bewolking</button>
+              <button data-v="golven">Golven</button>
+              <button data-v="cape">CAPE</button>
+            </div>
+          </div>
+          <label class="md-check"><input type="checkbox" id="md-isobaren" checked> Isobaren</label>
+          <label class="md-check"><input type="checkbox" id="md-stroming" checked> Windstroming</label>
+          <div id="md-status"><div class="status-dot"></div><span>–</span></div>
+        </div>
+        <div id="md-kaartgebied">
+          <div id="md-map"></div>
+          <div class="md-legenda" id="md-legenda"></div>
+        </div>
+        <div id="md-tijdbalk">
+          <button id="md-play" title="Afspelen / pauzeren">
+            <svg id="md-play-icon" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+          </button>
+          <div id="md-tijdlabel">–</div>
+          <div id="md-schuif-wrap">
+            <input id="md-schuif" type="range" min="0" max="0" value="0" step="1">
+            <div id="md-dagen"></div>
           </div>
         </div>
-        <div class="md-groep">
-          <span class="md-label">Laag</span>
-          <div class="md-seg" id="md-overlay">
-            <button data-v="pressure" class="active">Luchtdruk</button>
-            <button data-v="wind">Wind</button>
-            <button data-v="gust">Windstoten</button>
-            <button data-v="rain">Neerslag</button>
-            <button data-v="temp">Temperatuur</button>
-            <button data-v="clouds">Bewolking</button>
-            <button data-v="waves">Golven</button>
-            <button data-v="cape">CAPE</button>
-          </div>
-        </div>
-        <label class="md-check"><input type="checkbox" id="md-isobaren" checked> Isobaren</label>
-        <span class="md-bron">Kaart: Windy.com</span>
       </div>
-      <iframe id="md-frame" title="Windy modelkaart" loading="lazy" allowfullscreen></iframe>
+      <aside id="md-detail">
+        <div id="md-detail-kop">
+          <div>
+            <div id="md-detail-titel">–</div>
+            <div id="md-detail-sub">–</div>
+          </div>
+          <button id="md-detail-sluit" title="Sluiten">✕</button>
+        </div>
+        <div id="md-detail-body"></div>
+      </aside>
     </div>
 
     <!-- Vakantieweer paneel (autoroute Wateringen → Guillestre) -->
@@ -2734,7 +2853,7 @@ function selectSection(section) {
     setStatus('', '–');
     document.getElementById('status').className = '';
     document.getElementById('countdown').textContent = '';
-    _mdLaad();
+    _mdOpen();
   } else if (section === 'vakantie') {
     if (activeLayer) _lastWaarLayer = activeLayer;
     nav.style.display        = 'none';
@@ -5417,47 +5536,770 @@ async function _doGeneratePdf() {
   doc.save(`route-forecast-${dateStr}.pdf`);
 }
 
-// ── Modellen (Windy-embed) ─────────────────────────────────────────────────────
-// Windy's eigen kaartengine en modeldata zijn niet na te bouwen; hun officiële
-// embed geeft exact dezelfde kaart, inclusief isobaren en H/L-drukgebieden.
-const _md = { model: 'ecmwf', overlay: 'pressure', isobaren: true, geladen: '' };
+// ── Modellen: eigen modelkaart (ECMWF / GFS / ICON) ───────────────────────────
+// Voorheen een Windy-iframe; daarin was scrollen en opmaak niet te beïnvloeden.
+// Nu zelf getekend: Open-Meteo levert per model een raster van 5° over de
+// Noord-Atlantische Oceaan en Europa (300 punten, 3-uurlijks, 5 dagen). Dat
+// wordt bicubisch naar 0,5° geïnterpoleerd voor de kleurlaag, de isobaren en
+// de drukcentra. De data wordt in de browser opgehaald en telt dus niet mee
+// voor het geheugen of de Open-Meteo-limiet van de proxy op Render.
+const MD_RASTER = { lat0: 20, lat1: 75, lon0: -65, lon1: 55, stap: 5 };
+const MD_FIJN   = 0.5;
+const MD_MODELLEN = {
+  ecmwf: { naam: 'ECMWF', lang: 'ECMWF IFS', api: 'ecmwf_ifs025',  golf: 'ecmwf_wam025',    kleur: '#0369a1' },
+  gfs:   { naam: 'GFS',   lang: 'NOAA GFS',  api: 'gfs_seamless',  golf: 'ncep_gfswave025', kleur: '#d97706' },
+  icon:  { naam: 'ICON',  lang: 'DWD ICON',  api: 'icon_seamless', golf: 'dwd_gwam',        kleur: '#16a34a' },
+};
+const MD_VARS = ['pressure_msl', 'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m',
+                 'temperature_2m', 'precipitation', 'cloud_cover', 'cape'];
+const MD_LAGEN = {
+  druk:     { titel: 'Luchtdruk (hPa)', veld: 'pressure_msl', ticks: [970, 990, 1013, 1030, 1045],
+              stops: [[970,'#1e40af',.55],[990,'#3b82f6',.48],[1005,'#bfdbfe',.38],[1013,'#f8fafc',.18],[1022,'#fed7aa',.38],[1032,'#f59e0b',.48],[1045,'#9a3412',.55]] },
+  wind:     { titel: 'Windsnelheid (kt)', veld: 'wind_speed_10m', ticks: [0, 10, 20, 30, 40, 55],
+              stops: [[0,'#e0f2fe',.12],[8,'#7dd3fc',.42],[16,'#22c55e',.52],[24,'#eab308',.58],[32,'#f97316',.6],[42,'#ef4444',.62],[55,'#7f1d1d',.68]] },
+  stoten:   { titel: 'Windstoten (kt)', veld: 'wind_gusts_10m', ticks: [0, 20, 35, 50, 70],
+              stops: [[0,'#e0f2fe',.12],[12,'#7dd3fc',.42],[24,'#22c55e',.52],[34,'#eab308',.58],[44,'#f97316',.6],[56,'#ef4444',.62],[70,'#7f1d1d',.68]] },
+  neerslag: { titel: 'Neerslag (mm / 3 uur)', veld: 'precipitation', ticks: [0, 1, 3, 8, 20],
+              stops: [[0,'#ffffff',0],[0.2,'#bae6fd',.45],[1,'#38bdf8',.6],[3,'#2563eb',.65],[8,'#7c3aed',.7],[20,'#c026d3',.75]] },
+  temp:     { titel: 'Temperatuur (°C)', veld: 'temperature_2m', ticks: [-30, -15, 0, 15, 30, 40],
+              stops: [[-30,'#312e81',.55],[-15,'#3b82f6',.48],[0,'#bfdbfe',.42],[10,'#fef9c3',.38],[20,'#fdba74',.48],[30,'#ef4444',.55],[40,'#7f1d1d',.6]] },
+  wolken:   { titel: 'Bewolking (%)', veld: 'cloud_cover', ticks: [0, 25, 50, 75, 100],
+              stops: [[0,'#ffffff',0],[30,'#cbd5e1',.22],[70,'#94a3b8',.42],[100,'#475569',.58]] },
+  golven:   { titel: 'Significante golfhoogte (m)', veld: 'wave_height', golf: true, ticks: [0, 1, 2.5, 4, 7],
+              stops: [[0,'#22c55e',.5],[0.5,'#22c55e',.52],[1.0,'#84cc16',.55],[1.5,'#eab308',.58],[2.5,'#f97316',.6],[4.0,'#ef4444',.64],[7,'#7f1d1d',.7]] },
+  cape:     { titel: 'CAPE (J/kg)', veld: 'cape', ticks: [0, 500, 1000, 2000, 3500],
+              stops: [[0,'#ffffff',0],[100,'#fef08a',.35],[500,'#facc15',.5],[1000,'#f97316',.6],[2000,'#dc2626',.65],[3500,'#86198f',.7]] },
+};
+const MD_GELDIG_MS = 3 * 3600 * 1000;   // modelruns wisselen elke 6 uur; 3 uur vers is ruim
 
-function _mdUrl() {
-  const q = new URLSearchParams({
-    lat: 50, lon: 5, zoom: 3,
-    level: 'surface',
-    overlay: _md.overlay,
-    product: _md.model,
-    menu: '', message: 'true', marker: '', calendar: 'now',
-    pressure: _md.isobaren ? 'true' : '',
-    type: 'map', location: 'coordinates', detail: '',
-    metricWind: 'kt', metricTemp: '°C', radarRange: '-1',
+const _md = {
+  model: 'ecmwf', laag: 'druk', t: 0, isobaren: true, stroming: true,
+  data: {}, golf: {}, fijn: new Map(), kaart: null, kleurLaag: null, isoGroep: null,
+  hlGroep: null, renderer: null, stroom: null, speelTimer: null, pin: null,
+  detail: null, detailCharts: [], tekenGepland: false, uvHuidig: null, tijdGezet: false,
+};
+
+function _mdStatus(soort, tekst) {
+  const el = document.getElementById('md-status');
+  el.className = soort;
+  el.querySelector('span').textContent = tekst;
+}
+
+function _mdRasterPunten() {
+  const { lat0, lat1, lon0, lon1, stap } = MD_RASTER;
+  const ny = Math.round((lat1 - lat0) / stap) + 1, nx = Math.round((lon1 - lon0) / stap) + 1;
+  const lats = [], lons = [];
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { lats.push(lat0 + j * stap); lons.push(lon0 + i * stap); }
+  return { nx, ny, lats, lons };
+}
+
+// Haalt het raster voor één model op (atmosfeer of golven), in blokken van 50 punten
+async function _mdHaal(model, golf) {
+  const opslag = golf ? _md.golf : _md.data;
+  const bestaand = opslag[model];
+  if (bestaand && bestaand.klaar && Date.now() - bestaand.geladenOm < MD_GELDIG_MS) return bestaand;
+  if (bestaand && bestaand.belofte) return bestaand.belofte;
+
+  const belofte = (async () => {
+    const { nx, ny, lats, lons } = _mdRasterPunten();
+    const N = nx * ny, BLOK = 50;
+    const velden = golf ? ['wave_height'] : MD_VARS;
+    const v = {};
+    let tijden = null, T = 0;
+    for (let s = 0; s < N; s += BLOK) {
+      const la = lats.slice(s, s + BLOK), lo = lons.slice(s, s + BLOK);
+      const url = (golf ? 'https://marine-api.open-meteo.com/v1/marine' : 'https://api.open-meteo.com/v1/forecast')
+        + `?latitude=${la.join(',')}&longitude=${lo.join(',')}`
+        + `&hourly=${velden.join(',')}`
+        + `&models=${golf ? MD_MODELLEN[model].golf : MD_MODELLEN[model].api}`
+        + `&forecast_days=5&temporal_resolution=hourly_3&timezone=UTC`
+        + (golf ? '' : '&wind_speed_unit=kn');
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(r.status === 429
+        ? 'Open-Meteo-limiet bereikt — probeer het over een minuut opnieuw'
+        : `Modeldata niet beschikbaar (HTTP ${r.status})`);
+      let d = await r.json();
+      if (!Array.isArray(d)) d = [d];
+      d.forEach((pt, k) => {
+        const h = pt.hourly || {};
+        if (!tijden) {
+          tijden = (h.time || []).map(t => new Date(t + 'Z'));
+          T = tijden.length;
+          velden.forEach(naam => { v[naam] = new Float32Array(T * N).fill(NaN); });
+        }
+        const idx = s + k;
+        velden.forEach(naam => {
+          const a = h[naam] || [], doel = v[naam];
+          for (let t = 0; t < T; t++) { const x = a[t]; if (x != null) doel[t * N + idx] = x; }
+        });
+      });
+      _mdStatus('laden', `${MD_MODELLEN[model].naam}${golf ? '-golven' : ''} laden… ${Math.min(100, Math.round((s + BLOK) / N * 100))}%`);
+    }
+    return { klaar: true, geladenOm: Date.now(), nx, ny, N, T, tijden, v };
+  })();
+
+  opslag[model] = { belofte };
+  try {
+    const res = await belofte;
+    opslag[model] = res;
+    // Oude fijne velden van dit model vervallen
+    const prefix = (golf ? model + '-golf' : model) + '|';
+    for (const k of [..._md.fijn.keys()]) if (k.startsWith(prefix)) _md.fijn.delete(k);
+    return res;
+  } catch (e) {
+    delete opslag[model];
+    throw e;
+  }
+}
+
+// ── Interpolatie ──
+function _mdCR(p0, p1, p2, p3, t) {
+  return p1 + 0.5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
+}
+
+function _mdGrof(arr, off, nx, ny, x, y) {
+  const i = Math.floor(x), j = Math.floor(y), fx = x - i, fy = y - j;
+  const g = (ii, jj) => arr[off + Math.min(ny - 1, Math.max(0, jj)) * nx + Math.min(nx - 1, Math.max(0, ii))];
+  const a = g(i, j), b = g(i + 1, j), c = g(i, j + 1), d = g(i + 1, j + 1);
+  if (a !== a || b !== b || c !== c || d !== d) return NaN;
+  const rij = [0, 0, 0, 0];
+  for (let m = -1; m <= 2; m++) {
+    const p0 = g(i - 1, j + m), p1 = g(i, j + m), p2 = g(i + 1, j + m), p3 = g(i + 2, j + m);
+    if (p0 !== p0 || p1 !== p1 || p2 !== p2 || p3 !== p3)
+      return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;   // bilineair langs de kust
+    rij[m + 1] = _mdCR(p0, p1, p2, p3, fx);
+  }
+  return _mdCR(rij[0], rij[1], rij[2], rij[3], fy);
+}
+
+function _mdFijnMaat() {
+  const { lat0, lat1, lon0, lon1 } = MD_RASTER;
+  return { fnx: Math.round((lon1 - lon0) / MD_FIJN) + 1, fny: Math.round((lat1 - lat0) / MD_FIJN) + 1 };
+}
+
+// Fijn veld (0,5°) voor één variabele en tijdstap, met een kleine cache
+function _mdFijnVeld(sleutelModel, bron, naam, t, bereken) {
+  const sleutel = `${sleutelModel}|${naam}|${t}`;
+  if (_md.fijn.has(sleutel)) return _md.fijn.get(sleutel);
+  const { fnx, fny } = _mdFijnMaat();
+  const f = new Float32Array(fnx * fny);
+  const schaal = MD_FIJN / MD_RASTER.stap;
+  const grof = bereken ? bereken() : bron.v[naam];
+  const off = bereken ? 0 : t * bron.N;
+  const nietNegatief = ['precipitation', 'cloud_cover', 'cape', 'wave_height', 'wind_speed_10m', 'wind_gusts_10m'].includes(naam);
+  for (let j = 0; j < fny; j++) for (let i = 0; i < fnx; i++) {
+    let x = _mdGrof(grof, off, bron.nx, bron.ny, i * schaal, j * schaal);
+    if (nietNegatief && x < 0) x = 0;   // bicubisch kan net onder nul uitschieten
+    f[j * fnx + i] = x;
+  }
+  if (_md.fijn.size > 80) _md.fijn.delete(_md.fijn.keys().next().value);
+  _md.fijn.set(sleutel, f);
+  return f;
+}
+
+function _mdFijnSample(f, fnx, fny, x, y) {
+  if (x < 0 || y < 0 || x > fnx - 1 || y > fny - 1) return NaN;
+  const i = Math.min(fnx - 2, Math.floor(x)), j = Math.min(fny - 2, Math.floor(y)), fx = x - i, fy = y - j;
+  const a = f[j * fnx + i], b = f[j * fnx + i + 1], c = f[(j + 1) * fnx + i], d = f[(j + 1) * fnx + i + 1];
+  if (a !== a || b !== b || c !== c || d !== d) return NaN;
+  return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+}
+
+// Wind als u/v-componenten, zodat de richting niet verkeerd interpoleert rond 0°/360°
+function _mdUV(model, bron, t) {
+  const bereken = (welke) => () => {
+    const N = bron.N, out = new Float32Array(N);
+    const s = bron.v.wind_speed_10m, d = bron.v.wind_direction_10m;
+    for (let k = 0; k < N; k++) {
+      const sp = s[t * N + k], dir = d[t * N + k] * Math.PI / 180;
+      out[k] = welke === 'u' ? -sp * Math.sin(dir) : -sp * Math.cos(dir);
+    }
+    return out;
+  };
+  return { u: _mdFijnVeld(model, bron, 'u', t, bereken('u')), v: _mdFijnVeld(model, bron, 'v', t, bereken('v')) };
+}
+
+// ── Kleurlaag ──
+function _mdHex(h) { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+
+function _mdLut(laag) {
+  if (laag._lut) return laag._lut;
+  const st = laag.stops, lo = st[0][0], hi = st[st.length - 1][0];
+  const lut = new Uint8ClampedArray(256 * 4);
+  for (let k = 0; k < 256; k++) {
+    const val = lo + (hi - lo) * k / 255;
+    let s = 0;
+    while (s < st.length - 2 && val > st[s + 1][0]) s++;
+    const [v0, c0, a0] = st[s], [v1, c1, a1] = st[s + 1];
+    const f = Math.max(0, Math.min(1, (val - v0) / (v1 - v0 || 1)));
+    const r0 = _mdHex(c0), r1 = _mdHex(c1);
+    for (let q = 0; q < 3; q++) lut[k * 4 + q] = r0[q] + (r1[q] - r0[q]) * f;
+    lut[k * 4 + 3] = (a0 + (a1 - a0) * f) * 255;
+  }
+  laag._lut = { lut, lo, hi };
+  return laag._lut;
+}
+
+function _mdMercY(lat) { const r = lat * Math.PI / 180; return Math.log(Math.tan(Math.PI / 4 + r / 2)); }
+function _mdMercLat(m) { return (2 * Math.atan(Math.exp(m)) - Math.PI / 2) * 180 / Math.PI; }
+
+// Canvaslaag die als een afbeelding over de kaartbounds meeschaalt (zoals L.ImageOverlay)
+const MdCanvasLaag = L.Layer.extend({
+  initialize(bounds, canvas) { this._b = L.latLngBounds(bounds); this._c = canvas; },
+  onAdd(map) {
+    this._map = map;
+    this._c.classList.add('leaflet-zoom-animated');
+    this._c.style.position = 'absolute';
+    map.getPane('mdKleur').appendChild(this._c);
+    map.on('zoomanim', this._anim, this);
+    map.on('viewreset zoomend moveend resize', this._plaats, this);
+    this._plaats();
+  },
+  onRemove(map) {
+    this._c.remove();
+    map.off('zoomanim', this._anim, this);
+    map.off('viewreset zoomend moveend resize', this._plaats, this);
+  },
+  _plaats() {
+    const tl = this._map.latLngToLayerPoint(this._b.getNorthWest());
+    const br = this._map.latLngToLayerPoint(this._b.getSouthEast());
+    L.DomUtil.setPosition(this._c, tl);
+    this._c.style.width  = (br.x - tl.x) + 'px';
+    this._c.style.height = (br.y - tl.y) + 'px';
+  },
+  _anim(e) {
+    const scale = this._map.getZoomScale(e.zoom);
+    const offset = this._map._latLngBoundsToNewLayerBounds(this._b, e.zoom, e.center).min;
+    L.DomUtil.setTransform(this._c, offset, scale);
+  },
+});
+
+function _mdTekenKleur(f, laag) {
+  const { lat0, lat1, lon0, lon1 } = MD_RASTER;
+  const { fnx, fny } = _mdFijnMaat();
+  const yN = _mdMercY(lat1), yZ = _mdMercY(lat0);
+  const W = 960, H = Math.round(W * (yN - yZ) / ((lon1 - lon0) * Math.PI / 180));
+  const c = _md.kleurLaag._c;
+  if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(W, H), px = img.data;
+  const { lut, lo, hi } = _mdLut(laag);
+  const sx = (lon1 - lon0) / MD_FIJN / W;
+  for (let r = 0; r < H; r++) {
+    const lat = _mdMercLat(yN - (r + 0.5) / H * (yN - yZ));
+    const fy = (lat - lat0) / MD_FIJN;
+    for (let k = 0; k < W; k++) {
+      const val = _mdFijnSample(f, fnx, fny, (k + 0.5) * sx, fy);
+      if (val !== val) continue;
+      const q = Math.max(0, Math.min(255, Math.round((val - lo) / (hi - lo) * 255))) * 4;
+      const o = (r * W + k) * 4;
+      px[o] = lut[q]; px[o + 1] = lut[q + 1]; px[o + 2] = lut[q + 2]; px[o + 3] = lut[q + 3];
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// ── Isobaren (marching squares) en drukcentra ──
+function _mdIsolijnen(f, nx, ny, niveau) {
+  const buren = new Map(), punten = new Map();
+  const koppel = (k1, p1, k2, p2) => {
+    punten.set(k1, p1); punten.set(k2, p2);
+    if (!buren.has(k1)) buren.set(k1, []);
+    if (!buren.has(k2)) buren.set(k2, []);
+    buren.get(k1).push(k2); buren.get(k2).push(k1);
+  };
+  const tussen = (va, vb) => (niveau - va) / (vb - va);
+  for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+    const v0 = f[j * nx + i], v1 = f[j * nx + i + 1], v2 = f[(j + 1) * nx + i + 1], v3 = f[(j + 1) * nx + i];
+    if (v0 !== v0 || v1 !== v1 || v2 !== v2 || v3 !== v3) continue;
+    const code = (v0 > niveau ? 1 : 0) | (v1 > niveau ? 2 : 0) | (v2 > niveau ? 4 : 0) | (v3 > niveau ? 8 : 0);
+    if (code === 0 || code === 15) continue;
+    // randen: 0 onder, 1 rechts, 2 boven, 3 links — elk met een unieke sleutel
+    const rand = [
+      [2 * (j * nx + i),         () => [i + tussen(v0, v1), j]],
+      [2 * (j * nx + i + 1) + 1, () => [i + 1, j + tussen(v1, v2)]],
+      [2 * ((j + 1) * nx + i),   () => [i + tussen(v3, v2), j + 1]],
+      [2 * (j * nx + i) + 1,     () => [i, j + tussen(v0, v3)]],
+    ];
+    const kruist = [(v0 > niveau) !== (v1 > niveau), (v1 > niveau) !== (v2 > niveau),
+                    (v3 > niveau) !== (v2 > niveau), (v0 > niveau) !== (v3 > niveau)];
+    const e = [];
+    kruist.forEach((k, n) => { if (k) e.push(n); });
+    const verbind = (a, b) => koppel(rand[a][0], rand[a][1](), rand[b][0], rand[b][1]());
+    if (e.length === 2) verbind(e[0], e[1]);
+    else if (e.length === 4) {            // zadelpunt: het midden beslist
+      const midHoog = (v0 + v1 + v2 + v3) / 4 > niveau;
+      if ((code === 5) === midHoog) { verbind(0, 1); verbind(2, 3); }
+      else                          { verbind(3, 0); verbind(1, 2); }
+    }
+  }
+  const lijnen = [], bezocht = new Set();
+  const loop = (start) => {
+    const lijn = [punten.get(start)];
+    bezocht.add(start);
+    let cur = start;
+    for (;;) {
+      const nb = buren.get(cur).find(k => !bezocht.has(k));
+      if (nb === undefined) {
+        if (lijn.length > 2 && buren.get(cur).includes(start)) lijn.push(punten.get(start));
+        break;
+      }
+      bezocht.add(nb); lijn.push(punten.get(nb)); cur = nb;
+    }
+    lijnen.push(lijn);
+  };
+  for (const [k, n] of buren) if (n.length === 1 && !bezocht.has(k)) loop(k);
+  for (const k of buren.keys()) if (!bezocht.has(k)) loop(k);
+  return lijnen;
+}
+
+function _mdDrukcentra(f, nx, ny) {
+  const R = 12, R2 = R * R, res = [];
+  for (let j = R; j < ny - R; j++) for (let i = R; i < nx - R; i++) {
+    const v = f[j * nx + i];
+    if (v !== v) continue;
+    let isMin = true, isMax = true, som = 0, n = 0;
+    buiten:
+    for (let dj = -R; dj <= R; dj++) for (let di = -R; di <= R; di++) {
+      if (di * di + dj * dj > R2) continue;
+      const w = f[(j + dj) * nx + i + di];
+      if (w !== w) continue;
+      const eerder = dj < 0 || (dj === 0 && di < 0);
+      if (w < v || (w === v && eerder)) isMin = false;
+      if (w > v || (w === v && eerder)) isMax = false;
+      if (!isMin && !isMax) break buiten;
+      som += w; n++;
+    }
+    if (!isMin && !isMax) continue;
+    const gem = som / n;
+    if (isMin && gem - v >= 1.5) res.push({ soort: 'L', i, j, v });
+    if (isMax && v - gem >= 1.5) res.push({ soort: 'H', i, j, v });
+  }
+  return res;
+}
+
+function _mdTekenIsobaren(p) {
+  _md.isoGroep.clearLayers();
+  _md.hlGroep.clearLayers();
+  if (!p) return;
+  const { lat0, lon0 } = MD_RASTER;
+  const { fnx, fny } = _mdFijnMaat();
+  const ll = ([x, y]) => [lat0 + y * MD_FIJN, lon0 + x * MD_FIJN];
+  let lo = Infinity, hi = -Infinity;
+  for (const x of p) if (x === x) { if (x < lo) lo = x; if (x > hi) hi = x; }
+  for (let niveau = Math.ceil(lo / 4) * 4; niveau <= hi; niveau += 4) {
+    const zwaar = niveau % 20 === 0;
+    for (const lijn of _mdIsolijnen(p, fnx, fny, niveau)) {
+      if (lijn.length < 4) continue;
+      const coords = lijn.map(ll);
+      L.polyline(coords, {
+        renderer: _md.renderer, interactive: false,
+        color: '#1e293b', opacity: zwaar ? 0.7 : 0.45, weight: zwaar ? 1.5 : 1,
+      }).addTo(_md.isoGroep);
+      if (lijn.length >= 30) {
+        L.marker(coords[Math.floor(coords.length / 2)], {
+          interactive: false, keyboard: false,
+          icon: L.divIcon({ className: '', iconSize: [30, 12], iconAnchor: [15, 6],
+                            html: `<div class="md-iso-label">${niveau}</div>` }),
+        }).addTo(_md.isoGroep);
+      }
+    }
+  }
+  for (const c of _mdDrukcentra(p, fnx, fny)) {
+    L.marker(ll([c.i, c.j]), {
+      interactive: false, keyboard: false,
+      icon: L.divIcon({ className: '', iconSize: [44, 36], iconAnchor: [22, 18],
+                        html: `<div class="md-hl ${c.soort}"><b>${c.soort}</b><span>${Math.round(c.v)}</span></div>` }),
+    }).addTo(_md.hlGroep);
+  }
+}
+
+// ── Windstroming (bewegende deeltjes, zoals op Windy) ──
+const MdStroming = L.Layer.extend({
+  onAdd(map) {
+    this._map = map;
+    this._c = L.DomUtil.create('canvas', '', map.getPane('mdStroom'));
+    this._c.style.position = 'absolute';
+    map.on('movestart zoomstart', this._stop, this);
+    map.on('moveend zoomend resize', this._start, this);
+    this._start();
+  },
+  onRemove(map) {
+    this._stop();
+    this._c.remove();
+    map.off('movestart zoomstart', this._stop, this);
+    map.off('moveend zoomend resize', this._start, this);
+  },
+  _stop() {
+    if (this._raf) cancelAnimationFrame(this._raf);
+    this._raf = null;
+    if (this._c) this._c.getContext('2d').clearRect(0, 0, this._c.width, this._c.height);
+  },
+  _start() {
+    this._stop();
+    const m = this._map, size = m.getSize();
+    if (!size.x || !size.y) return;
+    this._c.width = size.x; this._c.height = size.y;
+    L.DomUtil.setPosition(this._c, m.containerPointToLayerPoint([0, 0]));
+    const nw = m.containerPointToLatLng([0, 0]), se = m.containerPointToLatLng([size.x, size.y]);
+    this._view = { W: size.x, H: size.y, lonW: nw.lng, lonO: se.lng, mN: _mdMercY(nw.lat), mZ: _mdMercY(se.lat) };
+    const aantal = Math.min(3500, Math.round(size.x * size.y / 380));
+    this._deeltjes = Array.from({ length: aantal }, () => this._nieuw({}));
+    this._frame = 0;
+    this._loop();
+  },
+  _nieuw(p) {
+    p.x = Math.random() * this._view.W; p.y = Math.random() * this._view.H;
+    p.leeftijd = 0; p.max = 40 + Math.random() * 70;
+    return p;
+  },
+  _loop() {
+    const paneel = document.getElementById('modellen-panel');
+    if (!paneel.classList.contains('active')) { this._stop(); return; }
+    this._raf = requestAnimationFrame(() => this._loop());
+    if (document.hidden) return;
+    if ((this._frame++ & 1) === 1) return;                 // ~30 fps is genoeg en spaart CPU
+    const uv = _md.uvHuidig;
+    if (!uv) return;
+    const { W, H, lonW, lonO, mN, mZ } = this._view;
+    const { lat0, lon0 } = MD_RASTER;
+    const { fnx, fny } = _mdFijnMaat();
+    const ctx = this._c.getContext('2d');
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.fillStyle = 'rgba(0,0,0,0.9)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = 'rgba(15,23,42,0.55)';
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    const K = 0.16;
+    for (const p of this._deeltjes) {
+      const lon = lonW + (lonO - lonW) * p.x / W;
+      const lat = _mdMercLat(mN + (mZ - mN) * p.y / H);
+      const fx = (lon - lon0) / MD_FIJN, fy = (lat - lat0) / MD_FIJN;
+      const u = _mdFijnSample(uv.u, fnx, fny, fx, fy), v = _mdFijnSample(uv.v, fnx, fny, fx, fy);
+      if (u !== u || v !== v || ++p.leeftijd > p.max) { this._nieuw(p); continue; }
+      const nx = p.x + u * K, ny = p.y - v * K;
+      ctx.moveTo(p.x, p.y); ctx.lineTo(nx, ny);
+      p.x = nx; p.y = ny;
+      if (nx < 0 || ny < 0 || nx > W || ny > H) this._nieuw(p);
+    }
+    ctx.stroke();
+  },
+});
+
+function _mdStroming() {
+  if (!_md.kaart) return;
+  if (_md.stroming) {
+    if (!_md.stroom) _md.stroom = new MdStroming();
+    if (!_md.kaart.hasLayer(_md.stroom)) _md.stroom.addTo(_md.kaart);
+    else if (!_md.stroom._raf) _md.stroom._start();
+  } else if (_md.stroom && _md.kaart.hasLayer(_md.stroom)) {
+    _md.kaart.removeLayer(_md.stroom);
+  }
+}
+
+// ── Kaart, legenda, tijdbalk ──
+function _mdKaart() {
+  if (_md.kaart) { _md.kaart.invalidateSize(); return; }
+  const { lat0, lat1, lon0, lon1 } = MD_RASTER;
+  const m = L.map('md-map', {
+    zoomControl: true, minZoom: 3, maxZoom: 8, zoomSnap: 0.5,
+    maxBounds: [[lat0 - 12, lon0 - 30], [lat1 + 10, lon1 + 30]], maxBoundsViscosity: 0.6,
   });
-  return 'https://embed.windy.com/embed2.html?' + q.toString();
+  m.attributionControl.setPrefix(false);
+  m.attributionControl.addAttribution('Modeldata: Open-Meteo (ECMWF · NOAA · DWD) · Kaart: Esri');
+  m.createPane('mdKleur').style.zIndex = 350;
+  m.createPane('mdStroom').style.zIndex = 420;
+  m.getPane('mdStroom').style.pointerEvents = 'none';
+  m.createPane('mdLabels').style.zIndex = 440;
+  m.getPane('mdLabels').style.pointerEvents = 'none';
+  L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    { maxZoom: 16, crossOrigin: true }).addTo(m);
+  // Plaatsnamen bóven de kleurlaag, zodat ze leesbaar blijven
+  L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+    { maxZoom: 16, crossOrigin: true, pane: 'mdLabels' }).addTo(m);
+  m.setView([52, -5], 4);
+
+  _md.kleurLaag = new MdCanvasLaag([[lat0, lon0], [lat1, lon1]], document.createElement('canvas')).addTo(m);
+  _md.renderer  = L.canvas({ padding: 0.3 });
+  _md.isoGroep  = L.layerGroup().addTo(m);
+  _md.hlGroep   = L.layerGroup().addTo(m);
+  m.on('click', e => _mdOpenDetail(e.latlng));
+  _md.kaart = m;
 }
 
-function _mdLaad() {
-  const url = _mdUrl();
-  if (url === _md.geladen) return;          // niet onnodig herladen bij terugkeren
-  _md.geladen = url;
-  document.getElementById('md-frame').src = url;
+function _mdLegenda() {
+  const laag = MD_LAGEN[_md.laag];
+  const st = laag.stops, lo = st[0][0], hi = st[st.length - 1][0];
+  const verloop = st.map(([v, c]) => `${c} ${((v - lo) / (hi - lo) * 100).toFixed(1)}%`).join(', ');
+  document.getElementById('md-legenda').innerHTML =
+    `<h4>${laag.titel} · ${MD_MODELLEN[_md.model].naam}</h4>` +
+    `<div class="md-legenda-balk" style="background:linear-gradient(90deg, ${verloop})"></div>` +
+    `<div class="md-legenda-ticks">${laag.ticks.map(t => `<span>${t.toLocaleString('nl-NL')}</span>`).join('')}</div>`;
 }
 
-function _mdKoppelSeg(id, sleutel) {
+function _mdTijdTekst(d) {
+  return d.toLocaleString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short',
+                                     hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
+}
+
+function _mdTijdbalk(data) {
+  const s = document.getElementById('md-schuif');
+  s.max = data.T - 1;
+  if (!_md.tijdGezet) {           // eerste keer: dichtstbijzijnde tijdstap bij 'nu'
+    const nu = Date.now();
+    let best = 0;
+    data.tijden.forEach((t, k) => { if (Math.abs(t - nu) < Math.abs(data.tijden[best] - nu)) best = k; });
+    _md.t = best; _md.tijdGezet = true;
+  }
+  _md.t = Math.min(_md.t, data.T - 1);
+  s.value = _md.t;
+  // Daglabels onder de schuif, breedte naar het aantal tijdstappen per dag
+  const dagen = [];
+  data.tijden.forEach((t) => {
+    const dag = t.toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', timeZone: 'Europe/Amsterdam' });
+    if (!dagen.length || dagen[dagen.length - 1].dag !== dag) dagen.push({ dag, n: 1 }); else dagen[dagen.length - 1].n++;
+  });
+  document.getElementById('md-dagen').innerHTML =
+    dagen.map(d => `<span style="flex:${d.n}">${d.dag}</span>`).join('');
+}
+
+function _mdPlanTeken() {
+  if (_md.tekenGepland) return;
+  _md.tekenGepland = true;
+  requestAnimationFrame(() => { _md.tekenGepland = false; _mdTeken(); });
+}
+
+function _mdTeken() {
+  const data = _md.data[_md.model];
+  if (!data || !data.klaar || !_md.kaart) return;
+  const laag = MD_LAGEN[_md.laag];
+  const t = _md.t;
+  document.getElementById('md-tijdlabel').textContent = _mdTijdTekst(data.tijden[t]);
+
+  let f = null;
+  if (laag.golf) {
+    const g = _md.golf[_md.model];
+    if (g && g.klaar) {
+      let tg = 0;   // golfraster kan een iets andere tijdas hebben
+      g.tijden.forEach((x, k) => { if (Math.abs(x - data.tijden[t]) < Math.abs(g.tijden[tg] - data.tijden[t])) tg = k; });
+      f = _mdFijnVeld(_md.model + '-golf', g, laag.veld, tg);
+    }
+  } else {
+    f = _mdFijnVeld(_md.model, data, laag.veld, t);
+  }
+  if (f) _mdTekenKleur(f, laag);
+  else _md.kleurLaag._c.getContext('2d').clearRect(0, 0, _md.kleurLaag._c.width, _md.kleurLaag._c.height);
+
+  _mdTekenIsobaren(_md.isobaren ? _mdFijnVeld(_md.model, data, 'pressure_msl', t) : null);
+  _md.uvHuidig = _mdUV(_md.model, data, t);
+  if (_md.detail) _mdDetailNu();
+}
+
+async function _mdLaadModel() {
+  const model = _md.model;
+  try {
+    _mdStatus('laden', `${MD_MODELLEN[model].naam} laden…`);
+    const data = await _mdHaal(model, false);
+    if (MD_LAGEN[_md.laag].golf) await _mdHaal(model, true);
+    if (model !== _md.model) return;          // intussen ander model gekozen
+    _mdTijdbalk(data);
+    _mdLegenda();
+    _mdTeken();
+    _mdStroming();
+    _mdStatus('ok', `${MD_MODELLEN[model].lang} · verwachting t/m ${_mdTijdTekst(data.tijden[data.T - 1])}`);
+  } catch (e) {
+    console.error('[modellen]', e);
+    _mdStatus('fout', e.message);
+  }
+}
+
+function _mdOpen() {
+  _mdKaart();
+  setTimeout(() => { _md.kaart.invalidateSize(); _mdStroming(); }, 80);
+  _mdLaadModel();
+}
+
+// ── Detailpaneel na klik: modellen vergeleken voor één punt ──
+async function _mdOpenDetail(ll) {
+  const lat = Math.round(ll.lat * 100) / 100, lon = Math.round(L.Util.wrapNum(ll.lng, [-180, 180]) * 100) / 100;
+  if (_md.pin) _md.pin.setLatLng([lat, lon]);
+  else _md.pin = L.marker([lat, lon], { interactive: false,
+    icon: L.divIcon({ className: '', iconSize: [14, 14], iconAnchor: [7, 7], html: '<div class="md-pin"></div>' }) }).addTo(_md.kaart);
+
+  const paneel = document.getElementById('md-detail');
+  const wasDicht = !paneel.classList.contains('open');
+  paneel.classList.add('open');
+  if (wasDicht) setTimeout(() => {
+    _md.kaart.invalidateSize({ pan: false });
+    _md.kaart.panInside([lat, lon], { padding: [40, 40] });   // aangeklikt punt blijft in beeld
+  }, 280);
+
+  const fmt = (x, pos, neg) => `${Math.abs(x).toFixed(2).replace('.', ',')}° ${x >= 0 ? pos : neg}`;
+  document.getElementById('md-detail-titel').textContent = `${fmt(lat, 'N', 'Z')} · ${fmt(lon, 'O', 'W')}`;
+  document.getElementById('md-detail-sub').textContent = 'ECMWF, GFS en ICON vergeleken · 5 dagen';
+  const body = document.getElementById('md-detail-body');
+  body.innerHTML = '<div class="md-laden">Puntverwachting ophalen…</div>';
+  body.scrollTop = 0;
+
+  const modellen = Object.values(MD_MODELLEN).map(m => m.api).join(',');
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
+    + `&hourly=pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,temperature_2m,precipitation,cloud_cover`
+    + `&models=${modellen}&forecast_days=5&temporal_resolution=hourly_3&wind_speed_unit=kn&timezone=UTC`;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    _md.detail = { lat, lon, tijden: d.hourly.time.map(t => new Date(t + 'Z')), h: d.hourly };
+    _mdDetailRender();
+  } catch (e) {
+    body.innerHTML = `<div class="md-laden" style="color:var(--red)">Puntverwachting niet beschikbaar (${e.message})</div>`;
+  }
+}
+
+function _mdReeks(modelKey, veld) {
+  return _md.detail.h[`${veld}_${MD_MODELLEN[modelKey].api}`] || [];
+}
+
+function _mdDetailIndex() {
+  const data = _md.data[_md.model];
+  const doel = data && data.klaar ? data.tijden[_md.t] : new Date();
+  let best = 0;
+  _md.detail.tijden.forEach((t, k) => { if (Math.abs(t - doel) < Math.abs(_md.detail.tijden[best] - doel)) best = k; });
+  return best;
+}
+
+function _mdGetal(x, d = 0) { return x == null ? '–' : x.toFixed(d).replace('.', ','); }
+
+function _mdDetailNu() {
+  const el = document.getElementById('md-nu');
+  if (!el || !_md.detail) return;
+  const k = _mdDetailIndex(), m = _md.model;
+  const w = (veld) => _mdReeks(m, veld)[k];
+  const kaart = (label, waarde, eenheid) =>
+    `<div class="md-nu-kaart"><div class="k">${label}</div><div class="v">${waarde}<small>${eenheid}</small></div></div>`;
+  const richting = w('wind_direction_10m');
+  el.innerHTML =
+    kaart('Luchtdruk', _mdGetal(w('pressure_msl')), 'hPa') +
+    kaart('Wind', _mdGetal(w('wind_speed_10m')), `kt ${richting == null ? '' : _vkDir(richting)}`) +
+    kaart('Stoten', _mdGetal(w('wind_gusts_10m')), 'kt') +
+    kaart('Temperatuur', _mdGetal(w('temperature_2m'), 1), '°C') +
+    kaart('Neerslag', _mdGetal(w('precipitation'), 1), 'mm') +
+    kaart('Bewolking', _mdGetal(w('cloud_cover')), '%');
+  document.getElementById('md-nu-tijd').textContent =
+    `${MD_MODELLEN[m].naam} · ${_mdTijdTekst(_md.detail.tijden[k])}`;
+  document.querySelectorAll('#md-tabel tr[data-k]').forEach(tr => tr.classList.toggle('nu', +tr.dataset.k === k));
+}
+
+function _mdDetailRender() {
+  const body = document.getElementById('md-detail-body');
+  _md.detailCharts.forEach(c => c.destroy());
+  _md.detailCharts = [];
+  const tijden = _md.detail.tijden, m = _md.model;
+
+  let rijen = '', vorigeDag = '';
+  tijden.forEach((t, k) => {
+    const dag = t.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Amsterdam' });
+    if (dag !== vorigeDag) { rijen += `<tr class="dag"><td colspan="7">${dag}</td></tr>`; vorigeDag = dag; }
+    const w = (veld) => _mdReeks(m, veld)[k];
+    const dir = w('wind_direction_10m');
+    const pijl = dir == null ? '' : `<span class="md-pijl" style="transform:rotate(${dir + 180}deg)">↑</span>`;
+    rijen += `<tr data-k="${k}"><td>${t.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' })}</td>`
+      + `<td>${_mdGetal(w('pressure_msl'))}</td><td>${pijl}${_mdGetal(w('wind_speed_10m'))}</td><td>${_mdGetal(w('wind_gusts_10m'))}</td>`
+      + `<td>${_mdGetal(w('temperature_2m'), 1)}</td><td>${_mdGetal(w('precipitation'), 1)}</td><td>${_mdGetal(w('cloud_cover'))}</td></tr>`;
+  });
+
+  body.innerHTML =
+    `<div class="md-sectie" id="md-nu-tijd">–</div><div class="md-nu" id="md-nu"></div>` +
+    `<div class="md-sectie">Luchtdruk per model (hPa)</div><div class="md-grafiek"><canvas id="md-g-druk"></canvas></div>` +
+    `<div class="md-sectie">Wind per model (kt)</div><div class="md-grafiek"><canvas id="md-g-wind"></canvas></div>` +
+    `<div class="md-sectie">Temperatuur per model (°C)</div><div class="md-grafiek"><canvas id="md-g-temp"></canvas></div>` +
+    `<div class="md-sectie">Verwachting ${MD_MODELLEN[m].lang} per 3 uur</div>` +
+    `<table class="md-tabel" id="md-tabel"><thead><tr><th>Tijd</th><th>hPa</th><th>Wind</th><th>Stoot</th><th>°C</th><th>mm</th><th>Wolk</th></tr></thead><tbody>${rijen}</tbody></table>`;
+
+  const grafiek = (id, veld, extra) => {
+    const opts = CHART_OPTS();
+    opts.plugins.legend = { display: true, position: 'bottom',
+      labels: { boxWidth: 18, boxHeight: 2, font: { size: 10, family: 'Inter' }, color: '#475569' } };
+    opts.interaction = { mode: 'index', intersect: false };
+    opts.plugins.tooltip.callbacks = {
+      title: items => _mdTijdTekst(new Date(items[0].parsed.x)),
+      label: item => ` ${item.dataset.label}: ${_mdGetal(item.parsed.y, 1)}`,
+    };
+    delete opts.scales.x.time.unit;
+    opts.scales.x.time.displayFormats = { hour: 'HH:mm', day: 'EEE d' };
+    const sets = Object.entries(MD_MODELLEN).map(([k, mm]) => ({
+      label: mm.naam,
+      data: _mdReeks(k, veld).map((y, i) => ({ x: tijden[i], y })),
+      borderColor: mm.kleur, backgroundColor: mm.kleur,
+      borderWidth: k === m ? 2.4 : 1.3, pointRadius: 0, tension: 0.3,
+      order: k === m ? 0 : 1,
+    }));
+    if (extra) sets.push(extra);
+    _md.detailCharts.push(new Chart(document.getElementById(id), { type: 'line', data: { datasets: sets }, options: opts }));
+  };
+  grafiek('md-g-druk', 'pressure_msl');
+  grafiek('md-g-wind', 'wind_speed_10m', {
+    label: `Stoten ${MD_MODELLEN[m].naam}`,
+    data: _mdReeks(m, 'wind_gusts_10m').map((y, i) => ({ x: tijden[i], y })),
+    borderColor: MD_MODELLEN[m].kleur, backgroundColor: MD_MODELLEN[m].kleur,
+    borderDash: [4, 3], borderWidth: 1.2, pointRadius: 0, tension: 0.3,
+  });
+  grafiek('md-g-temp', 'temperature_2m');
+  _mdDetailNu();
+}
+
+function _mdSluitDetail() {
+  document.getElementById('md-detail').classList.remove('open');
+  _md.detailCharts.forEach(c => c.destroy());
+  _md.detailCharts = [];
+  _md.detail = null;
+  if (_md.pin) { _md.kaart.removeLayer(_md.pin); _md.pin = null; }
+  setTimeout(() => _md.kaart && _md.kaart.invalidateSize({ pan: false }), 280);
+}
+
+// ── Bediening ──
+function _mdSeg(id, sleutel, bijWissel) {
   document.getElementById(id).addEventListener('click', e => {
     const b = e.target.closest('button');
-    if (!b) return;
+    if (!b || b.classList.contains('active')) return;
     document.querySelectorAll(`#${id} button`).forEach(x => x.classList.toggle('active', x === b));
     _md[sleutel] = b.dataset.v;
-    _mdLaad();
+    bijWissel();
   });
 }
-_mdKoppelSeg('md-model', 'model');
-_mdKoppelSeg('md-overlay', 'overlay');
-document.getElementById('md-isobaren').addEventListener('change', e => {
-  _md.isobaren = e.target.checked;
-  _mdLaad();
+_mdSeg('md-model', 'model', () => {
+  _mdLaadModel();
+  if (_md.detail) _mdDetailRender();     // andere nadruk in grafieken en tabel
 });
+_mdSeg('md-laag', 'laag', () => {
+  _mdLegenda();
+  if (MD_LAGEN[_md.laag].golf && !(_md.golf[_md.model] && _md.golf[_md.model].klaar)) _mdLaadModel();
+  else _mdPlanTeken();
+});
+document.getElementById('md-isobaren').addEventListener('change', e => { _md.isobaren = e.target.checked; _mdPlanTeken(); });
+document.getElementById('md-stroming').addEventListener('change', e => { _md.stroming = e.target.checked; _mdStroming(); });
+document.getElementById('md-schuif').addEventListener('input', e => { _md.t = +e.target.value; _mdPlanTeken(); });
+document.getElementById('md-detail-sluit').addEventListener('click', _mdSluitDetail);
+
+function _mdSpeel(aan) {
+  const icoon = document.getElementById('md-play-icon');
+  if (aan) {
+    icoon.innerHTML = '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>';
+    _md.speelTimer = setInterval(() => {
+      const data = _md.data[_md.model];
+      if (!data || !data.klaar || !document.getElementById('modellen-panel').classList.contains('active')) { _mdSpeel(false); return; }
+      _md.t = (_md.t + 1) % data.T;
+      document.getElementById('md-schuif').value = _md.t;
+      _mdPlanTeken();
+    }, 700);
+  } else {
+    clearInterval(_md.speelTimer); _md.speelTimer = null;
+    icoon.innerHTML = '<polygon points="6 4 20 12 6 20 6 4"/>';
+  }
+}
+document.getElementById('md-play').addEventListener('click', () => _mdSpeel(!_md.speelTimer));
 
 // ── Vakantieweer (autoroute Wateringen → Guillestre, ECMWF) ─────────────────────
 let _vkMap = null;
