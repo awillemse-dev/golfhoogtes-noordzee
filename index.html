@@ -1614,7 +1614,6 @@
             <div class="md-seg" id="md-model">
               <button data-v="ecmwf" class="active">ECMWF</button>
               <button data-v="gfs">GFS</button>
-              <button data-v="icon">ICON</button>
             </div>
           </div>
           <div class="md-groep">
@@ -5536,47 +5535,291 @@ async function _doGeneratePdf() {
   doc.save(`route-forecast-${dateStr}.pdf`);
 }
 
-// ── Modellen: eigen modelkaart (ECMWF / GFS / ICON) ───────────────────────────
-// Voorheen een Windy-iframe; daarin was scrollen en opmaak niet te beïnvloeden.
-// Nu zelf getekend: Open-Meteo levert per model een raster van 5° over de
-// Noord-Atlantische Oceaan en Europa (300 punten, 3-uurlijks, 5 dagen). Dat
-// wordt bicubisch naar 0,5° geïnterpoleerd voor de kleurlaag, de isobaren en
-// de drukcentra. De data wordt in de browser opgehaald en telt dus niet mee
-// voor het geheugen of de Open-Meteo-limiet van de proxy op Render.
-const MD_RASTER = { lat0: 20, lat1: 75, lon0: -65, lon1: 55, stap: 5 };
-const MD_FIJN   = 0.5;
+// ── GRIB2-decoder (wereldwijde modelvelden van ECMWF en NOAA) ─────────────────
+// Ondersteunt precies wat de open modeldata gebruikt:
+//   · roosterdefinitie 3.0  (regelmatig lat/lon)
+//   · pakking 5.0           (simple packing)
+//   · pakking 5.2 / 5.3     (complex packing, met ruimtelijke differentiatie) — NOAA GFS
+//   · pakking 5.42          (CCSDS / AEC-compressie)                           — ECMWF
+//   · bitmap in sectie 6    (bv. land gemaskeerd bij golfvelden)
+
+class _GribBits {
+  constructor(u8, start, end) { this.b = u8; this.p = start * 8; this.einde = end * 8; }
+  lees(n) {                          // n ≤ 32 bits, MSB eerst
+    let v = 0;
+    while (n > 0) {
+      const byte = this.b[this.p >> 3], off = this.p & 7, neem = Math.min(8 - off, n);
+      v = v * (1 << neem) + ((byte >> (8 - off - neem)) & ((1 << neem) - 1));
+      this.p += neem; n -= neem;
+    }
+    return v;
+  }
+  nullen() {                         // fundamentele reeks: tel nullen tot de volgende 1
+    let n = 0;
+    for (;;) {
+      if (this.p >= this.einde) throw new Error('GRIB: onverwacht einde van de bitstroom');
+      const off = this.p & 7, rest = (this.b[this.p >> 3] << off) & 0xff;
+      if (rest === 0) { n += 8 - off; this.p += 8 - off; continue; }
+      const lz = Math.clz32(rest) - 24;
+      this.p += lz + 1;
+      return n + lz;
+    }
+  }
+  uitlijnen() { this.p = Math.ceil(this.p / 8) * 8; }
+}
+
+function _gribTeken(u8, o, n) {      // GRIB gebruikt teken-grootte, geen two's complement
+  let v = 0;
+  for (let i = 0; i < n; i++) v = v * 256 + u8[o + i];
+  const m = Math.pow(2, 8 * n - 1);
+  return v >= m ? -(v - m) : v;
+}
+
+function _gribKop(u8) {
+  if (u8[0] !== 71 || u8[1] !== 82 || u8[2] !== 73 || u8[3] !== 66) throw new Error('Geen GRIB-bericht');
+  if (u8[7] !== 2) throw new Error('Alleen GRIB2 wordt ondersteund');
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  if (dv.getUint32(12) !== u8.length || dv.getUint32(8) !== 0)
+    throw new Error('GRIB-bericht onvolledig ontvangen');
+  const k = {};
+  let pos = 16;
+  while (pos < u8.length - 4) {
+    if (u8[pos] === 55 && u8[pos + 1] === 55 && u8[pos + 2] === 55 && u8[pos + 3] === 55) break;
+    const len = dv.getUint32(pos), nr = u8[pos + 4];
+    if (nr === 3) {
+      k.npunten = dv.getUint32(pos + 6); k.rooster = dv.getUint16(pos + 12);
+      k.ni = dv.getUint32(pos + 30); k.nj = dv.getUint32(pos + 34);
+      k.la1 = _gribTeken(u8, pos + 46, 4) / 1e6; k.lo1 = _gribTeken(u8, pos + 50, 4) / 1e6;
+      k.la2 = _gribTeken(u8, pos + 55, 4) / 1e6; k.lo2 = _gribTeken(u8, pos + 59, 4) / 1e6;
+      k.di = dv.getUint32(pos + 63) / 1e6; k.dj = dv.getUint32(pos + 67) / 1e6;
+      k.scan = u8[pos + 71];
+    } else if (nr === 5) {
+      k.nwaarden = dv.getUint32(pos + 5); k.pak = dv.getUint16(pos + 9);
+      k.R = dv.getFloat32(pos + 11); k.E = _gribTeken(u8, pos + 15, 2); k.D = _gribTeken(u8, pos + 17, 2);
+      k.bits = u8[pos + 19];
+      if (k.pak === 42) { k.aecVlag = u8[pos + 21]; k.J = u8[pos + 22]; k.rsi = dv.getUint16(pos + 23); }
+      if (k.pak === 2 || k.pak === 3) {
+        k.ontbreekt = u8[pos + 22]; k.NG = dv.getUint32(pos + 31);
+        k.wref = u8[pos + 35]; k.wbits = u8[pos + 36];
+        k.lref = dv.getUint32(pos + 37); k.linc = u8[pos + 41]; k.lastlen = dv.getUint32(pos + 42); k.lbits = u8[pos + 46];
+        k.orde = k.pak === 3 ? u8[pos + 47] : 0; k.extraOct = k.pak === 3 ? u8[pos + 48] : 0;
+      }
+    } else if (nr === 6) {
+      k.bitmap = u8[pos + 5] === 0 ? pos + 6 : null;
+    } else if (nr === 7) {
+      k.dStart = pos + 5; k.dEind = pos + len;
+    }
+    pos += len;
+  }
+  if (k.rooster !== 0) throw new Error(`GRIB: rooster ${k.rooster} niet ondersteund`);
+  return k;
+}
+
+// CCSDS 121.0-B (libaec): adaptieve Rice-codering met optionele voorspelling
+function _gribAec(u8, k) {
+  const n = k.nwaarden, bps = k.bits, J = k.J, rsi = k.rsi, vlag = k.aecVlag;
+  const uit = new Float64Array(n);
+  if (!bps) return uit;
+  const br = new _GribBits(u8, k.dStart, k.dEind);
+  const pre = (vlag & 8) !== 0, beperkt = (vlag & 16) !== 0, padRsi = (vlag & 32) !== 0;
+  const idLen = bps > 16 ? 5 : bps > 8 ? 4 : (beperkt && bps <= 4 ? (bps <= 2 ? 1 : 2) : 3);
+  const idOngecomprimeerd = (1 << idLen) - 1;
+  const xmax = Math.pow(2, bps) - 1;
+  const fs = new Float64Array(J);
+  let o = 0, vorige = 0, blokInRsi = 0;
+
+  const zet = (d) => {               // voorspelling terugdraaien (CCSDS §4)
+    if (o >= n) return;
+    if (!pre) { uit[o++] = d; return; }
+    const x = vorige, th = Math.min(x, xmax - x);
+    let v;
+    if (d <= 2 * th) v = (d % 2 === 1) ? x - (d + 1) / 2 : x + d / 2;
+    else v = (th === x) ? d : xmax - d;
+    vorige = v; uit[o++] = v;
+  };
+
+  while (o < n) {
+    const ref = pre && blokInRsi === 0;
+    const id = br.lees(idLen);
+    // Let op de volgorde (zoals libaec): bij 'low entropy' komt eerst het
+    // selectiebit en pas dáárna het referentiemonster; bij de andere opties
+    // volgt het referentiemonster direct op de optie-ID.
+    const selectie = id === 0 ? br.lees(1) : -1;
+    if (ref) { const r = br.lees(bps); vorige = r; if (o < n) uit[o++] = r; }
+    const aantal = J - (ref ? 1 : 0);
+    if (id === 0) {
+      if (selectie === 0) {          // een of meer nulblokken
+        let nb = br.nullen() + 1;
+        if (nb === 5) nb = Math.min(rsi - blokInRsi, 64 - (blokInRsi % 64));
+        else if (nb > 5) nb--;
+        const nulls = nb * J - (ref ? 1 : 0);
+        for (let q = 0; q < nulls; q++) zet(0);
+        blokInRsi += nb;
+      } else {                       // tweede extensie: paren samen gecodeerd
+        let i = ref ? 1 : 0;
+        while (i < J) {
+          const m = br.nullen();
+          const beta = Math.floor((Math.sqrt(8 * m + 1) - 1) / 2);
+          const d1 = m - beta * (beta + 1) / 2;
+          if ((i & 1) === 0) { zet(beta - d1); i++; }
+          zet(d1); i++;
+        }
+        blokInRsi++;
+      }
+    } else if (id === idOngecomprimeerd) {
+      for (let q = 0; q < aantal; q++) zet(br.lees(bps));
+      blokInRsi++;
+    } else {                         // gesplitst: eerst alle FS-delen, dan de k laagste bits
+      const kbits = id - 1;
+      for (let q = 0; q < aantal; q++) fs[q] = br.nullen();
+      if (kbits) { const f = Math.pow(2, kbits); for (let q = 0; q < aantal; q++) fs[q] = fs[q] * f + br.lees(kbits); }
+      for (let q = 0; q < aantal; q++) zet(fs[q]);
+      blokInRsi++;
+    }
+    if (blokInRsi >= rsi) { blokInRsi = 0; if (padRsi) br.uitlijnen(); }
+  }
+  return uit;
+}
+
+// Complex packing (5.2/5.3), zoals NOAA GFS het levert
+function _gribComplex(u8, k) {
+  const br = new _GribBits(u8, k.dStart, k.dEind);
+  const tekenBits = (n) => { const v = br.lees(n * 8), m = Math.pow(2, n * 8 - 1); return v >= m ? -(v - m) : v; };
+  let ival1 = 0, ival2 = 0, minsd = 0;
+  if (k.orde > 0) {
+    ival1 = tekenBits(k.extraOct);
+    if (k.orde === 2) ival2 = tekenBits(k.extraOct);
+    minsd = tekenBits(k.extraOct);
+  }
+  const NG = k.NG;
+  const gref = new Float64Array(NG), gbreed = new Uint8Array(NG), glen = new Uint32Array(NG);
+  for (let g = 0; g < NG; g++) gref[g] = br.lees(k.bits);
+  br.uitlijnen();
+  for (let g = 0; g < NG; g++) gbreed[g] = k.wref + br.lees(k.wbits);
+  br.uitlijnen();
+  for (let g = 0; g < NG; g++) glen[g] = k.lref + k.linc * br.lees(k.lbits);
+  br.uitlijnen();
+  glen[NG - 1] = k.lastlen;
+
+  const n = k.nwaarden, x = new Float64Array(n);
+  const mist = new Uint8Array(n);
+  const miss1 = k.ontbreekt === 1 || k.ontbreekt === 2;
+  const allesEen = Math.pow(2, k.bits) - 1;
+  let o = 0;
+  for (let g = 0; g < NG && o < n; g++) {
+    const w = gbreed[g], L = glen[g], r = gref[g];
+    if (w === 0) {
+      const ontbr = miss1 && r === allesEen;
+      for (let q = 0; q < L && o < n; q++) { x[o] = r; mist[o] = ontbr ? 1 : 0; o++; }
+    } else {
+      const max = Math.pow(2, w) - 1;
+      for (let q = 0; q < L && o < n; q++) {
+        const v = br.lees(w);
+        if (miss1 && v === max) { mist[o] = 1; x[o] = 0; } else x[o] = r + v;
+        o++;
+      }
+    }
+  }
+  // Ruimtelijke differentiatie terugdraaien, alleen over de aanwezige waarden
+  if (k.orde > 0) {
+    let a = -1, b = -1, teller = 0;
+    for (let i = 0; i < n; i++) {
+      if (mist[i]) continue;
+      if (teller === 0) x[i] = ival1;
+      else if (teller === 1 && k.orde === 2) x[i] = ival2;
+      else if (k.orde === 1) x[i] = x[i] + minsd + x[b];
+      else x[i] = x[i] + minsd + 2 * x[b] - x[a];
+      a = b; b = i; teller++;
+    }
+  }
+  if (miss1) for (let i = 0; i < n; i++) if (mist[i]) x[i] = NaN;
+  return x;
+}
+
+function _gribSimple(u8, k) {
+  const br = new _GribBits(u8, k.dStart, k.dEind), n = k.nwaarden, x = new Float64Array(n);
+  if (k.bits) for (let i = 0; i < n; i++) x[i] = br.lees(k.bits);
+  return x;
+}
+
+// Decodeer één GRIB2-bericht tot fysische waarden (Float32Array, NaN = ontbrekend)
+function gribDecodeer(buffer) {
+  const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const k = _gribKop(u8);
+  let x;
+  if (k.pak === 42) x = _gribAec(u8, k);
+  else if (k.pak === 2 || k.pak === 3) x = _gribComplex(u8, k);
+  else if (k.pak === 0) x = _gribSimple(u8, k);
+  else throw new Error(`GRIB: pakking 5.${k.pak} niet ondersteund`);
+
+  const schaalE = Math.pow(2, k.E), schaalD = Math.pow(10, -k.D);
+  const waarden = new Float32Array(k.npunten);
+  if (k.bitmap != null) {
+    let j = 0;
+    for (let i = 0; i < k.npunten; i++) {
+      const aan = (u8[k.bitmap + (i >> 3)] >> (7 - (i & 7))) & 1;
+      waarden[i] = aan ? (k.R + x[j++] * schaalE) * schaalD : NaN;
+    }
+  } else {
+    for (let i = 0; i < k.npunten; i++) waarden[i] = (k.R + x[i] * schaalE) * schaalD;
+  }
+  return { kop: k, waarden };
+}
+
+// ── Modellen: wereldwijde modelkaart (ECMWF / GFS) ────────────────────────────
+// De ruwe modelvelden komen rechtstreeks van ECMWF (open data, 0,25°) en NOAA
+// (GFS op AWS, 0,5°) en worden in de browser gedecodeerd met de GRIB2-decoder
+// hierboven. Per tijdstap alleen de velden die nodig zijn (byte-range uit het
+// bestand), dus geen puntenlimiet en geen belasting van de Render-proxy.
+// Alleen data.ecmwf.int: de AWS-kopie van ECMWF weigert CORS vanuit de browser,
+// dus herhaalpogingen daarheen zijn verspilde tijd.
+const MD_EC_BRONNEN = ['https://data.ecmwf.int/forecasts'];
+const MD_GFS_BRON   = 'https://noaa-gfs-bdp-pds.s3.amazonaws.com';
+const MD_STAPPEN    = Array.from({ length: 41 }, (_, i) => i * 3);     // 0–120 uur, per 3 uur
+const MD_G = { nx: 721, ny: 361, d: 0.5 };   // wereldraster: lon −180…180 (laatste kolom = eerste), lat −90…90
+
 const MD_MODELLEN = {
-  ecmwf: { naam: 'ECMWF', lang: 'ECMWF IFS', api: 'ecmwf_ifs025',  golf: 'ecmwf_wam025',    kleur: '#0369a1' },
-  gfs:   { naam: 'GFS',   lang: 'NOAA GFS',  api: 'gfs_seamless',  golf: 'ncep_gfswave025', kleur: '#d97706' },
-  icon:  { naam: 'ICON',  lang: 'DWD ICON',  api: 'icon_seamless', golf: 'dwd_gwam',        kleur: '#16a34a' },
+  ecmwf: { naam: 'ECMWF', lang: 'ECMWF IFS 0,25°', api: 'ecmwf_ifs025',  kleur: '#0369a1' },
+  gfs:   { naam: 'GFS',   lang: 'NOAA GFS 0,5°',   api: 'gfs_seamless',  kleur: '#d97706' },
+  icon:  { naam: 'ICON',  lang: 'DWD ICON',        api: 'icon_seamless', kleur: '#16a34a' },   // alleen in het detailpaneel
 };
-const MD_VARS = ['pressure_msl', 'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m',
-                 'temperature_2m', 'precipitation', 'cloud_cover', 'cape'];
+const KT = 1.943844;
+const MD_VELDEN = {
+  druk:  { ec: 'msl',    gfs: ':PRMSL:mean sea level:',   om: v => v / 100 },
+  u:     { ec: '10u',    gfs: ':UGRD:10 m above ground:', om: v => v * KT },
+  v:     { ec: '10v',    gfs: ':VGRD:10 m above ground:', om: v => v * KT },
+  stoot: { ec: '10fg',   gfs: ':GUST:surface:',           om: v => v * KT },
+  regen: { ec: 'tprate', gfs: ':PRATE:surface:',          om: v => v * 3600 },
+  temp:  { ec: '2t',     gfs: ':TMP:2 m above ground:',   om: v => v - 273.15 },
+  wolk:  { ec: 'tcc',    gfs: ':TCDC:entire atmosphere:', om: v => v },
+  cape:  { ec: 'mucape', gfs: ':CAPE:surface:',           om: v => v },
+  golf:  { ec: 'swh',    golf: true,                      om: v => v },   // GFS-golven zijn JPEG2000 → ECMWF WAM
+};
 const MD_LAGEN = {
-  druk:     { titel: 'Luchtdruk (hPa)', veld: 'pressure_msl', ticks: [970, 990, 1013, 1030, 1045],
+  druk:     { titel: 'Luchtdruk (hPa)', veld: 'druk', ticks: [970, 990, 1013, 1030, 1045],
               stops: [[970,'#1e40af',.55],[990,'#3b82f6',.48],[1005,'#bfdbfe',.38],[1013,'#f8fafc',.18],[1022,'#fed7aa',.38],[1032,'#f59e0b',.48],[1045,'#9a3412',.55]] },
-  wind:     { titel: 'Windsnelheid (kt)', veld: 'wind_speed_10m', ticks: [0, 10, 20, 30, 40, 55],
+  wind:     { titel: 'Windsnelheid (kt)', veld: 'wind', ticks: [0, 10, 20, 30, 40, 55],
               stops: [[0,'#e0f2fe',.12],[8,'#7dd3fc',.42],[16,'#22c55e',.52],[24,'#eab308',.58],[32,'#f97316',.6],[42,'#ef4444',.62],[55,'#7f1d1d',.68]] },
-  stoten:   { titel: 'Windstoten (kt)', veld: 'wind_gusts_10m', ticks: [0, 20, 35, 50, 70],
+  stoten:   { titel: 'Windstoten (kt)', veld: 'stoot', ticks: [0, 20, 35, 50, 70],
               stops: [[0,'#e0f2fe',.12],[12,'#7dd3fc',.42],[24,'#22c55e',.52],[34,'#eab308',.58],[44,'#f97316',.6],[56,'#ef4444',.62],[70,'#7f1d1d',.68]] },
-  neerslag: { titel: 'Neerslag (mm / 3 uur)', veld: 'precipitation', ticks: [0, 1, 3, 8, 20],
-              stops: [[0,'#ffffff',0],[0.2,'#bae6fd',.45],[1,'#38bdf8',.6],[3,'#2563eb',.65],[8,'#7c3aed',.7],[20,'#c026d3',.75]] },
-  temp:     { titel: 'Temperatuur (°C)', veld: 'temperature_2m', ticks: [-30, -15, 0, 15, 30, 40],
+  neerslag: { titel: 'Neerslag (mm/uur)', veld: 'regen', ticks: [0, 0.5, 2, 5, 15],
+              stops: [[0,'#ffffff',0],[0.1,'#bae6fd',.45],[0.5,'#38bdf8',.6],[2,'#2563eb',.65],[5,'#7c3aed',.7],[15,'#c026d3',.75]] },
+  temp:     { titel: 'Temperatuur (°C)', veld: 'temp', ticks: [-30, -15, 0, 15, 30, 40],
               stops: [[-30,'#312e81',.55],[-15,'#3b82f6',.48],[0,'#bfdbfe',.42],[10,'#fef9c3',.38],[20,'#fdba74',.48],[30,'#ef4444',.55],[40,'#7f1d1d',.6]] },
-  wolken:   { titel: 'Bewolking (%)', veld: 'cloud_cover', ticks: [0, 25, 50, 75, 100],
+  wolken:   { titel: 'Bewolking (%)', veld: 'wolk', ticks: [0, 25, 50, 75, 100],
               stops: [[0,'#ffffff',0],[30,'#cbd5e1',.22],[70,'#94a3b8',.42],[100,'#475569',.58]] },
-  golven:   { titel: 'Significante golfhoogte (m)', veld: 'wave_height', golf: true, ticks: [0, 1, 2.5, 4, 7],
+  golven:   { titel: 'Significante golfhoogte (m)', veld: 'golf', ticks: [0, 1, 2.5, 4, 7],
               stops: [[0,'#22c55e',.5],[0.5,'#22c55e',.52],[1.0,'#84cc16',.55],[1.5,'#eab308',.58],[2.5,'#f97316',.6],[4.0,'#ef4444',.64],[7,'#7f1d1d',.7]] },
   cape:     { titel: 'CAPE (J/kg)', veld: 'cape', ticks: [0, 500, 1000, 2000, 3500],
               stops: [[0,'#ffffff',0],[100,'#fef08a',.35],[500,'#facc15',.5],[1000,'#f97316',.6],[2000,'#dc2626',.65],[3500,'#86198f',.7]] },
 };
-const MD_GELDIG_MS = 3 * 3600 * 1000;   // modelruns wisselen elke 6 uur; 3 uur vers is ruim
 
 const _md = {
-  model: 'ecmwf', laag: 'druk', t: 0, isobaren: true, stroming: true,
-  data: {}, golf: {}, fijn: new Map(), kaart: null, kleurLaag: null, isoGroep: null,
-  hlGroep: null, renderer: null, stroom: null, speelTimer: null, pin: null,
-  detail: null, detailCharts: [], tekenGepland: false, uvHuidig: null, tijdGezet: false,
+  model: 'ecmwf', laag: 'druk', t: 0, isobaren: true, stroming: true, tijdGezet: false,
+  runs: {}, indexen: new Map(), velden: new Map(), onderweg: new Map(),
+  huidig: null, geldig: null, tekenNr: 0, kleurGepland: false,
+  kaart: null, kleurLaag: null, isoGroep: null, hlGroep: null, renderer: null, stroom: null,
+  speelTimer: null, pin: null, detail: null, detailCharts: [], isoCache: new WeakMap(),
 };
 
 function _mdStatus(soort, tekst) {
@@ -5585,141 +5828,199 @@ function _mdStatus(soort, tekst) {
   el.querySelector('span').textContent = tekst;
 }
 
-function _mdRasterPunten() {
-  const { lat0, lat1, lon0, lon1, stap } = MD_RASTER;
-  const ny = Math.round((lat1 - lat0) / stap) + 1, nx = Math.round((lon1 - lon0) / stap) + 1;
-  const lats = [], lons = [];
-  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { lats.push(lat0 + j * stap); lons.push(lon0 + i * stap); }
-  return { nx, ny, lats, lons };
+// ── Ophalen met herhaalpogingen ──
+// De servers antwoorden bij drukte met een 503 zónder CORS-header; de browser
+// ziet dat als netwerkfout. Daarom een paar pogingen, afwisselend per bron.
+async function _mdFetch(urls, init, soort) {
+  let fout, nietGevonden = 0;
+  for (let poging = 0; poging < 6; poging++) {
+    const url = urls[poging % urls.length];
+    // Byte-ranges niet via de HTTP-cache: Chrome vergrendelt die per URL, en al
+    // onze velden komen uit hetzelfde bestand. Gelijktijdige aanvragen wachtten
+    // daardoor op elkaar (tot ~15 s), en soms kwam een verkeerd deel terug. We
+    // hebben een eigen cache in het geheugen, dus de HTTP-cache voegt niets toe.
+    const opties = { ...(init || {}), cache: 'no-store' };
+    const ctrl = new AbortController(), tid = setTimeout(() => ctrl.abort(), 25000);
+    opties.signal = ctrl.signal;
+    try {
+      const r = await fetch(url, opties);
+      if (r.status === 404) { nietGevonden++; if (nietGevonden >= urls.length) return null; continue; }
+      if (r.ok) return soort === 'tekst' ? await r.text() : soort === 'buffer' ? await r.arrayBuffer() : true;
+      fout = new Error(`HTTP ${r.status}`);
+    } catch (e) { fout = e; }
+    finally { clearTimeout(tid); }
+    await new Promise(res => setTimeout(res, 250 * (poging + 1)));
+  }
+  throw fout || new Error('Ophalen mislukt');
 }
 
-// Haalt het raster voor één model op (atmosfeer of golven), in blokken van 50 punten
-async function _mdHaal(model, golf) {
-  const opslag = golf ? _md.golf : _md.data;
-  const bestaand = opslag[model];
-  if (bestaand && bestaand.klaar && Date.now() - bestaand.geladenOm < MD_GELDIG_MS) return bestaand;
-  if (bestaand && bestaand.belofte) return bestaand.belofte;
+function _mdEcUrls(run, stap, stroom, ext) {
+  return MD_EC_BRONNEN.map(b => `${b}/${run.D}/${run.hh}z/ifs/0p25/${stroom}/${run.D}${run.hh}0000-${stap}h-${stroom}-fc.${ext}`);
+}
+function _mdGfsUrl(run, stap) {
+  return `${MD_GFS_BRON}/gfs.${run.D}/${run.hh}/atmos/gfs.t${run.hh}z.pgrb2.0p50.f${String(stap).padStart(3, '0')}`;
+}
 
-  const belofte = (async () => {
-    const { nx, ny, lats, lons } = _mdRasterPunten();
-    const N = nx * ny, BLOK = 50;
-    const velden = golf ? ['wave_height'] : MD_VARS;
-    const v = {};
-    let tijden = null, T = 0;
-    for (let s = 0; s < N; s += BLOK) {
-      const la = lats.slice(s, s + BLOK), lo = lons.slice(s, s + BLOK);
-      const url = (golf ? 'https://marine-api.open-meteo.com/v1/marine' : 'https://api.open-meteo.com/v1/forecast')
-        + `?latitude=${la.join(',')}&longitude=${lo.join(',')}`
-        + `&hourly=${velden.join(',')}`
-        + `&models=${golf ? MD_MODELLEN[model].golf : MD_MODELLEN[model].api}`
-        + `&forecast_days=5&temporal_resolution=hourly_3&timezone=UTC`
-        + (golf ? '' : '&wind_speed_unit=kn');
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(r.status === 429
-        ? 'Open-Meteo-limiet bereikt — probeer het over een minuut opnieuw'
-        : `Modeldata niet beschikbaar (HTTP ${r.status})`);
-      let d = await r.json();
-      if (!Array.isArray(d)) d = [d];
-      d.forEach((pt, k) => {
-        const h = pt.hourly || {};
-        if (!tijden) {
-          tijden = (h.time || []).map(t => new Date(t + 'Z'));
-          T = tijden.length;
-          velden.forEach(naam => { v[naam] = new Float32Array(T * N).fill(NaN); });
-        }
-        const idx = s + k;
-        velden.forEach(naam => {
-          const a = h[naam] || [], doel = v[naam];
-          for (let t = 0; t < T; t++) { const x = a[t]; if (x != null) doel[t * N + idx] = x; }
-        });
-      });
-      _mdStatus('laden', `${MD_MODELLEN[model].naam}${golf ? '-golven' : ''} laden… ${Math.min(100, Math.round((s + BLOK) / N * 100))}%`);
+// Nieuwste run waarvan ook de laatste stap (120 u) al gepubliceerd is
+async function _mdRun(model) {
+  const bekend = _md.runs[model];
+  if (bekend && Date.now() - bekend.gecontroleerd < 30 * 60e3) return bekend;
+  const nu = Date.now(), kandidaten = [];
+  for (let d = 0; d <= 1; d++) {
+    const dag = new Date(nu - d * 86400e3);
+    const D = dag.toISOString().slice(0, 10).replace(/-/g, '');
+    for (const hh of model === 'ecmwf' ? ['12', '00'] : ['18', '12', '06', '00']) {
+      const t = Date.UTC(dag.getUTCFullYear(), dag.getUTCMonth(), dag.getUTCDate(), +hh);
+      if (t <= nu - 3.5 * 3600e3) kandidaten.push({ D, hh, t });
     }
-    return { klaar: true, geladenOm: Date.now(), nx, ny, N, T, tijden, v };
+  }
+  kandidaten.sort((a, b) => b.t - a.t);
+  for (const k of kandidaten) {
+    const urls = model === 'ecmwf' ? _mdEcUrls(k, 120, 'oper', 'index') : [_mdGfsUrl(k, 120) + '.idx'];
+    // GET van één byte i.p.v. HEAD: de GFS-bucket staat via CORS alleen GET toe
+    if (await _mdFetch(urls, { headers: { Range: 'bytes=0-0' } }, 'bestaat')) {
+      k.gecontroleerd = Date.now();
+      if (!bekend || bekend.t !== k.t) {       // nieuwe run: oude velden vervallen
+        for (const s of [..._md.velden.keys()]) if (s.startsWith(model + '|')) _md.velden.delete(s);
+      }
+      _md.runs[model] = k;
+      return k;
+    }
+  }
+  throw new Error(`Geen recente ${MD_MODELLEN[model].naam}-run gevonden`);
+}
+
+async function _mdIndex(model, run, stap, stroom) {
+  const sleutel = `${model}|${run.D}${run.hh}|${stap}|${stroom}`;
+  if (_md.indexen.has(sleutel)) return _md.indexen.get(sleutel);
+  const belofte = (async () => {
+    if (model === 'ecmwf') {
+      const tekst = await _mdFetch(_mdEcUrls(run, stap, stroom, 'index'), undefined, 'tekst');
+      if (tekst == null) return null;
+      const m = new Map();
+      for (const regel of tekst.trim().split('\n')) {
+        const j = JSON.parse(regel);
+        if (stroom === 'wave' || j.levtype === 'sfc') m.set(j.param, [j._offset, j._offset + j._length - 1]);
+      }
+      return { url: _mdEcUrls(run, stap, stroom, 'grib2'), velden: m };
+    }
+    const tekst = await _mdFetch([_mdGfsUrl(run, stap) + '.idx'], undefined, 'tekst');
+    if (tekst == null) return null;
+    const regels = tekst.trim().split('\n');
+    return { url: [_mdGfsUrl(run, stap)], regels, zoek(patroon) {
+      const i = regels.findIndex(r => r.includes(patroon));
+      if (i < 0 || i === regels.length - 1) return null;
+      return [+regels[i].split(':')[1], +regels[i + 1].split(':')[1] - 1];
+    } };
   })();
+  _md.indexen.set(sleutel, belofte);
+  if (_md.indexen.size > 200) _md.indexen.delete(_md.indexen.keys().next().value);
+  try { return await belofte; } catch (e) { _md.indexen.delete(sleutel); throw e; }
+}
 
-  opslag[model] = { belofte };
-  try {
-    const res = await belofte;
-    opslag[model] = res;
-    // Oude fijne velden van dit model vervallen
-    const prefix = (golf ? model + '-golf' : model) + '|';
-    for (const k of [..._md.fijn.keys()]) if (k.startsWith(prefix)) _md.fijn.delete(k);
-    return res;
-  } catch (e) {
-    delete opslag[model];
-    throw e;
+// Van het bronrooster naar het vaste wereldraster (0,5°)
+function _mdHerrooster(kop, w, om) {
+  const { nx, ny, d } = MD_G, f = new Float32Array(nx * ny);
+  const kol = new Int32Array(nx);
+  for (let i = 0; i < nx; i++) kol[i] = Math.round((((-180 + i * d - kop.lo1) % 360) + 360) % 360 / kop.di) % kop.ni;
+  const noordZuid = (kop.scan & 0x40) === 0;
+  for (let j = 0; j < ny; j++) {
+    const lat = -90 + j * d;
+    let r = Math.round(noordZuid ? (kop.la1 - lat) / kop.dj : (lat - kop.la1) / kop.dj);
+    r = Math.max(0, Math.min(kop.nj - 1, r)) * kop.ni;
+    for (let i = 0; i < nx; i++) { const v = w[r + kol[i]]; f[j * nx + i] = v !== v ? NaN : om(v); }
   }
-}
-
-// ── Interpolatie ──
-function _mdCR(p0, p1, p2, p3, t) {
-  return p1 + 0.5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
-}
-
-function _mdGrof(arr, off, nx, ny, x, y) {
-  const i = Math.floor(x), j = Math.floor(y), fx = x - i, fy = y - j;
-  const g = (ii, jj) => arr[off + Math.min(ny - 1, Math.max(0, jj)) * nx + Math.min(nx - 1, Math.max(0, ii))];
-  const a = g(i, j), b = g(i + 1, j), c = g(i, j + 1), d = g(i + 1, j + 1);
-  if (a !== a || b !== b || c !== c || d !== d) return NaN;
-  const rij = [0, 0, 0, 0];
-  for (let m = -1; m <= 2; m++) {
-    const p0 = g(i - 1, j + m), p1 = g(i, j + m), p2 = g(i + 1, j + m), p3 = g(i + 2, j + m);
-    if (p0 !== p0 || p1 !== p1 || p2 !== p2 || p3 !== p3)
-      return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;   // bilineair langs de kust
-    rij[m + 1] = _mdCR(p0, p1, p2, p3, fx);
-  }
-  return _mdCR(rij[0], rij[1], rij[2], rij[3], fy);
-}
-
-function _mdFijnMaat() {
-  const { lat0, lat1, lon0, lon1 } = MD_RASTER;
-  return { fnx: Math.round((lon1 - lon0) / MD_FIJN) + 1, fny: Math.round((lat1 - lat0) / MD_FIJN) + 1 };
-}
-
-// Fijn veld (0,5°) voor één variabele en tijdstap, met een kleine cache
-function _mdFijnVeld(sleutelModel, bron, naam, t, bereken) {
-  const sleutel = `${sleutelModel}|${naam}|${t}`;
-  if (_md.fijn.has(sleutel)) return _md.fijn.get(sleutel);
-  const { fnx, fny } = _mdFijnMaat();
-  const f = new Float32Array(fnx * fny);
-  const schaal = MD_FIJN / MD_RASTER.stap;
-  const grof = bereken ? bereken() : bron.v[naam];
-  const off = bereken ? 0 : t * bron.N;
-  const nietNegatief = ['precipitation', 'cloud_cover', 'cape', 'wave_height', 'wind_speed_10m', 'wind_gusts_10m'].includes(naam);
-  for (let j = 0; j < fny; j++) for (let i = 0; i < fnx; i++) {
-    let x = _mdGrof(grof, off, bron.nx, bron.ny, i * schaal, j * schaal);
-    if (nietNegatief && x < 0) x = 0;   // bicubisch kan net onder nul uitschieten
-    f[j * fnx + i] = x;
-  }
-  if (_md.fijn.size > 80) _md.fijn.delete(_md.fijn.keys().next().value);
-  _md.fijn.set(sleutel, f);
   return f;
 }
 
-function _mdFijnSample(f, fnx, fny, x, y) {
-  if (x < 0 || y < 0 || x > fnx - 1 || y > fny - 1) return NaN;
-  const i = Math.min(fnx - 2, Math.floor(x)), j = Math.min(fny - 2, Math.floor(y)), fx = x - i, fy = y - j;
-  const a = f[j * fnx + i], b = f[j * fnx + i + 1], c = f[(j + 1) * fnx + i], d = f[(j + 1) * fnx + i + 1];
-  if (a !== a || b !== b || c !== c || d !== d) return NaN;
-  return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
-}
-
-// Wind als u/v-componenten, zodat de richting niet verkeerd interpoleert rond 0°/360°
-function _mdUV(model, bron, t) {
-  const bereken = (welke) => () => {
-    const N = bron.N, out = new Float32Array(N);
-    const s = bron.v.wind_speed_10m, d = bron.v.wind_direction_10m;
-    for (let k = 0; k < N; k++) {
-      const sp = s[t * N + k], dir = d[t * N + k] * Math.PI / 180;
-      out[k] = welke === 'u' ? -sp * Math.sin(dir) : -sp * Math.cos(dir);
+// Luchtdruk licht gladstrijken: boven gebergte is de herleide druk rommelig
+function _mdGlad(f, keer) {
+  const { nx, ny } = MD_G, P = nx - 1, tmp = new Float32Array(f.length);
+  for (let k = 0; k < keer; k++) {
+    for (let j = 0; j < ny; j++) for (let i = 0; i < P; i++) {
+      const a = f[j * nx + (i + P - 1) % P], b = f[j * nx + i], c = f[j * nx + (i + 1) % P];
+      tmp[j * nx + i] = (a !== a || c !== c) ? b : (a + 2 * b + c) / 4;
     }
-    return out;
-  };
-  return { u: _mdFijnVeld(model, bron, 'u', t, bereken('u')), v: _mdFijnVeld(model, bron, 'v', t, bereken('v')) };
+    for (let j = 0; j < ny; j++) for (let i = 0; i < P; i++) {
+      const b = tmp[j * nx + i];
+      if (j === 0 || j === ny - 1) { f[j * nx + i] = b; continue; }
+      const a = tmp[(j - 1) * nx + i], c = tmp[(j + 1) * nx + i];
+      f[j * nx + i] = (a !== a || c !== c) ? b : (a + 2 * b + c) / 4;
+    }
+    for (let j = 0; j < ny; j++) f[j * nx + P] = f[j * nx];
+  }
+  return f;
 }
 
-// ── Kleurlaag ──
+// Eén veld voor één geldigheidstijd; null als het voor die stap niet bestaat
+async function _mdVeld(model, naam, geldig) {
+  const def = MD_VELDEN[naam];
+  const bron = def.golf ? 'ecmwf' : model;
+  const run = await _mdRun(bron);
+  const stap = Math.round((geldig - run.t) / 3600e3);
+  if (stap < 0 || stap % 3 || stap > (def.golf ? 144 : 120)) return null;
+  const sleutel = `${bron}|${run.D}${run.hh}|${stap}|${naam}`;
+  if (_md.velden.has(sleutel)) {
+    const f = _md.velden.get(sleutel);
+    _md.velden.delete(sleutel); _md.velden.set(sleutel, f);    // recent gebruikt
+    return f;
+  }
+  if (_md.onderweg.has(sleutel)) return _md.onderweg.get(sleutel);
+
+  const belofte = (async () => {
+    const idx = await _mdIndex(bron, run, stap, def.golf ? 'wave' : 'oper');
+    if (!idx) return null;
+    const bereik = bron === 'ecmwf' ? idx.velden.get(def.ec) : idx.zoek(def.gfs);
+    if (!bereik) return null;
+    let res, fout;
+    for (let poging = 0; poging < 4; poging++) {        // een afgebroken antwoord opnieuw proberen
+      try {
+        const buf = await _mdFetch(idx.url, { headers: { Range: `bytes=${bereik[0]}-${bereik[1]}` } }, 'buffer');
+        if (!buf) return null;
+        res = gribDecodeer(buf); break;
+      } catch (e) { fout = e; }
+    }
+    if (!res) throw fout;
+    let f = _mdHerrooster(res.kop, res.waarden, def.om);
+    if (naam === 'druk') f = _mdGlad(f, 3);
+    if (naam === 'wolk') {                               // ECMWF levert 0–1, GFS al procenten
+      let max = 0; for (const x of f) if (x > max) max = x;
+      if (max <= 1.01) for (let i = 0; i < f.length; i++) f[i] *= 100;
+    }
+    return f;
+  })();
+  _md.onderweg.set(sleutel, belofte);
+  try {
+    const f = await belofte;
+    if (f) {
+      _md.velden.set(sleutel, f);
+      while (_md.velden.size > 36) _md.velden.delete(_md.velden.keys().next().value);   // ~1 MB per veld
+    }
+    return f;
+  } finally { _md.onderweg.delete(sleutel); }
+}
+
+function _mdSnelheid(u, v) {
+  const s = new Float32Array(u.length);
+  for (let i = 0; i < u.length; i++) s[i] = Math.hypot(u[i], v[i]);
+  return s;
+}
+
+function _mdSample(f, lat, lon) {
+  const { nx, ny, d } = MD_G;
+  if (!f || lat !== lat) return NaN;
+  lon = ((lon + 180) % 360 + 360) % 360;
+  const x = lon / d, y = (Math.max(-90, Math.min(90, lat)) + 90) / d;
+  const i = Math.min(nx - 2, Math.floor(x)), j = Math.min(ny - 2, Math.floor(y)), fx = x - i, fy = y - j;
+  const a = f[j * nx + i], b = f[j * nx + i + 1], c = f[(j + 1) * nx + i], e = f[(j + 1) * nx + i + 1];
+  if (a !== a || b !== b || c !== c || e !== e) {
+    const n = f[Math.round(y) * nx + Math.round(x)];        // langs een landmasker: dichtstbijzijnde punt
+    return n;
+  }
+  return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + e * fx) * fy;
+}
+
+// ── Kleurlaag (per beeld getekend, dus scherp op elk zoomniveau) ──
 function _mdHex(h) { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
 
 function _mdLut(laag) {
@@ -5740,27 +6041,24 @@ function _mdLut(laag) {
   return laag._lut;
 }
 
-function _mdMercY(lat) { const r = lat * Math.PI / 180; return Math.log(Math.tan(Math.PI / 4 + r / 2)); }
-function _mdMercLat(m) { return (2 * Math.atan(Math.exp(m)) - Math.PI / 2) * 180 / Math.PI; }
-
-// Canvaslaag die als een afbeelding over de kaartbounds meeschaalt (zoals L.ImageOverlay)
 const MdCanvasLaag = L.Layer.extend({
-  initialize(bounds, canvas) { this._b = L.latLngBounds(bounds); this._c = canvas; },
+  initialize() { this._b = null; this._c = document.createElement('canvas'); },
   onAdd(map) {
     this._map = map;
     this._c.classList.add('leaflet-zoom-animated');
     this._c.style.position = 'absolute';
     map.getPane('mdKleur').appendChild(this._c);
     map.on('zoomanim', this._anim, this);
-    map.on('viewreset zoomend moveend resize', this._plaats, this);
-    this._plaats();
+    map.on('viewreset zoomend resize', this._plaats, this);
   },
   onRemove(map) {
     this._c.remove();
     map.off('zoomanim', this._anim, this);
-    map.off('viewreset zoomend moveend resize', this._plaats, this);
+    map.off('viewreset zoomend resize', this._plaats, this);
   },
+  zetBounds(b) { this._b = b; this._plaats(); },
   _plaats() {
+    if (!this._b) return;
     const tl = this._map.latLngToLayerPoint(this._b.getNorthWest());
     const br = this._map.latLngToLayerPoint(this._b.getSouthEast());
     L.DomUtil.setPosition(this._c, tl);
@@ -5768,28 +6066,31 @@ const MdCanvasLaag = L.Layer.extend({
     this._c.style.height = (br.y - tl.y) + 'px';
   },
   _anim(e) {
+    if (!this._b) return;
     const scale = this._map.getZoomScale(e.zoom);
     const offset = this._map._latLngBoundsToNewLayerBounds(this._b, e.zoom, e.center).min;
     L.DomUtil.setTransform(this._c, offset, scale);
   },
 });
 
-function _mdTekenKleur(f, laag) {
-  const { lat0, lat1, lon0, lon1 } = MD_RASTER;
-  const { fnx, fny } = _mdFijnMaat();
-  const yN = _mdMercY(lat1), yZ = _mdMercY(lat0);
-  const W = 960, H = Math.round(W * (yN - yZ) / ((lon1 - lon0) * Math.PI / 180));
-  const c = _md.kleurLaag._c;
+function _mdTekenKleur() {
+  const m = _md.kaart, laag = MD_LAGEN[_md.laag], f = _md.huidig && _md.huidig.laag;
+  const c = _md.kleurLaag._c, ctx = c.getContext('2d');
+  if (!f) { ctx.clearRect(0, 0, c.width, c.height); return; }
+  const size = m.getSize(), rand = 0.25, schaal = 0.5;     // halve resolutie, rand voor soepel pannen
+  const x0 = -size.x * rand, y0 = -size.y * rand, x1 = size.x * (1 + rand), y1 = size.y * (1 + rand);
+  const W = Math.ceil((x1 - x0) * schaal), H = Math.ceil((y1 - y0) * schaal);
   if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
-  const ctx = c.getContext('2d');
+  const nw = m.containerPointToLatLng([x0, y0]), se = m.containerPointToLatLng([x1, y1]);
   const img = ctx.createImageData(W, H), px = img.data;
   const { lut, lo, hi } = _mdLut(laag);
-  const sx = (lon1 - lon0) / MD_FIJN / W;
+  const lons = new Float64Array(W);
+  for (let k = 0; k < W; k++) lons[k] = nw.lng + (se.lng - nw.lng) * (k + 0.5) / W;
   for (let r = 0; r < H; r++) {
-    const lat = _mdMercLat(yN - (r + 0.5) / H * (yN - yZ));
-    const fy = (lat - lat0) / MD_FIJN;
+    const lat = m.containerPointToLatLng([0, y0 + (r + 0.5) / schaal]).lat;
+    if (lat > 88 || lat < -88) continue;
     for (let k = 0; k < W; k++) {
-      const val = _mdFijnSample(f, fnx, fny, (k + 0.5) * sx, fy);
+      const val = _mdSample(f, lat, lons[k]);
       if (val !== val) continue;
       const q = Math.max(0, Math.min(255, Math.round((val - lo) / (hi - lo) * 255))) * 4;
       const o = (r * W + k) * 4;
@@ -5797,72 +6098,100 @@ function _mdTekenKleur(f, laag) {
     }
   }
   ctx.putImageData(img, 0, 0);
+  _md.kleurLaag.zetBounds(L.latLngBounds(nw, se));
 }
 
-// ── Isobaren (marching squares) en drukcentra ──
-function _mdIsolijnen(f, nx, ny, niveau) {
-  const buren = new Map(), punten = new Map();
-  const koppel = (k1, p1, k2, p2) => {
-    punten.set(k1, p1); punten.set(k2, p2);
-    if (!buren.has(k1)) buren.set(k1, []);
-    if (!buren.has(k2)) buren.set(k2, []);
-    buren.get(k1).push(k2); buren.get(k2).push(k1);
-  };
-  const tussen = (va, vb) => (niveau - va) / (vb - va);
-  for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+function _mdPlanKleur() {
+  if (_md.kleurGepland) return;
+  _md.kleurGepland = true;
+  requestAnimationFrame(() => { _md.kleurGepland = false; _mdTekenKleur(); });
+}
+
+// ── Isobaren (marching squares, alle niveaus in één doorloop) en drukcentra ──
+function _mdIsolijnen(f) {
+  const { nx, ny, d } = MD_G, STAP = 4;
+  const perNiveau = new Map();
+  const jMin = Math.ceil((90 - 82) / d), jMax = ny - 1 - jMin;   // niet boven 82° — daar wordt Mercator onbruikbaar
+  for (let j = jMin; j < jMax; j++) for (let i = 0; i < nx - 1; i++) {
     const v0 = f[j * nx + i], v1 = f[j * nx + i + 1], v2 = f[(j + 1) * nx + i + 1], v3 = f[(j + 1) * nx + i];
     if (v0 !== v0 || v1 !== v1 || v2 !== v2 || v3 !== v3) continue;
-    const code = (v0 > niveau ? 1 : 0) | (v1 > niveau ? 2 : 0) | (v2 > niveau ? 4 : 0) | (v3 > niveau ? 8 : 0);
-    if (code === 0 || code === 15) continue;
-    // randen: 0 onder, 1 rechts, 2 boven, 3 links — elk met een unieke sleutel
-    const rand = [
-      [2 * (j * nx + i),         () => [i + tussen(v0, v1), j]],
-      [2 * (j * nx + i + 1) + 1, () => [i + 1, j + tussen(v1, v2)]],
-      [2 * ((j + 1) * nx + i),   () => [i + tussen(v3, v2), j + 1]],
-      [2 * (j * nx + i) + 1,     () => [i, j + tussen(v0, v3)]],
-    ];
-    const kruist = [(v0 > niveau) !== (v1 > niveau), (v1 > niveau) !== (v2 > niveau),
-                    (v3 > niveau) !== (v2 > niveau), (v0 > niveau) !== (v3 > niveau)];
-    const e = [];
-    kruist.forEach((k, n) => { if (k) e.push(n); });
-    const verbind = (a, b) => koppel(rand[a][0], rand[a][1](), rand[b][0], rand[b][1]());
-    if (e.length === 2) verbind(e[0], e[1]);
-    else if (e.length === 4) {            // zadelpunt: het midden beslist
-      const midHoog = (v0 + v1 + v2 + v3) / 4 > niveau;
-      if ((code === 5) === midHoog) { verbind(0, 1); verbind(2, 3); }
-      else                          { verbind(3, 0); verbind(1, 2); }
+    const lo = Math.min(v0, v1, v2, v3), hi = Math.max(v0, v1, v2, v3);
+    for (let niveau = Math.ceil(lo / STAP) * STAP; niveau < hi; niveau += STAP) {
+      if (niveau === lo && lo === hi) continue;
+      let g = perNiveau.get(niveau);
+      if (!g) { g = { buren: new Map(), punten: new Map() }; perNiveau.set(niveau, g); }
+      const code = (v0 > niveau ? 1 : 0) | (v1 > niveau ? 2 : 0) | (v2 > niveau ? 4 : 0) | (v3 > niveau ? 8 : 0);
+      if (code === 0 || code === 15) continue;
+      const t = (va, vb) => (niveau - va) / (vb - va);
+      const randen = [
+        () => [2 * (j * nx + i),         i + t(v0, v1), j],
+        () => [2 * (j * nx + i + 1) + 1, i + 1, j + t(v1, v2)],
+        () => [2 * ((j + 1) * nx + i),   i + t(v3, v2), j + 1],
+        () => [2 * (j * nx + i) + 1,     i, j + t(v0, v3)],
+      ];
+      const koppel = (a, b) => {
+        const [ka, xa, ya] = randen[a](), [kb, xb, yb] = randen[b]();
+        g.punten.set(ka, [xa, ya]); g.punten.set(kb, [xb, yb]);
+        if (!g.buren.has(ka)) g.buren.set(ka, []);
+        if (!g.buren.has(kb)) g.buren.set(kb, []);
+        g.buren.get(ka).push(kb); g.buren.get(kb).push(ka);
+      };
+      const e = [];
+      if ((v0 > niveau) !== (v1 > niveau)) e.push(0);
+      if ((v1 > niveau) !== (v2 > niveau)) e.push(1);
+      if ((v3 > niveau) !== (v2 > niveau)) e.push(2);
+      if ((v0 > niveau) !== (v3 > niveau)) e.push(3);
+      if (e.length === 2) koppel(e[0], e[1]);
+      else if (e.length === 4) {       // zadelpunt: het midden beslist
+        const midHoog = (v0 + v1 + v2 + v3) / 4 > niveau;
+        if ((code === 5) === midHoog) { koppel(0, 1); koppel(2, 3); } else { koppel(3, 0); koppel(1, 2); }
+      }
     }
   }
-  const lijnen = [], bezocht = new Set();
-  const loop = (start) => {
-    const lijn = [punten.get(start)];
-    bezocht.add(start);
-    let cur = start;
-    for (;;) {
-      const nb = buren.get(cur).find(k => !bezocht.has(k));
-      if (nb === undefined) {
-        if (lijn.length > 2 && buren.get(cur).includes(start)) lijn.push(punten.get(start));
-        break;
+  const uit = [];
+  for (const [niveau, { buren, punten }] of perNiveau) {
+    const bezocht = new Set();
+    const loop = (start) => {
+      const lijn = [punten.get(start)];
+      bezocht.add(start);
+      let cur = start;
+      for (;;) {
+        const nb = buren.get(cur).find(k => !bezocht.has(k));
+        if (nb === undefined) { if (lijn.length > 2 && buren.get(cur).includes(start)) lijn.push(punten.get(start)); break; }
+        bezocht.add(nb); lijn.push(punten.get(nb)); cur = nb;
       }
-      bezocht.add(nb); lijn.push(punten.get(nb)); cur = nb;
-    }
-    lijnen.push(lijn);
-  };
-  for (const [k, n] of buren) if (n.length === 1 && !bezocht.has(k)) loop(k);
-  for (const k of buren.keys()) if (!bezocht.has(k)) loop(k);
-  return lijnen;
+      if (lijn.length >= 4) uit.push({ niveau, lijn: lijn.map(([x, y]) => [-90 + y * d, -180 + x * d]) });
+    };
+    for (const [k, n] of buren) if (n.length === 1 && !bezocht.has(k)) loop(k);
+    for (const k of buren.keys()) if (!bezocht.has(k)) loop(k);
+  }
+  return uit;
 }
 
-function _mdDrukcentra(f, nx, ny) {
-  const R = 12, R2 = R * R, res = [];
-  for (let j = R; j < ny - R; j++) for (let i = R; i < nx - R; i++) {
+function _mdDrukcentra(fOrigineel) {
+  // Zoeken op een extra gladgestreken kopie: kleine thermische lagen boven land
+  // en ruis boven gebergte vallen dan weg, alleen de synoptische centra blijven.
+  const f = _mdGlad(Float32Array.from(fOrigineel), 6);
+  const { nx, ny, d } = MD_G, P = nx - 1, R = 20, R2 = R * R, res = [];
+  const jMin = Math.ceil((90 - 75) / d), jMax = ny - 1 - jMin;
+  for (let j = jMin; j <= jMax; j++) for (let i = 0; i < P; i++) {
     const v = f[j * nx + i];
     if (v !== v) continue;
+    // Snelle voorselectie: alleen punten die al een extreem zijn t.o.v. hun
+    // 8 buren gaan door naar de dure zoektocht in een straal van 10°.
+    let lokaalMin = true, lokaalMax = true;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      if (!di && !dj) continue;
+      const w = f[(j + dj) * nx + (i + di + P) % P];
+      if (w < v) lokaalMin = false;
+      if (w > v) lokaalMax = false;
+    }
+    if (!lokaalMin && !lokaalMax) continue;
     let isMin = true, isMax = true, som = 0, n = 0;
     buiten:
     for (let dj = -R; dj <= R; dj++) for (let di = -R; di <= R; di++) {
       if (di * di + dj * dj > R2) continue;
-      const w = f[(j + dj) * nx + i + di];
+      const w = f[(j + dj) * nx + (i + di + P) % P];
       if (w !== w) continue;
       const eerder = dj < 0 || (dj === 0 && di < 0);
       if (w < v || (w === v && eerder)) isMin = false;
@@ -5872,49 +6201,42 @@ function _mdDrukcentra(f, nx, ny) {
     }
     if (!isMin && !isMax) continue;
     const gem = som / n;
-    if (isMin && gem - v >= 1.5) res.push({ soort: 'L', i, j, v });
-    if (isMax && v - gem >= 1.5) res.push({ soort: 'H', i, j, v });
+    const echt = fOrigineel[j * nx + i];          // getoonde waarde uit het gewone veld
+    if (isMin && gem - v >= 3) res.push({ soort: 'L', lat: -90 + j * d, lon: -180 + i * d, v: echt });
+    if (isMax && v - gem >= 3) res.push({ soort: 'H', lat: -90 + j * d, lon: -180 + i * d, v: echt });
   }
   return res;
 }
 
-function _mdTekenIsobaren(p) {
+function _mdTekenIsobaren() {
   _md.isoGroep.clearLayers();
   _md.hlGroep.clearLayers();
+  const p = _md.isobaren && _md.huidig && _md.huidig.druk;
   if (!p) return;
-  const { lat0, lon0 } = MD_RASTER;
-  const { fnx, fny } = _mdFijnMaat();
-  const ll = ([x, y]) => [lat0 + y * MD_FIJN, lon0 + x * MD_FIJN];
-  let lo = Infinity, hi = -Infinity;
-  for (const x of p) if (x === x) { if (x < lo) lo = x; if (x > hi) hi = x; }
-  for (let niveau = Math.ceil(lo / 4) * 4; niveau <= hi; niveau += 4) {
+  let c = _md.isoCache.get(p);
+  if (!c) { c = { lijnen: _mdIsolijnen(p), centra: _mdDrukcentra(p) }; _md.isoCache.set(p, c); }
+  for (const { niveau, lijn } of c.lijnen) {
     const zwaar = niveau % 20 === 0;
-    for (const lijn of _mdIsolijnen(p, fnx, fny, niveau)) {
-      if (lijn.length < 4) continue;
-      const coords = lijn.map(ll);
-      L.polyline(coords, {
-        renderer: _md.renderer, interactive: false,
-        color: '#1e293b', opacity: zwaar ? 0.7 : 0.45, weight: zwaar ? 1.5 : 1,
+    L.polyline(lijn, { renderer: _md.renderer, interactive: false,
+      color: '#1e293b', opacity: zwaar ? 0.7 : 0.45, weight: zwaar ? 1.5 : 1 }).addTo(_md.isoGroep);
+    if (lijn.length >= 90) {
+      L.marker(lijn[Math.floor(lijn.length / 2)], { interactive: false, keyboard: false,
+        icon: L.divIcon({ className: '', iconSize: [30, 12], iconAnchor: [15, 6], html: `<div class="md-iso-label">${niveau}</div>` }),
       }).addTo(_md.isoGroep);
-      if (lijn.length >= 30) {
-        L.marker(coords[Math.floor(coords.length / 2)], {
-          interactive: false, keyboard: false,
-          icon: L.divIcon({ className: '', iconSize: [30, 12], iconAnchor: [15, 6],
-                            html: `<div class="md-iso-label">${niveau}</div>` }),
-        }).addTo(_md.isoGroep);
-      }
     }
   }
-  for (const c of _mdDrukcentra(p, fnx, fny)) {
-    L.marker(ll([c.i, c.j]), {
-      interactive: false, keyboard: false,
+  for (const k of c.centra) {
+    L.marker([k.lat, k.lon], { interactive: false, keyboard: false,
       icon: L.divIcon({ className: '', iconSize: [44, 36], iconAnchor: [22, 18],
-                        html: `<div class="md-hl ${c.soort}"><b>${c.soort}</b><span>${Math.round(c.v)}</span></div>` }),
+                        html: `<div class="md-hl ${k.soort}"><b>${k.soort}</b><span>${Math.round(k.v)}</span></div>` }),
     }).addTo(_md.hlGroep);
   }
 }
 
-// ── Windstroming (bewegende deeltjes, zoals op Windy) ──
+// ── Windstroming ──
+// De snelheid schaalt mee met het zoomniveau: uitgezoomd beslaat één pixel
+// veel meer kilometers, dus met een vaste pixelsnelheid schoten de deeltjes
+// daar veel te hard over de kaart.
 const MdStroming = L.Layer.extend({
   onAdd(map) {
     this._map = map;
@@ -5941,9 +6263,14 @@ const MdStroming = L.Layer.extend({
     if (!size.x || !size.y) return;
     this._c.width = size.x; this._c.height = size.y;
     L.DomUtil.setPosition(this._c, m.containerPointToLayerPoint([0, 0]));
+    const z = m.getZoom();
     const nw = m.containerPointToLatLng([0, 0]), se = m.containerPointToLatLng([size.x, size.y]);
-    this._view = { W: size.x, H: size.y, lonW: nw.lng, lonO: se.lng, mN: _mdMercY(nw.lat), mZ: _mdMercY(se.lat) };
-    const aantal = Math.min(3500, Math.round(size.x * size.y / 380));
+    const lats = new Float64Array(size.y + 1);
+    for (let y = 0; y <= size.y; y++) lats[y] = m.containerPointToLatLng([0, y]).lat;
+    this._view = { W: size.x, H: size.y, lonW: nw.lng, lonO: se.lng, lats,
+                   K: Math.min(0.3, 0.1 * Math.pow(1.55, z - 4)),
+                   alfa: Math.min(0.6, 0.3 + 0.06 * z) };
+    const aantal = Math.min(3000, Math.round(size.x * size.y / 450));
     this._deeltjes = Array.from({ length: aantal }, () => this._nieuw({}));
     this._frame = 0;
     this._loop();
@@ -5954,30 +6281,23 @@ const MdStroming = L.Layer.extend({
     return p;
   },
   _loop() {
-    const paneel = document.getElementById('modellen-panel');
-    if (!paneel.classList.contains('active')) { this._stop(); return; }
+    if (!document.getElementById('modellen-panel').classList.contains('active')) { this._stop(); return; }
     this._raf = requestAnimationFrame(() => this._loop());
-    if (document.hidden) return;
-    if ((this._frame++ & 1) === 1) return;                 // ~30 fps is genoeg en spaart CPU
-    const uv = _md.uvHuidig;
-    if (!uv) return;
-    const { W, H, lonW, lonO, mN, mZ } = this._view;
-    const { lat0, lon0 } = MD_RASTER;
-    const { fnx, fny } = _mdFijnMaat();
+    if (document.hidden || (this._frame++ & 1) === 1) return;     // ~30 fps is genoeg
+    const h = _md.huidig;
+    if (!h || !h.u || !h.v) return;
+    const { W, H, lonW, lonO, lats, K, alfa } = this._view;
     const ctx = this._c.getContext('2d');
     ctx.globalCompositeOperation = 'destination-in';
     ctx.fillStyle = 'rgba(0,0,0,0.9)';
     ctx.fillRect(0, 0, W, H);
     ctx.globalCompositeOperation = 'source-over';
-    ctx.strokeStyle = 'rgba(15,23,42,0.55)';
+    ctx.strokeStyle = `rgba(15,23,42,${alfa})`;
     ctx.lineWidth = 1.1;
     ctx.beginPath();
-    const K = 0.16;
     for (const p of this._deeltjes) {
-      const lon = lonW + (lonO - lonW) * p.x / W;
-      const lat = _mdMercLat(mN + (mZ - mN) * p.y / H);
-      const fx = (lon - lon0) / MD_FIJN, fy = (lat - lat0) / MD_FIJN;
-      const u = _mdFijnSample(uv.u, fnx, fny, fx, fy), v = _mdFijnSample(uv.v, fnx, fny, fx, fy);
+      const lon = lonW + (lonO - lonW) * p.x / W, lat = lats[Math.max(0, Math.min(H, Math.round(p.y)))];
+      const u = _mdSample(h.u, lat, lon), v = _mdSample(h.v, lat, lon);
       if (u !== u || v !== v || ++p.leeftijd > p.max) { this._nieuw(p); continue; }
       const nx = p.x + u * K, ny = p.y - v * K;
       ctx.moveTo(p.x, p.y); ctx.lineTo(nx, ny);
@@ -6000,128 +6320,130 @@ function _mdStroming() {
 }
 
 // ── Kaart, legenda, tijdbalk ──
+function _mdMinZoom(m) {
+  // De hele wereld past precies in de breedte: geen herhaalde kopieën ernaast
+  return Math.max(1, Math.ceil(Math.log2(m.getSize().x / 256) * 4) / 4);
+}
+
 function _mdKaart() {
-  if (_md.kaart) { _md.kaart.invalidateSize(); return; }
-  const { lat0, lat1, lon0, lon1 } = MD_RASTER;
+  if (_md.kaart) { _md.kaart.invalidateSize(); _md.kaart.setMinZoom(_mdMinZoom(_md.kaart)); return; }
   const m = L.map('md-map', {
-    zoomControl: true, minZoom: 3, maxZoom: 8, zoomSnap: 0.5,
-    maxBounds: [[lat0 - 12, lon0 - 30], [lat1 + 10, lon1 + 30]], maxBoundsViscosity: 0.6,
+    zoomControl: true, zoomSnap: 0.25, zoomDelta: 0.5, maxZoom: 9,
+    maxBounds: [[-85, -180], [85, 180]], maxBoundsViscosity: 1, worldCopyJump: false,
   });
   m.attributionControl.setPrefix(false);
-  m.attributionControl.addAttribution('Modeldata: Open-Meteo (ECMWF · NOAA · DWD) · Kaart: Esri');
+  m.attributionControl.addAttribution('Modeldata: ECMWF open data · NOAA GFS · Kaart: Esri');
   m.createPane('mdKleur').style.zIndex = 350;
   m.createPane('mdStroom').style.zIndex = 420;
   m.getPane('mdStroom').style.pointerEvents = 'none';
   m.createPane('mdLabels').style.zIndex = 440;
   m.getPane('mdLabels').style.pointerEvents = 'none';
   L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
-    { maxZoom: 16, crossOrigin: true }).addTo(m);
+    { maxZoom: 16, crossOrigin: true, noWrap: true }).addTo(m);
   // Plaatsnamen bóven de kleurlaag, zodat ze leesbaar blijven
   L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
-    { maxZoom: 16, crossOrigin: true, pane: 'mdLabels' }).addTo(m);
-  m.setView([52, -5], 4);
+    { maxZoom: 16, crossOrigin: true, noWrap: true, pane: 'mdLabels' }).addTo(m);
+  _md.kaart = m;
+  m.setMinZoom(_mdMinZoom(m));
+  m.setView([30, 10], _mdMinZoom(m));
 
-  _md.kleurLaag = new MdCanvasLaag([[lat0, lon0], [lat1, lon1]], document.createElement('canvas')).addTo(m);
+  _md.kleurLaag = new MdCanvasLaag().addTo(m);
   _md.renderer  = L.canvas({ padding: 0.3 });
   _md.isoGroep  = L.layerGroup().addTo(m);
   _md.hlGroep   = L.layerGroup().addTo(m);
+  m.on('moveend zoomend', _mdPlanKleur);
+  m.on('resize', () => { m.setMinZoom(_mdMinZoom(m)); _mdPlanKleur(); });
   m.on('click', e => _mdOpenDetail(e.latlng));
-  _md.kaart = m;
 }
 
 function _mdLegenda() {
   const laag = MD_LAGEN[_md.laag];
   const st = laag.stops, lo = st[0][0], hi = st[st.length - 1][0];
   const verloop = st.map(([v, c]) => `${c} ${((v - lo) / (hi - lo) * 100).toFixed(1)}%`).join(', ');
+  const bron = laag.veld === 'golf' ? 'ECMWF WAM' : MD_MODELLEN[_md.model].naam;
   document.getElementById('md-legenda').innerHTML =
-    `<h4>${laag.titel} · ${MD_MODELLEN[_md.model].naam}</h4>` +
+    `<h4>${laag.titel} · ${bron}</h4>` +
     `<div class="md-legenda-balk" style="background:linear-gradient(90deg, ${verloop})"></div>` +
     `<div class="md-legenda-ticks">${laag.ticks.map(t => `<span>${t.toLocaleString('nl-NL')}</span>`).join('')}</div>`;
 }
 
 function _mdTijdTekst(d) {
-  return d.toLocaleString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short',
-                                     hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
+  return new Date(d).toLocaleString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short',
+                                               hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
+}
+function _mdRunTekst(run) {
+  return new Date(run.t).toLocaleString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
+    + ` ${run.hh} UTC`;
 }
 
-function _mdTijdbalk(data) {
+function _mdTijdbalk(run) {
   const s = document.getElementById('md-schuif');
-  s.max = data.T - 1;
-  if (!_md.tijdGezet) {           // eerste keer: dichtstbijzijnde tijdstap bij 'nu'
-    const nu = Date.now();
+  s.max = MD_STAPPEN.length - 1;
+  const tijden = MD_STAPPEN.map(h => run.t + h * 3600e3);
+  if (!_md.tijdGezet) {         // eerste keer: stap die het dichtst bij 'nu' ligt
     let best = 0;
-    data.tijden.forEach((t, k) => { if (Math.abs(t - nu) < Math.abs(data.tijden[best] - nu)) best = k; });
+    tijden.forEach((t, k) => { if (Math.abs(t - Date.now()) < Math.abs(tijden[best] - Date.now())) best = k; });
     _md.t = best; _md.tijdGezet = true;
   }
-  _md.t = Math.min(_md.t, data.T - 1);
   s.value = _md.t;
-  // Daglabels onder de schuif, breedte naar het aantal tijdstappen per dag
   const dagen = [];
-  data.tijden.forEach((t) => {
-    const dag = t.toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', timeZone: 'Europe/Amsterdam' });
+  tijden.forEach(t => {
+    const dag = new Date(t).toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', timeZone: 'Europe/Amsterdam' });
     if (!dagen.length || dagen[dagen.length - 1].dag !== dag) dagen.push({ dag, n: 1 }); else dagen[dagen.length - 1].n++;
   });
-  document.getElementById('md-dagen').innerHTML =
-    dagen.map(d => `<span style="flex:${d.n}">${d.dag}</span>`).join('');
+  document.getElementById('md-dagen').innerHTML = dagen.map(d => `<span style="flex:${d.n}">${d.dag}</span>`).join('');
 }
 
-function _mdPlanTeken() {
-  if (_md.tekenGepland) return;
-  _md.tekenGepland = true;
-  requestAnimationFrame(() => { _md.tekenGepland = false; _mdTeken(); });
+// Haal alle velden voor één tijdstap op (luchtdruk voor isobaren, u/v voor stroming, plus de laag)
+async function _mdVeldenVoor(model, geldig) {
+  const laag = MD_LAGEN[_md.laag].veld;
+  const windNodig = _md.stroming || laag === 'wind';
+  const [druk, u, v, extra] = await Promise.all([
+    _md.isobaren || laag === 'druk' ? _mdVeld(model, 'druk', geldig) : null,
+    windNodig ? _mdVeld(model, 'u', geldig) : null,
+    windNodig ? _mdVeld(model, 'v', geldig) : null,
+    ['druk', 'wind'].includes(laag) ? null : _mdVeld(model, laag, geldig),
+  ]);
+  const laagVeld = laag === 'druk' ? druk : laag === 'wind' ? (u && v ? _mdSnelheid(u, v) : null) : extra;
+  return { druk, u, v, laag: laagVeld };
 }
 
-function _mdTeken() {
-  const data = _md.data[_md.model];
-  if (!data || !data.klaar || !_md.kaart) return;
-  const laag = MD_LAGEN[_md.laag];
-  const t = _md.t;
-  document.getElementById('md-tijdlabel').textContent = _mdTijdTekst(data.tijden[t]);
-
-  let f = null;
-  if (laag.golf) {
-    const g = _md.golf[_md.model];
-    if (g && g.klaar) {
-      let tg = 0;   // golfraster kan een iets andere tijdas hebben
-      g.tijden.forEach((x, k) => { if (Math.abs(x - data.tijden[t]) < Math.abs(g.tijden[tg] - data.tijden[t])) tg = k; });
-      f = _mdFijnVeld(_md.model + '-golf', g, laag.veld, tg);
-    }
-  } else {
-    f = _mdFijnVeld(_md.model, data, laag.veld, t);
-  }
-  if (f) _mdTekenKleur(f, laag);
-  else _md.kleurLaag._c.getContext('2d').clearRect(0, 0, _md.kleurLaag._c.width, _md.kleurLaag._c.height);
-
-  _mdTekenIsobaren(_md.isobaren ? _mdFijnVeld(_md.model, data, 'pressure_msl', t) : null);
-  _md.uvHuidig = _mdUV(_md.model, data, t);
-  if (_md.detail) _mdDetailNu();
-}
-
-async function _mdLaadModel() {
-  const model = _md.model;
+async function _mdTeken() {
+  if (!_md.kaart) return;
+  const nr = ++_md.tekenNr, model = _md.model;
   try {
-    _mdStatus('laden', `${MD_MODELLEN[model].naam} laden…`);
-    const data = await _mdHaal(model, false);
-    if (MD_LAGEN[_md.laag].golf) await _mdHaal(model, true);
-    if (model !== _md.model) return;          // intussen ander model gekozen
-    _mdTijdbalk(data);
+    const run = await _mdRun(model);
+    if (nr !== _md.tekenNr) return;
+    _mdTijdbalk(run);
+    const geldig = run.t + MD_STAPPEN[_md.t] * 3600e3;
+    document.getElementById('md-tijdlabel').textContent = _mdTijdTekst(geldig);
+    _mdStatus('laden', `${MD_MODELLEN[model].naam} +${MD_STAPPEN[_md.t]} u laden…`);
+    const velden = await _mdVeldenVoor(model, geldig);
+    if (nr !== _md.tekenNr) return;              // intussen iets anders gekozen
+    _md.huidig = velden; _md.geldig = geldig;
     _mdLegenda();
-    _mdTeken();
+    _mdTekenKleur();
+    _mdTekenIsobaren();
     _mdStroming();
-    _mdStatus('ok', `${MD_MODELLEN[model].lang} · verwachting t/m ${_mdTijdTekst(data.tijden[data.T - 1])}`);
+    if (_md.detail) _mdDetailNu();
+    const opm = !velden.laag && MD_LAGEN[_md.laag].veld !== 'druk' ? ' · deze laag is niet beschikbaar op dit tijdstip' : '';
+    _mdStatus('ok', `${MD_MODELLEN[model].lang} · run ${_mdRunTekst(run)}${opm}`);
+    // volgende stap alvast ophalen, zodat afspelen vloeiend loopt
+    if (_md.t < MD_STAPPEN.length - 1) _mdVeldenVoor(model, run.t + MD_STAPPEN[_md.t + 1] * 3600e3).catch(() => {});
   } catch (e) {
+    if (nr !== _md.tekenNr) return;
     console.error('[modellen]', e);
-    _mdStatus('fout', e.message);
+    _mdStatus('fout', `Modeldata niet beschikbaar: ${e.message}`);
   }
 }
 
 function _mdOpen() {
   _mdKaart();
-  setTimeout(() => { _md.kaart.invalidateSize(); _mdStroming(); }, 80);
-  _mdLaadModel();
+  setTimeout(() => { _md.kaart.invalidateSize(); _md.kaart.setMinZoom(_mdMinZoom(_md.kaart)); _mdStroming(); _mdPlanKleur(); }, 80);
+  _mdTeken();
 }
 
-// ── Detailpaneel na klik: modellen vergeleken voor één punt ──
+// ── Detailpaneel na klik: ECMWF, GFS en ICON vergeleken voor één punt ──
 async function _mdOpenDetail(ll) {
   const lat = Math.round(ll.lat * 100) / 100, lon = Math.round(L.Util.wrapNum(ll.lng, [-180, 180]) * 100) / 100;
   if (_md.pin) _md.pin.setLatLng([lat, lon]);
@@ -6133,6 +6455,7 @@ async function _mdOpenDetail(ll) {
   paneel.classList.add('open');
   if (wasDicht) setTimeout(() => {
     _md.kaart.invalidateSize({ pan: false });
+    _md.kaart.setMinZoom(_mdMinZoom(_md.kaart));
     _md.kaart.panInside([lat, lon], { padding: [40, 40] });   // aangeklikt punt blijft in beeld
   }, 280);
 
@@ -6163,8 +6486,7 @@ function _mdReeks(modelKey, veld) {
 }
 
 function _mdDetailIndex() {
-  const data = _md.data[_md.model];
-  const doel = data && data.klaar ? data.tijden[_md.t] : new Date();
+  const doel = _md.geldig || Date.now();
   let best = 0;
   _md.detail.tijden.forEach((t, k) => { if (Math.abs(t - doel) < Math.abs(_md.detail.tijden[best] - doel)) best = k; });
   return best;
@@ -6187,8 +6509,7 @@ function _mdDetailNu() {
     kaart('Temperatuur', _mdGetal(w('temperature_2m'), 1), '°C') +
     kaart('Neerslag', _mdGetal(w('precipitation'), 1), 'mm') +
     kaart('Bewolking', _mdGetal(w('cloud_cover')), '%');
-  document.getElementById('md-nu-tijd').textContent =
-    `${MD_MODELLEN[m].naam} · ${_mdTijdTekst(_md.detail.tijden[k])}`;
+  document.getElementById('md-nu-tijd').textContent = `${MD_MODELLEN[m].naam} · ${_mdTijdTekst(_md.detail.tijden[k])}`;
   document.querySelectorAll('#md-tabel tr[data-k]').forEach(tr => tr.classList.toggle('nu', +tr.dataset.k === k));
 }
 
@@ -6218,13 +6539,13 @@ function _mdDetailRender() {
     `<div class="md-sectie">Verwachting ${MD_MODELLEN[m].lang} per 3 uur</div>` +
     `<table class="md-tabel" id="md-tabel"><thead><tr><th>Tijd</th><th>hPa</th><th>Wind</th><th>Stoot</th><th>°C</th><th>mm</th><th>Wolk</th></tr></thead><tbody>${rijen}</tbody></table>`;
 
-  const grafiek = (id, veld, extra) => {
+  const grafiek = (id, veld) => {
     const opts = CHART_OPTS();
     opts.plugins.legend = { display: true, position: 'bottom',
       labels: { boxWidth: 18, boxHeight: 2, font: { size: 10, family: 'Inter' }, color: '#475569' } };
     opts.interaction = { mode: 'index', intersect: false };
     opts.plugins.tooltip.callbacks = {
-      title: items => _mdTijdTekst(new Date(items[0].parsed.x)),
+      title: items => _mdTijdTekst(items[0].parsed.x),
       label: item => ` ${item.dataset.label}: ${_mdGetal(item.parsed.y, 1)}`,
     };
     delete opts.scales.x.time.unit;
@@ -6236,16 +6557,10 @@ function _mdDetailRender() {
       borderWidth: k === m ? 2.4 : 1.3, pointRadius: 0, tension: 0.3,
       order: k === m ? 0 : 1,
     }));
-    if (extra) sets.push(extra);
     _md.detailCharts.push(new Chart(document.getElementById(id), { type: 'line', data: { datasets: sets }, options: opts }));
   };
   grafiek('md-g-druk', 'pressure_msl');
-  grafiek('md-g-wind', 'wind_speed_10m', {
-    label: `Stoten ${MD_MODELLEN[m].naam}`,
-    data: _mdReeks(m, 'wind_gusts_10m').map((y, i) => ({ x: tijden[i], y })),
-    borderColor: MD_MODELLEN[m].kleur, backgroundColor: MD_MODELLEN[m].kleur,
-    borderDash: [4, 3], borderWidth: 1.2, pointRadius: 0, tension: 0.3,
-  });
+  grafiek('md-g-wind', 'wind_speed_10m');
   grafiek('md-g-temp', 'temperature_2m');
   _mdDetailNu();
 }
@@ -6256,7 +6571,7 @@ function _mdSluitDetail() {
   _md.detailCharts = [];
   _md.detail = null;
   if (_md.pin) { _md.kaart.removeLayer(_md.pin); _md.pin = null; }
-  setTimeout(() => _md.kaart && _md.kaart.invalidateSize({ pan: false }), 280);
+  setTimeout(() => { if (_md.kaart) { _md.kaart.invalidateSize({ pan: false }); _md.kaart.setMinZoom(_mdMinZoom(_md.kaart)); } }, 280);
 }
 
 // ── Bediening ──
@@ -6270,32 +6585,32 @@ function _mdSeg(id, sleutel, bijWissel) {
   });
 }
 _mdSeg('md-model', 'model', () => {
-  _mdLaadModel();
-  if (_md.detail) _mdDetailRender();     // andere nadruk in grafieken en tabel
+  _md.tijdGezet = false;          // andere run → weer beginnen bij 'nu'
+  _mdTeken();
+  if (_md.detail) _mdDetailRender();
 });
-_mdSeg('md-laag', 'laag', () => {
-  _mdLegenda();
-  if (MD_LAGEN[_md.laag].golf && !(_md.golf[_md.model] && _md.golf[_md.model].klaar)) _mdLaadModel();
-  else _mdPlanTeken();
-});
-document.getElementById('md-isobaren').addEventListener('change', e => { _md.isobaren = e.target.checked; _mdPlanTeken(); });
-document.getElementById('md-stroming').addEventListener('change', e => { _md.stroming = e.target.checked; _mdStroming(); });
-document.getElementById('md-schuif').addEventListener('input', e => { _md.t = +e.target.value; _mdPlanTeken(); });
+_mdSeg('md-laag', 'laag', () => { _mdLegenda(); _mdTeken(); });
+document.getElementById('md-isobaren').addEventListener('change', e => { _md.isobaren = e.target.checked; _mdTeken(); });
+document.getElementById('md-stroming').addEventListener('change', e => { _md.stroming = e.target.checked; _mdStroming(); _mdTeken(); });
+document.getElementById('md-schuif').addEventListener('input', e => { _md.t = +e.target.value; _mdTeken(); });
 document.getElementById('md-detail-sluit').addEventListener('click', _mdSluitDetail);
 
 function _mdSpeel(aan) {
   const icoon = document.getElementById('md-play-icon');
   if (aan) {
     icoon.innerHTML = '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>';
-    _md.speelTimer = setInterval(() => {
-      const data = _md.data[_md.model];
-      if (!data || !data.klaar || !document.getElementById('modellen-panel').classList.contains('active')) { _mdSpeel(false); return; }
-      _md.t = (_md.t + 1) % data.T;
+    const volgende = async () => {
+      if (!_md.speelTimer) return;
+      if (!document.getElementById('modellen-panel').classList.contains('active')) { _mdSpeel(false); return; }
+      _md.t = (_md.t + 1) % MD_STAPPEN.length;
       document.getElementById('md-schuif').value = _md.t;
-      _mdPlanTeken();
-    }, 700);
+      const start = Date.now();
+      await _mdTeken();                 // wacht tot de stap getekend is: nooit sneller dan het laden
+      if (_md.speelTimer) _md.speelTimer = setTimeout(volgende, Math.max(150, 700 - (Date.now() - start)));
+    };
+    _md.speelTimer = setTimeout(volgende, 0);
   } else {
-    clearInterval(_md.speelTimer); _md.speelTimer = null;
+    clearTimeout(_md.speelTimer); _md.speelTimer = null;
     icoon.innerHTML = '<polygon points="6 4 20 12 6 20 6 4"/>';
   }
 }
