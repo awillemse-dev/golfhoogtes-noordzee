@@ -13,20 +13,36 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     :root {
-      --bg:          #e9eef4;
+      /* Vlakken — neutraler grijsblauw, minder verzadigd dan voorheen */
+      --bg:          #eef2f7;
       --surface:     #ffffff;
-      --surface-2:   #f3f6fb;
-      --surface-3:   #e7edf5;
-      --border:      #d7e0eb;
-      --border-2:    #c6d2e0;
-      --accent:      #0284c7;
-      --accent-glow: rgba(2,132,199,0.12);
+      --surface-2:   #f5f8fb;
+      --surface-3:   #e9eff6;
+      --border:      #dde5ee;
+      --border-2:    #c7d3e0;
+
+      /* Accent — iets dieper blauw; leest rustiger op wit dan #0284c7 */
+      --accent:      #0369a1;
+      --accent-soft: #e7f0f8;
+      --accent-glow: rgba(3,105,161,0.10);
+
+      /* Tekst — drie duidelijk onderscheiden niveaus */
       --text:        #0f172a;
-      --text-dim:    #7a91a8;
-      --text-muted:  #3d5167;
-      --green:       #4ade80;
-      --yellow:      #fbbf24;
-      --red:         #f87171;
+      --text-muted:  #475569;
+      --text-dim:    #7c8da2;
+
+      /* Status — verzadigd genoeg om op wit leesbaar te zijn */
+      --green:       #16a34a;
+      --yellow:      #d97706;
+      --red:         #dc2626;
+
+      /* Eén schaduw- en radiusschaal i.p.v. losse waarden door het bestand */
+      --shadow-sm:   0 1px 2px rgba(15,23,42,0.06);
+      --shadow-md:   0 2px 8px rgba(15,23,42,0.08);
+      --shadow-lg:   0 10px 30px rgba(15,23,42,0.13);
+      --r-sm:        6px;
+      --r-md:        9px;
+      --r-lg:        12px;
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -43,14 +59,16 @@
 
     /* ── Header ─────────────────────────────────────────────────────────── */
     header {
-      height: 52px;
-      padding: 0 16px;
+      height: 56px;
+      padding: 0 18px;
       background: var(--surface);
       border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 16px;
       flex-shrink: 0;
+      box-shadow: var(--shadow-sm);
+      z-index: 5;
     }
 
     .brand {
@@ -62,19 +80,18 @@
     .brand-icon {
       width: 30px;
       height: 30px;
-      border-radius: 7px;
-      background: linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%);
+      border-radius: var(--r-md);
+      background: linear-gradient(140deg, #0284c7 0%, #075985 100%);
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 0 12px rgba(14,165,233,0.3);
     }
     .brand-icon svg { width: 16px; height: 16px; color: white; }
     .brand-name {
-      font-size: 0.88rem;
+      font-size: 0.95rem;
       font-weight: 600;
-      color: #0f172a;
-      letter-spacing: -0.01em;
+      color: var(--text);
+      letter-spacing: -0.015em;
     }
 
     .h-divider {
@@ -88,31 +105,54 @@
     nav {
       display: flex;
       gap: 2px;
-      background: var(--bg);
+      background: var(--surface-2);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: var(--r-md);
       padding: 3px;
+      /* Bij een smaller venster mag de balk krimpen en horizontaal schuiven,
+         zodat de statusindicator rechts altijd zichtbaar blijft. */
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
     }
+    nav::-webkit-scrollbar { display: none; }
 
     .nav-btn {
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 5px 13px;
-      border-radius: 5px;
+      gap: 7px;
+      padding: 6px 13px;
+      border-radius: var(--r-sm);
       border: none;
       background: none;
-      color: var(--text-dim);
-      font-size: 0.78rem;
+      color: var(--text-muted);
+      font-size: 0.79rem;
       font-weight: 500;
       font-family: inherit;
       cursor: pointer;
       white-space: nowrap;
-      transition: color 0.15s, background 0.15s;
+      transition: color 0.15s, background 0.15s, box-shadow 0.15s;
     }
-    .nav-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
-    .nav-btn:hover  { color: var(--text); background: var(--surface-2); }
-    .nav-btn.active { color: var(--accent); background: var(--surface-2); }
+    .nav-btn svg { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.75; }
+    .nav-btn:hover  { color: var(--text); background: rgba(255,255,255,0.7); }
+    /* Actieve tab als lichte 'pil': duidelijker dan alleen een kleurverschil */
+    .nav-btn.active {
+      color: var(--accent);
+      background: var(--surface);
+      font-weight: 600;
+      box-shadow: var(--shadow-sm);
+    }
+    .nav-btn.active svg { opacity: 1; }
+
+    @media (max-width: 1320px) {
+      .nav-btn { padding: 6px 10px; font-size: 0.76rem; gap: 6px; }
+      header   { gap: 12px; padding: 0 14px; }
+    }
+    @media (max-width: 1150px) {
+      .nav-btn { padding: 6px 8px; }
+      .brand-name { display: none; }
+    }
 
     /* ── Status ──────────────────────────────────────────────────────────── */
     #status {
@@ -131,18 +171,19 @@
       flex-shrink: 0;
       transition: background 0.3s, box-shadow 0.3s;
     }
-    #status.ok      .status-dot { background: var(--green);  box-shadow: 0 0 6px rgba(74,222,128,0.5); }
-    #status.loading .status-dot { background: var(--yellow); box-shadow: 0 0 6px rgba(251,191,36,0.4); }
-    #status.error   .status-dot { background: var(--red);    box-shadow: 0 0 6px rgba(248,113,113,0.4); }
-    #status span { color: var(--text); }
+    /* Zachte ring i.p.v. neongloed */
+    #status.ok      .status-dot { background: var(--green);  box-shadow: 0 0 0 3px rgba(22,163,74,0.14); }
+    #status.loading .status-dot { background: var(--yellow); box-shadow: 0 0 0 3px rgba(217,119,6,0.14); }
+    #status.error   .status-dot { background: var(--red);    box-shadow: 0 0 0 3px rgba(220,38,38,0.14); }
+    #status span { color: var(--text-muted); font-weight: 500; }
 
     #countdown {
       font-size: 0.7rem;
-      color: var(--text-muted);
-      background: var(--bg);
+      color: var(--text-dim);
+      background: var(--surface-2);
       border: 1px solid var(--border);
-      border-radius: 5px;
-      padding: 3px 9px;
+      border-radius: var(--r-sm);
+      padding: 4px 9px;
       font-variant-numeric: tabular-nums;
       flex-shrink: 0;
     }
@@ -152,38 +193,50 @@
 
     /* ── Zijbalk ─────────────────────────────────────────────────────────── */
     #sidebar {
-      width: 68px;
+      width: 104px;
       flex-shrink: 0;
       background: var(--surface);
       border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
-      padding: 10px 6px;
-      gap: 4px;
+      padding: 12px 8px;
+      gap: 3px;
     }
 
+    /* Geen kapitalen en geen afbreekstreepjes meer: bij 96px passen de labels
+       netjes op woordgrenzen, wat een stuk rustiger leest. */
     .sidebar-tab {
+      position: relative;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 5px;
-      padding: 10px 6px;
+      gap: 7px;
+      padding: 11px 4px 10px;
       cursor: pointer;
       color: var(--text-muted);
-      font-size: 0.6rem;
-      font-weight: 600;
+      font-size: 0.68rem;
+      font-weight: 500;
       text-align: center;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      border-radius: 8px;
-      border: 1px solid transparent;
-      transition: all 0.15s;
+      border-radius: var(--r-md);
+      transition: background 0.15s, color 0.15s;
       user-select: none;
     }
-    .sidebar-tab svg { width: 18px; height: 18px; flex-shrink: 0; }
-    .sidebar-tab:hover  { background: var(--surface-2); color: var(--text-dim); border-color: var(--border); }
-    .sidebar-tab.active { background: var(--accent-glow); color: var(--accent); border-color: rgba(2,132,199,0.22); }
-    .sidebar-tab .tab-label { line-height: 1.2; }
+    .sidebar-tab svg { width: 19px; height: 19px; flex-shrink: 0; opacity: 0.7; }
+    .sidebar-tab:hover  { background: var(--surface-2); color: var(--text); }
+    .sidebar-tab:hover svg { opacity: 0.9; }
+    .sidebar-tab.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+    .sidebar-tab.active svg { opacity: 1; }
+    /* Smal streepje links markeert de actieve sectie */
+    .sidebar-tab.active::before {
+      content: '';
+      position: absolute;
+      left: -8px; top: 50%;
+      transform: translateY(-50%);
+      width: 3px; height: 22px;
+      border-radius: 0 2px 2px 0;
+      background: var(--accent);
+    }
+    .sidebar-tab .tab-label { line-height: 1.25; }
 
     /* ── Kaartgebied ──────────────────────────────────────────────────────── */
     #main { flex: 1; display: flex; overflow: hidden; }
@@ -812,7 +865,7 @@
     #chart-panel.open { width: 480px; }
 
     #chart-header {
-      padding: 14px 16px 12px;
+      padding: 16px 18px 14px;
       border-bottom: 1px solid var(--border);
       display: flex;
       align-items: flex-start;
@@ -821,9 +874,10 @@
     }
     #chart-station { flex: 1; min-width: 0; }
     #chart-naam {
-      font-size: 0.9rem;
+      font-size: 1rem;
       font-weight: 600;
-      color: #0f172a;
+      letter-spacing: -0.015em;
+      color: var(--text);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -835,44 +889,46 @@
       font-weight: 400;
     }
     #chart-close {
-      background: var(--surface-2);
-      border: 1px solid var(--border);
+      background: none;
+      border: 1px solid transparent;
       color: var(--text-dim);
-      font-size: 0.78rem;
+      font-size: 0.8rem;
       cursor: pointer;
-      padding: 5px 9px;
-      border-radius: 6px;
+      width: 26px; height: 26px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: var(--r-sm);
       line-height: 1;
       flex-shrink: 0;
-      transition: all 0.15s;
+      transition: background 0.15s, color 0.15s;
       font-family: inherit;
     }
-    #chart-close:hover { color: var(--text); border-color: var(--border-2); background: var(--surface-3); }
+    #chart-close:hover { color: var(--text); background: var(--surface-3); }
 
     #chart-current {
-      padding: 16px;
+      padding: 18px;
       border-bottom: 1px solid var(--border);
       display: grid;
       grid-template-columns: auto 1fr auto;
       align-items: end;
-      gap: 6px;
+      gap: 7px;
       flex-shrink: 0;
-      background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+      background: var(--surface-2);
     }
     #chart-hm0 {
-      font-size: 2.8rem;
-      font-weight: 700;
+      font-size: 2.6rem;
+      font-weight: 650;
       line-height: 1;
-      letter-spacing: -0.03em;
+      letter-spacing: -0.035em;
+      font-variant-numeric: tabular-nums;
     }
-    #chart-hm0-label { font-size: 0.72rem; color: var(--text-dim); padding-bottom: 5px; font-weight: 500; }
-    #chart-time { font-size: 0.68rem; color: var(--text-muted); text-align: right; padding-bottom: 5px; }
+    #chart-hm0-label { font-size: 0.74rem; color: var(--text-dim); padding-bottom: 6px; font-weight: 500; }
+    #chart-time { font-size: 0.68rem; color: var(--text-dim); text-align: right; padding-bottom: 6px; }
     #chart-diff {
       grid-column: 1 / -1;
-      margin-top: 10px;
-      padding: 8px 11px;
-      border-radius: 8px;
-      background: var(--surface-3);
+      margin-top: 12px;
+      padding: 9px 12px;
+      border-radius: var(--r-md);
+      background: var(--surface);
       border: 1px solid var(--border);
       font-size: 0.72rem;
       color: var(--text-dim);
@@ -885,17 +941,17 @@
 
     #chart-body {
       flex: 1;
-      padding: 14px 16px 16px;
+      padding: 16px 18px 18px;
       display: flex;
       flex-direction: column;
       min-height: 0;
     }
     #chart-period-label {
-      font-size: 0.65rem;
-      color: var(--text-muted);
-      margin-bottom: 12px;
+      font-size: 0.64rem;
+      color: var(--text-dim);
+      margin-bottom: 14px;
       text-transform: uppercase;
-      letter-spacing: 0.07em;
+      letter-spacing: 0.08em;
       font-weight: 600;
     }
     #chart-wrap { flex: 1; position: relative; min-height: 0; }
@@ -909,29 +965,31 @@
     }
 
     /* ── Legenda ────────────────────────────────────────────────────────── */
+    /* Stond nog op donkere-thema-waarden: lichtgrijze tekst op wit en een
+       schaduw van 40% zwart. Beide vervangen door de lichte schaal. */
     .legend {
-      background: rgba(255,255,255,0.95);
+      background: rgba(255,255,255,0.94);
       border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 14px;
+      border-radius: var(--r-lg);
+      padding: 13px 15px;
       font-size: 0.75rem;
-      color: #94a3b8;
+      color: var(--text-muted);
       backdrop-filter: blur(10px);
-      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+      box-shadow: var(--shadow-lg);
     }
     .legend h4 {
-      font-size: 0.65rem;
+      font-size: 0.64rem;
       color: var(--text-dim);
       margin-bottom: 10px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.07em;
+      letter-spacing: 0.08em;
     }
     .legend-sub {
-      font-size: 0.63rem;
-      color: var(--text-muted);
-      margin-top: 8px;
-      padding-top: 8px;
+      font-size: 0.64rem;
+      color: var(--text-dim);
+      margin-top: 10px;
+      padding-top: 9px;
       border-top: 1px solid var(--border);
     }
 
@@ -953,14 +1011,13 @@
     .legend-row {
       display: flex;
       align-items: center;
-      gap: 9px;
-      line-height: 1.8;
+      gap: 10px;
+      line-height: 1.9;
     }
     .legend-dot {
       width: 10px; height: 10px;
       border-radius: 3px;
       flex-shrink: 0;
-      opacity: 0.9;
     }
 
     /* ── Leaflet overrides ──────────────────────────────────────────────── */
@@ -975,9 +1032,16 @@
     .leaflet-control-attribution a { color: #475569 !important; }
     .leaflet-control-zoom a {
       background: var(--surface) !important;
-      color: var(--text-dim) !important;
+      color: var(--text-muted) !important;
       border-color: var(--border) !important;
     }
+    .leaflet-control-zoom {
+      border-radius: var(--r-md) !important;
+      overflow: hidden;
+      box-shadow: var(--shadow-md) !important;
+      border: 1px solid var(--border) !important;
+    }
+    .leaflet-control-zoom a:hover { background: var(--surface-2) !important; color: var(--accent) !important; }
     .leaflet-control-zoom a:hover { background: var(--surface-2) !important; color: var(--text) !important; }
 
     .leaflet-popup-content-wrapper {
@@ -1120,7 +1184,7 @@
         <circle cx="12" cy="12" r="2"/>
         <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/>
       </svg>
-      <span class="tab-label">Waar&shy;nemingen</span>
+      <span class="tab-label">Waarnemingen</span>
     </div>
     <div class="sidebar-tab" id="tab-route" onclick="selectSection('route')">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
@@ -1128,7 +1192,7 @@
         <path d="M3 17l4-8 4 4 4-6 4 8"/>
         <path d="M3 21h18"/>
       </svg>
-      <span class="tab-label">Route Fore&shy;cast</span>
+      <span class="tab-label">Route Forecast</span>
     </div>
     <div class="sidebar-tab" id="tab-klimaat" onclick="selectSection('klimaat')">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
@@ -1136,7 +1200,7 @@
         <path d="M12 2v2m0 16v2m10-10h-2M4 12H2m15.07-5.07-1.41 1.41M8.34 15.66l-1.41 1.41m0-10.14 1.41 1.41m7.32 7.32 1.41 1.41"/>
         <circle cx="12" cy="12" r="4"/>
       </svg>
-      <span class="tab-label">Route Kli&shy;maat</span>
+      <span class="tab-label">Route Klimaat</span>
     </div>
     <div class="sidebar-tab" id="tab-optimaal" onclick="selectSection('optimaal')">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
@@ -1145,7 +1209,7 @@
         <path d="M12 12 19 5"/>
         <circle cx="12" cy="12" r="2.5"/>
       </svg>
-      <span class="tab-label">Route Opti&shy;maal</span>
+      <span class="tab-label">Route Optimaal</span>
     </div>
     <div class="sidebar-tab" id="tab-vakantie" onclick="selectSection('vakantie')">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
@@ -1154,7 +1218,7 @@
         <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
         <path d="M12 11v5"/>
       </svg>
-      <span class="tab-label">Vakantie&shy;weer</span>
+      <span class="tab-label">Vakantieweer</span>
     </div>
   </div>
 
@@ -2653,27 +2717,27 @@ function selectLayer(layer) {
   if (layer === 'golf') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastWaveGeoJSON && _isFresh('golf')) { _hideAllGroups(); _waveGroup.addTo(map); _statusFromGeoJSON(_lastWaveGeoJSON); startCountdown(); }
+    if (_lastWaveGeoJSON && _kanHergebruiken('golf', _waveGroup)) { _hideAllGroups(); _waveGroup.addTo(map); _statusFromGeoJSON(_lastWaveGeoJSON); startCountdown(); }
     else fetchWaveData().then(startCountdown);
   } else if (layer === 'temp') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastTempGeoJSON && _isFresh('temp')) { _hideAllGroups(); _tempGroup.addTo(map); _statusFromGeoJSON(_lastTempGeoJSON); startCountdown(); }
+    if (_lastTempGeoJSON && _kanHergebruiken('temp', _tempGroup)) { _hideAllGroups(); _tempGroup.addTo(map); _statusFromGeoJSON(_lastTempGeoJSON); startCountdown(); }
     else fetchTempData().then(startCountdown);
   } else if (layer === 'wind') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastWindGeoJSON && _isFresh('wind')) { _hideAllGroups(); _windGroup.addTo(map); _statusFromGeoJSON(_lastWindGeoJSON); startCountdown(); }
+    if (_lastWindGeoJSON && _kanHergebruiken('wind', _windGroup)) { _hideAllGroups(); _windGroup.addTo(map); _statusFromGeoJSON(_lastWindGeoJSON); startCountdown(); }
     else fetchWindData().then(startCountdown);
   } else if (layer === 'zicht') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastZichtGeoJSON && _isFresh('zicht')) { _hideAllGroups(); _zichtGroup.addTo(map); _statusFromGeoJSON(_lastZichtGeoJSON); startCountdown(); }
+    if (_lastZichtGeoJSON && _kanHergebruiken('zicht', _zichtGroup)) { _hideAllGroups(); _zichtGroup.addTo(map); _statusFromGeoJSON(_lastZichtGeoJSON); startCountdown(); }
     else fetchZichtData().then(startCountdown);
   } else if (layer === 'metar') {
     mapEl.style.display      = '';
     comingSoon.style.display = 'none';
-    if (_lastMetarGeoJSON && _isFresh('metar')) { _hideAllGroups(); _metarGroup.addTo(map); _statusFromGeoJSON(_lastMetarGeoJSON); startCountdown(); }
+    if (_lastMetarGeoJSON && _kanHergebruiken('metar', _metarGroup)) { _hideAllGroups(); _metarGroup.addTo(map); _statusFromGeoJSON(_lastMetarGeoJSON); startCountdown(); }
     else fetchMetarData().then(startCountdown);
   } else if (layer === 'bliksem') {
     mapEl.style.display      = '';
@@ -2969,26 +3033,32 @@ const CHART_OPTS = (color) => ({
     legend: { display: false },
     tooltip: {
       backgroundColor: '#ffffff',
-      borderColor:     '#d7e0eb',
+      borderColor:     '#dde5ee',
       borderWidth:     1,
-      titleColor:      '#7a91a8',
+      titleColor:      '#7c8da2',
       bodyColor:       '#0f172a',
-      padding:         10,
-      cornerRadius:    7,
+      titleFont:       { size: 11, family: 'Inter', weight: '500' },
+      bodyFont:        { size: 12, family: 'Inter', weight: '600' },
+      padding:         11,
+      cornerRadius:    9,
+      boxPadding:      4,
     },
   },
   scales: {
     x: {
       type: 'time',
       time: { unit: 'hour', displayFormats: { hour: 'HH:mm' } },
-      ticks: { color: '#3d5167', maxTicksLimit: 7, font: { size: 10, family: 'Inter' } },
-      grid:  { color: '#d7e0eb' },
-      border:{ color: '#d7e0eb' },
+      ticks: { color: '#7c8da2', maxTicksLimit: 7, font: { size: 10, family: 'Inter' },
+               maxRotation: 0, padding: 6 },
+      // Alleen horizontale hulplijnen: verticale lijnen voegen weinig toe en
+      // maken de grafiek onrustig.
+      grid:  { display: false },
+      border:{ color: '#dde5ee' },
     },
     y: {
-      ticks: { color: '#3d5167', font: { size: 10, family: 'Inter' } },
-      grid:  { color: '#d7e0eb' },
-      border:{ color: '#d7e0eb' },
+      ticks: { color: '#7c8da2', font: { size: 10, family: 'Inter' }, padding: 6 },
+      grid:  { color: '#eef2f7', drawTicks: false },
+      border:{ display: false },
     },
   },
 });
@@ -3194,6 +3264,14 @@ function _isFresh(layer) {
   return (_layerFetchedAt[layer] || 0) + _CACHE_FRESH_MS > Date.now();
 }
 
+// Verse data alléén is niet genoeg: clearMarkers() leegt bij een sectiewissel
+// ook de markerlaag. Kwam je daarna terug, dan werd de lege groep opnieuw aan
+// de kaart gehangen en bleef de kaart leeg tot de cache verliep. Daarom hier
+// ook controleren of er nog daadwerkelijk markers in de groep zitten.
+function _kanHergebruiken(layer, group) {
+  return _isFresh(layer) && group.getLayers().length > 0;
+}
+
 function _markFetched(layer) {
   _layerFetchedAt[layer] = Date.now();
   _retryReset(layer);   // geslaagd → backoff terug naar nul
@@ -3214,8 +3292,14 @@ function _ensureRouteMap() {
     zoomControl: true, scrollWheelZoom: true,
     attributionControl: false,
   });
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    subdomains: 'abcd', maxZoom: 18, crossOrigin: true,
+  // CARTO vereist sinds kort een API-sleutel en levert anders voor élke tegel
+  // een "API KEY REQUIRED"-watermerk. Vervangen door de lichte ArcGIS-basiskaart,
+  // die deze app elders ook al gebruikt en geen sleutel nodig heeft.
+  L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 16, crossOrigin: true,
+  }).addTo(_routeMap);
+  L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 16, crossOrigin: true,
   }).addTo(_routeMap);
   _routeMap.setView([53.0, 5.0], 6);
 
@@ -5319,8 +5403,14 @@ let _vkActiveIdx = -1;
 function _ensureVakantieMap() {
   if (_vkMap) { _vkMap.invalidateSize(); return; }
   _vkMap = L.map('vakantie-map', { zoomControl:true, scrollWheelZoom:true, attributionControl:false });
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    subdomains:'abcd', maxZoom:18, crossOrigin:true,
+  // CARTO vereist sinds kort een API-sleutel en levert anders voor élke tegel
+  // een "API KEY REQUIRED"-watermerk. Vervangen door de lichte ArcGIS-basiskaart,
+  // die deze app elders ook al gebruikt en geen sleutel nodig heeft.
+  L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 16, crossOrigin: true,
+  }).addTo(_vkMap);
+  L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 16, crossOrigin: true,
   }).addTo(_vkMap);
   const latlngs = VAKANTIE_ROUTE.map(w => [w.lat, w.lon]);
   L.polyline(latlngs, { color:'#1d4ed8', weight:3, opacity:0.7 }).addTo(_vkMap);
@@ -5503,8 +5593,14 @@ function _ensureNlMap() {
     attributionControl: false,
     zoomSnap:           0.1,
   });
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    subdomains: 'abcd', maxZoom: 10,
+  // CARTO vereist sinds kort een API-sleutel en levert anders voor élke tegel
+  // een "API KEY REQUIRED"-watermerk. Vervangen door de lichte ArcGIS-basiskaart,
+  // die deze app elders ook al gebruikt en geen sleutel nodig heeft.
+  L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 10,
+  }).addTo(_nlMap);
+  L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 10,
   }).addTo(_nlMap);
   // Pas kaart aan zodat NL + Luik net zichtbaar zijn, daarna zoom vergrendelen
   _nlMap.fitBounds([[50.6, 3.2], [53.6, 7.3]], { padding: [16, 16] });
