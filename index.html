@@ -5816,7 +5816,8 @@ const MD_LAGEN = {
 
 const _md = {
   model: 'ecmwf', laag: 'druk', t: 0, isobaren: true, stroming: true, tijdGezet: false,
-  runs: {}, indexen: new Map(), velden: new Map(), onderweg: new Map(),
+  runs: {}, indexen: new Map(), velden: new Map(), uitgepakt: new Map(), onderweg: new Map(),
+  vooruitNr: 0, scrollTot: 0, rustTimer: null,
   huidig: null, geldig: null, tekenNr: 0, kleurGepland: false,
   kaart: null, kleurLaag: null, isoGroep: null, hlGroep: null, renderer: null, stroom: null,
   speelTimer: null, pin: null, detail: null, detailCharts: [], isoCache: new WeakMap(),
@@ -5953,51 +5954,233 @@ function _mdGlad(f, keer) {
 }
 
 // Eén veld voor één geldigheidstijd; null als het voor die stap niet bestaat
-async function _mdVeld(model, naam, geldig) {
+// ── Laden: Web Workers, voorrang voor wat je bekijkt, hele tijdlijn vooruit ──
+// Een nieuwe tijdstap kostte ~1,25 s, vooral wachten op het netwerk. Daarom:
+//  · na het openen wordt de hele tijdlijn op de achtergrond opgehaald, te
+//    beginnen bij de stappen naast de huidige — scrollen haalt dan uit het geheugen;
+//  · ophalen, decoderen, herroosteren en isobaren berekenen gebeurt in twee
+//    Web Workers, zodat de kaart soepel blijft terwijl er geladen wordt;
+//  · een wachtrij met voorrang: wat je nu bekijkt gaat altijd vóór het vooruit laden;
+//  · velden worden als 16-bit getallen bewaard, zodat de hele tijdlijn in ~40 MB past.
+// Op apparaten met weinig geheugen (telefoons) een kleinere cache: ~45 MB i.p.v. ~75 MB
+const MD_KLEIN = (navigator.deviceMemory && navigator.deviceMemory < 4) || Math.min(screen.width, screen.height) < 700;
+const MD_WORKERS = 2, MD_PER_WORKER = 3, MD_CACHE_MAX = MD_KLEIN ? 90 : 150, MD_UITGEPAKT_MAX = 10;
+let _mdPool = null;
+
+function _mdWorkerBron() {
+  const functies = [_GribBits, _gribTeken, _gribKop, _gribAec, _gribComplex, _gribSimple, gribDecodeer,
+                    _mdFetch, _mdHerrooster, _mdGlad, _mdIsolijnen, _mdDrukcentra].map(f => f.toString()).join('\n\n');
+  return 'const MD_G = ' + JSON.stringify(MD_G) + ';\n'
+    + 'const KT = ' + KT + ';\n'
+    + 'const OM = { druk: v => v / 100, u: v => v * KT, v: v => v * KT, stoot: v => v * KT, regen: v => v * 3600, '
+    + 'temp: v => v - 273.15, wolk: v => v, cape: v => v, golf: v => v };\n'
+    + functies + '\n'
+    + 'self.onmessage = async (e) => {\n'
+    + '  const d = e.data;\n'
+    + '  try { const uit = await _mdVerwerk(d.urls, d.bereik, d.naam); uit.id = d.id;\n'
+    + '        self.postMessage(uit, uit.f ? [uit.f.buffer] : []); }\n'
+    + '  catch (err) { self.postMessage({ id: d.id, fout: String((err && err.message) || err) }); }\n'
+    + '};\n'
+    + _mdVerwerk.toString().replace('MD_VELDEN[naam].om', 'OM[naam]');
+}
+
+// Ophalen + decoderen + omzetten van één veld (draait in de worker, of als terugval hier)
+async function _mdVerwerk(urls, bereik, naam) {
+  let res = null, fout;
+  for (let poging = 0; poging < 4; poging++) {        // een afgebroken antwoord opnieuw proberen
+    try {
+      const buf = await _mdFetch(urls, { headers: { Range: 'bytes=' + bereik[0] + '-' + bereik[1] } }, 'buffer');
+      if (!buf) return { leeg: true };
+      res = gribDecodeer(buf); break;
+    } catch (err) { fout = err; }
+  }
+  if (!res) throw fout;
+  let f = _mdHerrooster(res.kop, res.waarden, MD_VELDEN[naam].om);
+  if (naam === 'druk') f = _mdGlad(f, 3);
+  if (naam === 'wolk') {                               // ECMWF levert 0–1, GFS al procenten
+    let max = 0; for (const x of f) if (x > max) max = x;
+    if (max <= 1.01) for (let i = 0; i < f.length; i++) f[i] *= 100;
+  }
+  const uit = { f };
+  if (naam === 'druk') { uit.lijnen = _mdIsolijnen(f); uit.centra = _mdDrukcentra(f); }
+  return uit;
+}
+
+function _mdPoolStart() {
+  if (_mdPool) return _mdPool;
+  _mdPool = { workers: [], wachtrij: [], volgnr: 0, taken: new Map(), inline: false };
+  try {
+    const url = URL.createObjectURL(new Blob([_mdWorkerBron()], { type: 'text/javascript' }));
+    for (let i = 0; i < MD_WORKERS; i++) {
+      const w = new Worker(url);
+      w.bezig = 0;
+      w.onmessage = (e) => _mdTaakKlaar(w, e.data);
+      _mdPool.workers.push(w);
+    }
+  } catch (e) {
+    console.warn('[modellen] Web Workers niet beschikbaar, laden op de hoofdthread', e);
+    _mdPool.inline = true;
+  }
+  return _mdPool;
+}
+
+function _mdDispatch() {
+  const p = _mdPool;
+  while (p.wachtrij.length) {
+    let w = null;
+    if (!p.inline) {
+      w = p.workers.reduce((a, b) => (a.bezig <= b.bezig ? a : b));
+      if (w.bezig >= MD_PER_WORKER) return;
+    } else if (p.taken.size >= MD_PER_WORKER) return;
+    let beste = 0;                                    // hoogste voorrang (laagste getal) eerst
+    for (let i = 1; i < p.wachtrij.length; i++) if (p.wachtrij[i].prio < p.wachtrij[beste].prio) beste = i;
+    const taak = p.wachtrij.splice(beste, 1)[0];
+    taak.id = ++p.volgnr;
+    p.taken.set(taak.id, taak);
+    if (w) {
+      w.bezig++; taak.worker = w;
+      w.postMessage({ id: taak.id, urls: taak.urls, bereik: taak.bereik, naam: taak.naam });
+    } else {
+      _mdVerwerk(taak.urls, taak.bereik, taak.naam)
+        .then(uit => { uit.id = taak.id; _mdTaakKlaar(null, uit); })
+        .catch(err => _mdTaakKlaar(null, { id: taak.id, fout: err.message }));
+    }
+  }
+}
+
+function _mdTaakKlaar(w, d) {
+  const taak = _mdPool.taken.get(d.id);
+  if (!taak) return;
+  _mdPool.taken.delete(d.id);
+  if (w) w.bezig--;
+  if (d.fout) taak.rej(new Error(d.fout)); else taak.res(d.leeg ? null : d);
+  _mdDispatch();
+}
+
+// Vooruit-laden dat nog niet begonnen is, laten vallen (bij wisselen van model of laag)
+function _mdSchrapVooruit() {
+  if (!_mdPool) return;
+  const blijft = [];
+  for (const t of _mdPool.wachtrij) { if (t.prio >= 1) t.res(null); else blijft.push(t); }
+  _mdPool.wachtrij = blijft;
+}
+
+// 16-bit opslag: halveert het geheugen; nauwkeurig tot op ~0,002 hPa
+function _mdInpakken(f) {
+  let lo = Infinity, hi = -Infinity;
+  for (const x of f) if (x === x) { if (x < lo) lo = x; if (x > hi) hi = x; }
+  if (lo === Infinity) { lo = 0; hi = 1; }
+  const schaal = (hi - lo) / 65534 || 1, q = new Uint16Array(f.length);
+  for (let i = 0; i < f.length; i++) { const x = f[i]; q[i] = x !== x ? 65535 : Math.round((x - lo) / schaal); }
+  return { q, lo, schaal };
+}
+function _mdUitpakken(c) {
+  const f = new Float32Array(c.q.length);
+  for (let i = 0; i < f.length; i++) { const q = c.q[i]; f[i] = q === 65535 ? NaN : c.lo + q * c.schaal; }
+  return f;
+}
+
+function _mdLruZet(map, sleutel, waarde, max) {
+  map.delete(sleutel); map.set(sleutel, waarde);
+  while (map.size > max) map.delete(map.keys().next().value);
+}
+
+// Welke velden de huidige laag en instellingen per tijdstap nodig hebben
+function _mdNodigeVelden() {
+  const laag = MD_LAGEN[_md.laag].veld, s = new Set();
+  if (_md.isobaren || laag === 'druk') s.add('druk');
+  if (laag === 'wind') { s.add('u'); s.add('v'); } else if (laag !== 'druk') s.add(laag);
+  return s;
+}
+
+// Opruimen als de cache vol is. Niet 'langst niet gebruikt': dan verdwenen juist
+// de stappen rond de huidige tijd, omdat die als eerste geladen waren. Eerst weg
+// wat niet bij het huidige model en de huidige laag hoort, daarna de stappen die
+// het verst van de huidige tijd liggen.
+function _mdOpruimen() {
+  if (_md.velden.size <= MD_CACHE_MAX) return;
+  const run = _md.runs[_md.model], ec = _md.runs.ecmwf;
+  const nodig = _mdNodigeVelden();
+  const score = (k) => {
+    const [m, r, stap, naam] = k.split('|');
+    const eigenRun = naam === 'golf' ? (ec && r === ec.D + ec.hh) : (run && m === _md.model && r === run.D + run.hh);
+    const afstand = Math.abs(+stap / 3 - _md.t);
+    return eigenRun && nodig.has(naam) ? afstand : 1000 + afstand;
+  };
+  const volgorde = [..._md.velden.keys()].sort((a, b) => score(b) - score(a));
+  for (const k of volgorde) {
+    if (_md.velden.size <= MD_CACHE_MAX) break;
+    _md.velden.delete(k); _md.uitgepakt.delete(k);
+  }
+}
+
+function _mdVeldUit(sleutel, ingang) {
+  let f = _md.uitgepakt.get(sleutel);
+  if (!f) f = _mdUitpakken(ingang.c);
+  _mdLruZet(_md.uitgepakt, sleutel, f, MD_UITGEPAKT_MAX);
+  _md.velden.set(sleutel, ingang);
+  return { f, lijnen: ingang.lijnen, centra: ingang.centra };
+}
+
+// Eén veld voor één geldigheidstijd; null als het voor die stap niet bestaat.
+// prio: −1 = nu nodig, 1+ = vooruit laden (hoe lager, hoe eerder)
+async function _mdVeld(model, naam, geldig, prio = -1) {
   const def = MD_VELDEN[naam];
   const bron = def.golf ? 'ecmwf' : model;
   const run = await _mdRun(bron);
   const stap = Math.round((geldig - run.t) / 3600e3);
   if (stap < 0 || stap % 3 || stap > (def.golf ? 144 : 120)) return null;
   const sleutel = `${bron}|${run.D}${run.hh}|${stap}|${naam}`;
-  if (_md.velden.has(sleutel)) {
-    const f = _md.velden.get(sleutel);
-    _md.velden.delete(sleutel); _md.velden.set(sleutel, f);    // recent gebruikt
-    return f;
-  }
-  if (_md.onderweg.has(sleutel)) return _md.onderweg.get(sleutel);
+  const bekend = _md.velden.get(sleutel);
+  const vooruit = prio >= 1;                        // vooruit laden: alleen zorgen dat het er is, niet uitpakken
+  if (bekend) return vooruit ? true : _mdVeldUit(sleutel, bekend);
 
-  const belofte = (async () => {
-    const idx = await _mdIndex(bron, run, stap, def.golf ? 'wave' : 'oper');
-    if (!idx) return null;
-    const bereik = bron === 'ecmwf' ? idx.velden.get(def.ec) : idx.zoek(def.gfs);
-    if (!bereik) return null;
-    let res, fout;
-    for (let poging = 0; poging < 4; poging++) {        // een afgebroken antwoord opnieuw proberen
-      try {
-        const buf = await _mdFetch(idx.url, { headers: { Range: `bytes=${bereik[0]}-${bereik[1]}` } }, 'buffer');
-        if (!buf) return null;
-        res = gribDecodeer(buf); break;
-      } catch (e) { fout = e; }
-    }
-    if (!res) throw fout;
-    let f = _mdHerrooster(res.kop, res.waarden, def.om);
-    if (naam === 'druk') f = _mdGlad(f, 3);
-    if (naam === 'wolk') {                               // ECMWF levert 0–1, GFS al procenten
-      let max = 0; for (const x of f) if (x > max) max = x;
-      if (max <= 1.01) for (let i = 0; i < f.length; i++) f[i] *= 100;
-    }
-    return f;
-  })();
-  _md.onderweg.set(sleutel, belofte);
-  try {
-    const f = await belofte;
-    if (f) {
-      _md.velden.set(sleutel, f);
-      while (_md.velden.size > 36) _md.velden.delete(_md.velden.keys().next().value);   // ~1 MB per veld
-    }
-    return f;
-  } finally { _md.onderweg.delete(sleutel); }
+  let taak = _md.onderweg.get(sleutel);
+  if (taak) {
+    if (prio < taak.prio) taak.prio = prio;          // nu nodig → naar voren in de wachtrij
+  } else {
+    taak = { prio, naam };
+    taak.belofte = (async () => {
+      const idx = await _mdIndex(bron, run, stap, def.golf ? 'wave' : 'oper');
+      if (!idx) return null;
+      const bereik = bron === 'ecmwf' ? idx.velden.get(def.ec) : idx.zoek(def.gfs);
+      if (!bereik) return null;
+      const d = await new Promise((res, rej) => {
+        Object.assign(taak, { urls: idx.url, bereik, res, rej });
+        _mdPoolStart().wachtrij.push(taak);
+        _mdDispatch();
+      });
+      if (!d) return null;
+      const ingang = { c: _mdInpakken(d.f), lijnen: d.lijnen || null, centra: d.centra || null };
+      _md.velden.set(sleutel, ingang);
+      _mdOpruimen();
+      if (taak.prio < 1) _mdLruZet(_md.uitgepakt, sleutel, d.f, MD_UITGEPAKT_MAX);   // vooruit geladen niet in de kleine uitgepakte cache
+      return ingang;
+    })();
+    _md.onderweg.set(sleutel, taak);
+    taak.belofte.finally(() => _md.onderweg.delete(sleutel)).catch(() => {});
+  }
+  const ingang = await taak.belofte;
+  if (vooruit) return ingang ? true : null;
+  return ingang ? _mdVeldUit(sleutel, ingang) : null;
+}
+
+// Plan de hele tijdlijn, dichtstbijzijnde stappen eerst; een nieuwe planning
+// (na scrollen of wisselen) neemt het over van de vorige.
+async function _mdVooruit(model, run) {
+  const mijnNr = ++_md.vooruitNr, start = _md.t;
+  const volgorde = MD_STAPPEN.map((_, k) => k).sort((a, b) => Math.abs(a - start) - Math.abs(b - start));
+  const actief = new Set();
+  for (const k of volgorde) {
+    if (mijnNr !== _md.vooruitNr || model !== _md.model) return;
+    const afstand = Math.abs(k - start);
+    const geldig = run.t + MD_STAPPEN[k] * 3600e3;
+    const namen = [..._mdNodigeVelden()];
+    if (afstand <= 2 && _md.stroming && !namen.includes('u')) namen.push('u', 'v');   // wind voor de deeltjes vlakbij
+    const p = Promise.all(namen.map(n => _mdVeld(model, n, geldig, afstand + 1))).catch(() => {});
+    actief.add(p); p.finally(() => actief.delete(p));
+    if (actief.size >= 4) await Promise.race(actief);
+  }
 }
 
 function _mdSnelheid(u, v) {
@@ -6211,10 +6394,10 @@ function _mdDrukcentra(fOrigineel) {
 function _mdTekenIsobaren() {
   _md.isoGroep.clearLayers();
   _md.hlGroep.clearLayers();
-  const p = _md.isobaren && _md.huidig && _md.huidig.druk;
-  if (!p) return;
-  let c = _md.isoCache.get(p);
-  if (!c) { c = { lijnen: _mdIsolijnen(p), centra: _mdDrukcentra(p) }; _md.isoCache.set(p, c); }
+  const iso = _md.isobaren && _md.huidig && _md.huidig.iso;
+  if (!iso) return;
+  // Lijnen en centra zijn al in de worker berekend
+  const c = iso.lijnen ? iso : { lijnen: _mdIsolijnen(iso.f), centra: _mdDrukcentra(iso.f) };
   for (const { niveau, lijn } of c.lijnen) {
     const zwaar = niveau % 20 === 0;
     L.polyline(lijn, { renderer: _md.renderer, interactive: false,
@@ -6395,17 +6578,20 @@ function _mdTijdbalk(run) {
 }
 
 // Haal alle velden voor één tijdstap op (luchtdruk voor isobaren, u/v voor stroming, plus de laag)
-async function _mdVeldenVoor(model, geldig) {
+// metWind: ook u/v voor de stromingsdeeltjes. Tijdens scrollen niet — die
+// zie je dan toch niet bewegen, en het scheelt ruim de helft van de download.
+async function _mdVeldenVoor(model, geldig, prio = -1, metWind = true) {
   const laag = MD_LAGEN[_md.laag].veld;
-  const windNodig = _md.stroming || laag === 'wind';
+  const windNodig = laag === 'wind' || (metWind && _md.stroming);
   const [druk, u, v, extra] = await Promise.all([
-    _md.isobaren || laag === 'druk' ? _mdVeld(model, 'druk', geldig) : null,
-    windNodig ? _mdVeld(model, 'u', geldig) : null,
-    windNodig ? _mdVeld(model, 'v', geldig) : null,
-    ['druk', 'wind'].includes(laag) ? null : _mdVeld(model, laag, geldig),
+    _md.isobaren || laag === 'druk' ? _mdVeld(model, 'druk', geldig, prio) : null,
+    windNodig ? _mdVeld(model, 'u', geldig, prio) : null,
+    windNodig ? _mdVeld(model, 'v', geldig, prio) : null,
+    ['druk', 'wind'].includes(laag) ? null : _mdVeld(model, laag, geldig, prio),
   ]);
-  const laagVeld = laag === 'druk' ? druk : laag === 'wind' ? (u && v ? _mdSnelheid(u, v) : null) : extra;
-  return { druk, u, v, laag: laagVeld };
+  const uf = u && u.f, vf = v && v.f;
+  const laagVeld = laag === 'druk' ? druk && druk.f : laag === 'wind' ? (uf && vf ? _mdSnelheid(uf, vf) : null) : extra && extra.f;
+  return { druk: druk && druk.f, iso: druk, u: uf, v: vf, laag: laagVeld };
 }
 
 async function _mdTeken() {
@@ -6417,9 +6603,14 @@ async function _mdTeken() {
     _mdTijdbalk(run);
     const geldig = run.t + MD_STAPPEN[_md.t] * 3600e3;
     document.getElementById('md-tijdlabel').textContent = _mdTijdTekst(geldig);
-    _mdStatus('laden', `${MD_MODELLEN[model].naam} +${MD_STAPPEN[_md.t]} u laden…`);
-    const velden = await _mdVeldenVoor(model, geldig);
+    const scrollen = Date.now() < _md.scrollTot;
+    const statusTimer = setTimeout(() => {       // alleen tonen als het echt even duurt
+      if (nr === _md.tekenNr) _mdStatus('laden', `${MD_MODELLEN[model].naam} +${MD_STAPPEN[_md.t]} u laden…`);
+    }, 120);
+    const velden = await _mdVeldenVoor(model, geldig, -1, !scrollen);
+    clearTimeout(statusTimer);
     if (nr !== _md.tekenNr) return;              // intussen iets anders gekozen
+    if (!velden.u && _md.huidig) { velden.u = _md.huidig.u; velden.v = _md.huidig.v; }   // deeltjes bewegen door
     _md.huidig = velden; _md.geldig = geldig;
     _mdLegenda();
     _mdTekenKleur();
@@ -6428,8 +6619,7 @@ async function _mdTeken() {
     if (_md.detail) _mdDetailNu();
     const opm = !velden.laag && MD_LAGEN[_md.laag].veld !== 'druk' ? ' · deze laag is niet beschikbaar op dit tijdstip' : '';
     _mdStatus('ok', `${MD_MODELLEN[model].lang} · run ${_mdRunTekst(run)}${opm}`);
-    // volgende stap alvast ophalen, zodat afspelen vloeiend loopt
-    if (_md.t < MD_STAPPEN.length - 1) _mdVeldenVoor(model, run.t + MD_STAPPEN[_md.t + 1] * 3600e3).catch(() => {});
+    _mdVooruit(model, run);                      // de rest van de tijdlijn op de achtergrond
   } catch (e) {
     if (nr !== _md.tekenNr) return;
     console.error('[modellen]', e);
@@ -6585,14 +6775,21 @@ function _mdSeg(id, sleutel, bijWissel) {
   });
 }
 _mdSeg('md-model', 'model', () => {
+  _mdSchrapVooruit();
   _md.tijdGezet = false;          // andere run → weer beginnen bij 'nu'
   _mdTeken();
   if (_md.detail) _mdDetailRender();
 });
-_mdSeg('md-laag', 'laag', () => { _mdLegenda(); _mdTeken(); });
+_mdSeg('md-laag', 'laag', () => { _mdSchrapVooruit(); _mdLegenda(); _mdTeken(); });
 document.getElementById('md-isobaren').addEventListener('change', e => { _md.isobaren = e.target.checked; _mdTeken(); });
 document.getElementById('md-stroming').addEventListener('change', e => { _md.stroming = e.target.checked; _mdStroming(); _mdTeken(); });
-document.getElementById('md-schuif').addEventListener('input', e => { _md.t = +e.target.value; _mdTeken(); });
+document.getElementById('md-schuif').addEventListener('input', e => {
+  _md.t = +e.target.value;
+  _md.scrollTot = Date.now() + 350;               // tijdens scrollen geen wind voor de deeltjes
+  clearTimeout(_md.rustTimer);
+  _md.rustTimer = setTimeout(_mdTeken, 380);     // staat de schuif stil: alsnog de wind erbij
+  _mdTeken();
+});
 document.getElementById('md-detail-sluit').addEventListener('click', _mdSluitDetail);
 
 function _mdSpeel(aan) {
