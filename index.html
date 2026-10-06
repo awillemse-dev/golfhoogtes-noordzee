@@ -6803,7 +6803,7 @@ function _mdDetailRender() {
 }
 
 // ── Synoptische beschrijving (Engels) bij een klik, met de nadruk op zeegebieden ──
-// Opgebouwd uit de H/L-centra van het gekozen model: centra rond het punt worden 48 uur
+// Opgebouwd uit de H/L-centra van het gekozen model: centra rond het punt worden 72 uur
 // gevolgd (verplaatsing, verdieping/opvulling), het drukverloop op het punt geeft rug of
 // trog, en de puntverwachting (neerslag, ruimende wind, druk) geeft passerende frontale troggen.
 // Namen: [naam, lat, lon, straal km, zee?]. De kleinste naam die het punt bevat wint.
@@ -7017,11 +7017,11 @@ function _mdZeeOfLand(lat, lon) {
 // ── Tropen: ligging van de ITCZ bij de lengte van het punt ──
 // Per breedte (25°Z–25°N) het gemiddelde over ±5° lengte van neerslag en meridionale wind;
 // de ITCZ ligt waar de noord-zuidwind samenkomt (v neemt af naar het noorden) en het meeste
-// regent. Gemiddeld over vier tijdstippen in de komende 24 uur.
+// regent. Gemiddeld over zes tijdstippen in de komende 72 uur.
 async function _mdItcz(model, run, t0, lon) {
   const { nx, d } = MD_G;
   const s0 = Math.round((t0 - run.t) / 3600e3);
-  const uren = [6, 12, 18, 24].map(h => s0 + h).filter(h => h <= 120);
+  const uren = [6, 18, 30, 42, 54, 66].map(h => s0 + h).filter(h => h <= 120);
   const paren = await Promise.all(uren.map(async h => {
     const t = run.t + h * 3600e3;
     const [v, p] = await Promise.all([_mdVeld(model, 'v', t, 0).catch(() => null), _mdVeld(model, 'regen', t, 0).catch(() => null)]);
@@ -7058,13 +7058,13 @@ function _mdBreedteTekst(lat) { const r = Math.round(lat); return r === 0 ? 'the
 async function _mdTropisch({ model, run, t0, lat, lon, hier, plek, sporen, zinLaag }) {
   const zinnen = [];
   const itcz = await _mdItcz(model, run, t0, lon);
-  // Gemiddelde wind en neerslag op het punt in de komende 24 uur (puntverwachting)
+  // Gemiddelde wind en neerslag op het punt in de komende 72 uur (puntverwachting)
   let u = 0, v = 0, n = 0, regen = 0, buien = 0;
   const det = _md.detail;
   if (det) {
     const ws = _mdReeks(model, 'wind_speed_10m'), wd = _mdReeks(model, 'wind_direction_10m'), pr = _mdReeks(model, 'precipitation');
     det.tijden.forEach((t, k) => {
-      if (t < t0 || t > t0 + 24 * 3600e3 || ws[k] == null) return;
+      if (t < t0 || t > t0 + 72 * 3600e3 || ws[k] == null) return;
       const r = (wd[k] || 0) * Math.PI / 180;
       u += ws[k] * Math.sin(r); v += ws[k] * Math.cos(r); n++;
       regen += pr[k] || 0; if ((pr[k] || 0) >= 1) buien++;
@@ -7079,7 +7079,7 @@ async function _mdTropisch({ model, run, t0, lat, lon, hier, plek, sporen, zinLa
     const pos = `near ${_mdBreedteTekst(itcz.lat)}`, van = 'the forecast area';
     if (itcz.actief === 'weak') zinnen.push(`The ITCZ is weak and poorly defined ${pos} at this longitude${Math.abs(dl) <= 2.5 ? `, giving only isolated showers over ${plek}` : ` and does not affect ${plek}`}.`);
     else if (Math.abs(dl) <= 2.5) zinnen.push(`The ITCZ lies across ${plek} ${pos} and is ${itcz.actief}, bringing ${itcz.actief === 'active' ? 'scattered to numerous showers and thunderstorms' : 'scattered showers and isolated thunderstorms'}.`);
-    else if (Math.abs(dl) <= 5) zinnen.push(`The ITCZ lies ${pos}, about ${nm} nm ${kant} of ${van}, and is ${itcz.actief}; it ${regen >= 5 ? `brings occasional showers to the ${kant} part of ${plek}` : `has only a marginal effect on ${plek}`}.`);
+    else if (Math.abs(dl) <= 5) zinnen.push(`The ITCZ lies ${pos}, about ${nm} nm ${kant} of ${van}, and is ${itcz.actief}; it ${regen >= 15 ? `brings occasional showers to the ${kant} part of ${plek}` : `has only a marginal effect on ${plek}`}.`);
     else zinnen.push(`The ITCZ lies ${pos}, about ${nm} nm ${kant} of ${van}, and does not affect ${plek}.`);
   }
 
@@ -7110,8 +7110,8 @@ async function _mdTropisch({ model, run, t0, lat, lon, hier, plek, sporen, zinLa
   }
   // 4. Buien op het punt zelf
   if (n && !(itcz && Math.abs(lat - itcz.lat) <= 2.5)) {
-    if (buien >= 2) zinnen.push(`Showers are expected over ${plek} during the next 24 hours.`);
-    else if (regen < 0.5) zinnen.push(`Mainly dry over ${plek}.`);
+    if (buien >= 2) zinnen.push(`Showers are expected over ${plek} during the next three days.`);
+    else if (regen < 1) zinnen.push(`Mainly dry over ${plek}.`);
   }
   return zinnen.join(' ');
 }
@@ -7120,7 +7120,8 @@ async function _mdSynoptiek(lat, lon) {
   const model = _md.model, run = await _mdRun(model);
   const t0 = _md.geldig || run.t;
   const s0 = Math.round((t0 - run.t) / 3600e3);
-  const uren = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 42, 48].map(h => s0 + h).filter(h => h <= 120);
+  // 72 uur vooruit: de eerste anderhalve dag per 3 uur, daarna per 6 uur
+  const uren = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 42, 48, 54, 60, 66, 72].map(h => s0 + h).filter(h => h <= 120);
   const velden = await Promise.all(uren.map(h => _mdVeld(model, 'druk', run.t + h * 3600e3, 0).catch(() => null)));
   const stappen = [];
   uren.forEach((h, k) => { if (velden[k]) stappen.push({ t: run.t + h * 3600e3, centra: velden[k].centra || [], f: velden[k].f }); });
@@ -7132,7 +7133,7 @@ async function _mdSynoptiek(lat, lon) {
   const p0 = _mdSample(stappen[0].f, lat, lon);
   const pEind = _mdSample(stappen[Math.min(stappen.length - 1, 8)].f, lat, lon);   // ~24 uur later
 
-  // Relevantie: sterkte gedeeld door de kleinste afstand tot het punt in de komende 48 uur
+  // Relevantie: sterkte gedeeld door de kleinste afstand tot het punt in de komende 72 uur
   const sporen = _mdSporen(stappen).map(s => _mdSpoorInfo(s, lat, lon)).filter(s => s.punten.length >= 2 || s.start === 0);
   const lagen = sporen.filter(s => s.soort === 'L' && s.dmin < 2500)
     .map(s => ({ ...s, rel: Math.max(1016 - s.vmin, 3) / (1 + (s.dmin / 700) ** 2) / (1 + s.start / 16) }))
@@ -7170,8 +7171,10 @@ async function _mdSynoptiek(lat, lon) {
     const over = b.dmin < 350 ? _mdZeeOfLand(b.dichtst.lat, b.dichtst.lon) : null;
     const wanneerOver = _mdWanneer(b.dichtst.t, t0, lon);
     const wanneer = _mdWanneer(b.a.t + Math.min(b.uren, 18) * 3600e3, t0, lon);
-    const doel = naar.naam === waar.naam || (over && naar.naam === over.naam) ? ''
-      : naar.binnen ? (naar.zee ? ` into ${naar.naam}` : ` towards ${naar.naam}`) : ` to ${naar.naam}`;
+    // bij een lange reis het eindpunt met dag: "towards Scandinavia by Thursday"
+    const tegen = b.uren >= 36 ? ` by ${_mdWanneer(b.z.t, t0, lon, true)}` : '';
+    const doel = naar.naam === waar.naam || (over && naar.naam === over.naam) || (over && b.z.t - b.dichtst.t < 12 * 3600e3) ? ''
+      : (naar.binnen ? (naar.zee ? ` into ${naar.naam}` : ` towards ${naar.naam}`) : ` to ${naar.naam}`) + tegen;
     let zin = b.start > 0
       ? `A new low develops ${_mdOver(waar)} ${_mdWanneer(b.a.t, t0, lon)}`
       : `${aanloop}${aanloop ? 'low' : 'Low'} pressure ${_mdOver(waar)}`;
@@ -7180,15 +7183,19 @@ async function _mdSynoptiek(lat, lon) {
     if (b.km < 300) return `${zin}${en} ${b.start > 0 ? 'remains' : 'remains'} slow-moving${over && over.naam !== waar.naam ? ` near ${over.naam}` : ''}${slot}${diep ? `, ${diep}${nadien}` : ''}.`;
     const via = over && over.naam !== waar.naam ? ` across ${over.binnen ? over.naam : `the waters ${over.naam}`}` : '';
     // tijdstip: wanneer de laag langs het punt trekt; ligt hij er nu al, of staat er "in the mean time", dan geen extra tijd
-    const tijd = over && b.dichtst.t - b.a.t >= 6 * 3600e3 ? wanneerOver : (b.start > 0 || slot || over ? '' : wanneer);
-    return `${zin}${en} ${b.start > 0 ? 'tracks' : 'tracks'} ${_mdKompas(b.koers)}${via}${doel}${tijd ? ' ' + tijd : ''}${slot}${diep ? `, ${diep}${nadien}` : ''}.`;
+    const passeert = over && b.dichtst.t - b.a.t >= 6 * 3600e3;
+    const tijd = passeert ? wanneerOver : (b.start > 0 || slot || over || tegen ? '' : wanneer);
+    // volgorde: route en moment van passeren, dan het eindpunt ("… across the Low Countries tomorrow evening, reaching Scandinavia by Thursday")
+    if (via && tijd === wanneerOver && tegen && doel && b.z.t - b.dichtst.t >= 12 * 3600e3)
+      return `${zin}${en} tracks ${_mdKompas(b.koers)}${via} ${tijd}, reaching ${naar.naam}${tegen}${slot}${diep ? `, ${diep}${nadien}` : ''}.`;
+    return `${zin}${en} tracks ${_mdKompas(b.koers)}${via}${doel}${tijd ? ' ' + tijd : ''}${slot}${diep ? `, ${diep}${nadien}` : ''}.`;
   };
 
   // Tropen: ITCZ, passaat/moesson en tropische lagen in plaats van fronten
   if (Math.abs(lat) < 25) return _mdTropisch({ model, run, t0, lat, lon, hier, plek, sporen, zinLaag });
 
   const zinnen = [];
-  const hRelevant = H && (!L1 || H.rel >= 0.25 * L1.rel || H.d0 < 1600);
+  const hRelevant = H && (!L1 || H.rel >= 0.25 * L1.rel || H.d0 < 1600 || p0 >= 1015);
   if (hRelevant) zinnen.push(zinHoog(H));
   if (L1) zinnen.push(zinLaag(L1, '', hRelevant && L1.dmin >= 350 ? ' in the mean time' : ''));
   if (L2) {
@@ -7199,7 +7206,7 @@ async function _mdSynoptiek(lat, lon) {
   if (!zinnen.length) zinnen.push(`A slack pressure pattern covers ${plek}.`);
 
   // Wat komt er bij het punt langs: frontale troggen of een rug
-  const tr = _mdTroggen(t0, t0 + 48 * 3600e3);
+  const tr = _mdTroggen(t0, t0 + 72 * 3600e3);
   const assoc = L1 && L1.dmin < 1500 ? 'Associated frontal troughs' : 'Frontal troughs';
   const assoc1 = L1 && L1.dmin < 1500 ? 'An associated frontal trough' : 'A frontal trough';
   const naRug = pEind - p0 >= 4;
