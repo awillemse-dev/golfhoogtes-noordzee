@@ -6912,7 +6912,7 @@ function _mdGebied(lat, lon, alleenZee = false) {
     const rel = d - r;
     if (!dichtst || rel < dichtst.rel) dichtst = { naam, zee: !!zee, r, la, lo, rel };
   }
-  if (binnen) return { naam: binnen.naam, zee: binnen.zee, binnen: true, la: binnen.la, lo: binnen.lo };
+  if (binnen) return { naam: binnen.naam, zee: binnen.zee, binnen: true, la: binnen.la, lo: binnen.lo, r: binnen.r };
   const k = _mdKompas(_mdKoers(dichtst.la, dichtst.lo, lat, lon));
   return { naam: `${k} of ${dichtst.naam}`, zee: !!dichtst.zee, binnen: false, la: lat, lo: lon };
 }
@@ -6938,34 +6938,6 @@ function _mdWanneer(t, t0, lon, vanaf = false) {
   return vanaf ? wd : `on ${wd}`;
 }
 
-// Volg een centrum door de stappen: telkens het dichtstbijzijnde centrum van dezelfde soort
-function _mdVolg(start, stappen) {
-  const spoor = [{ ...start, t: stappen[0].t }];
-  let cur = start;
-  for (let k = 1; k < stappen.length; k++) {
-    const dt = (stappen[k].t - stappen[k - 1].t) / 3600e3;
-    let best = null, bd = 140 * dt + 150;           // hooguit ~140 km/u verplaatsing
-    for (const c of stappen[k].centra) {
-      if (c.soort !== cur.soort) continue;
-      const d = _mdAfstand(cur.lat, cur.lon, c.lat, c.lon);
-      if (d < bd) { bd = d; best = c; }
-    }
-    if (!best) break;
-    spoor.push({ ...best, t: stappen[k].t });
-    cur = best;
-  }
-  return spoor;
-}
-
-function _mdBeweging(spoor, lon0, t0) {
-  const a = spoor[0], z = spoor[spoor.length - 1];
-  const uren = (z.t - a.t) / 3600e3;
-  const km = _mdAfstand(a.lat, a.lon, z.lat, z.lon);
-  const dv = z.v - a.v;
-  return { uren, km, snel: uren ? km / uren : 0, koers: _mdKoers(a.lat, a.lon, z.lat, z.lon), dv, eind: z,
-           wanneer: _mdWanneer(a.t + Math.min(uren, 18) * 3600e3, t0, lon0) };
-}
-
 // Frontale troggen uit de puntverwachting: drukminimum met neerslag of ruimende wind
 function _mdTroggen(t0, t1) {
   const d = _md.detail; if (!d || Math.abs(d.lat) < 25) return [];   // tropen: geen frontale troggen
@@ -6986,82 +6958,150 @@ function _mdTroggen(t0, t1) {
   return uit;
 }
 
+// Alle centra door de tijd volgen. Centra die onderweg verschijnen (nieuwe lagen) krijgen
+// een eigen spoor, zodat ook een laag die pas morgen ontstaat en dan over het gebied
+// trekt in de beschrijving komt.
+function _mdSporen(stappen) {
+  const sporen = [];
+  let actief = [];
+  stappen.forEach((st, k) => {
+    const dt = k ? (st.t - stappen[k - 1].t) / 3600e3 : 0;
+    const vrij = st.centra.map(c => ({ ...c, t: st.t }));
+    const bezet = new Set();
+    const volgend = [];
+    if (k) {
+      // gretig koppelen: kortste afstanden eerst
+      const paren = [];
+      actief.forEach((s, si) => vrij.forEach((c, ci) => {
+        if (c.soort !== s.soort) return;
+        const d = _mdAfstand(s.punten[s.punten.length - 1].lat, s.punten[s.punten.length - 1].lon, c.lat, c.lon);
+        if (d < 140 * dt + 150) paren.push({ si, ci, d });
+      }));
+      paren.sort((a, b) => a.d - b.d);
+      const sGekoppeld = new Set();
+      for (const p of paren) {
+        if (sGekoppeld.has(p.si) || bezet.has(p.ci)) continue;
+        sGekoppeld.add(p.si); bezet.add(p.ci);
+        actief[p.si].punten.push(vrij[p.ci]);
+        volgend.push(actief[p.si]);
+      }
+    }
+    vrij.forEach((c, ci) => {
+      if (bezet.has(ci)) return;
+      const s = { soort: c.soort, start: k, punten: [c] };
+      sporen.push(s); volgend.push(s);
+    });
+    actief = volgend;
+  });
+  return sporen;
+}
+
+// Kenmerken van een spoor ten opzichte van het aangeklikte punt
+function _mdSpoorInfo(s, lat, lon) {
+  const a = s.punten[0], z = s.punten[s.punten.length - 1];
+  let dmin = Infinity, dichtst = a;
+  for (const p of s.punten) { const d = _mdAfstand(lat, lon, p.lat, p.lon); if (d < dmin) { dmin = d; dichtst = p; } }
+  const vs = s.punten.map(p => p.v);
+  return { ...s, a, z, dmin, dichtst, d0: _mdAfstand(lat, lon, a.lat, a.lon),
+           uren: (z.t - a.t) / 3600e3, km: _mdAfstand(a.lat, a.lon, z.lat, z.lon), koers: _mdKoers(a.lat, a.lon, z.lat, z.lon),
+           dv: z.v - a.v, vmin: Math.min(...vs), vmax: Math.max(...vs) };
+}
+
+// Zeegebied als dat een echt (niet-oceaanbreed) gebied is, anders de kleinste naam die past
+function _mdZeeOfLand(lat, lon) {
+  const z = _mdGebied(lat, lon, true), l = _mdGebied(lat, lon);
+  if (z.binnen && (z.r <= 1000 || !l.binnen)) return z;
+  return l.binnen ? l : z;
+}
+
 async function _mdSynoptiek(lat, lon) {
   const model = _md.model, run = await _mdRun(model);
   const t0 = _md.geldig || run.t;
   const s0 = Math.round((t0 - run.t) / 3600e3);
-  const uren = [0, 3, 6, 9, 12, 15, 18, 21, 24, 30, 36, 42, 48].map(h => s0 + h).filter(h => h <= 120);
+  const uren = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 42, 48].map(h => s0 + h).filter(h => h <= 120);
   const velden = await Promise.all(uren.map(h => _mdVeld(model, 'druk', run.t + h * 3600e3, 0).catch(() => null)));
   const stappen = [];
   uren.forEach((h, k) => { if (velden[k]) stappen.push({ t: run.t + h * 3600e3, centra: velden[k].centra || [], f: velden[k].f }); });
   if (!stappen.length) return null;
 
   // Het punt: liefst een zeegebied; op land de landnaam, anders "the waters W of …"
-  let hier = _mdGebied(lat, lon, true);
-  if (!hier.binnen) { const land = _mdGebied(lat, lon); if (land.binnen) hier = land; }
+  const hier = _mdZeeOfLand(lat, lon);
   const plek = hier.binnen ? hier.naam : `the waters ${hier.naam}`;
   const p0 = _mdSample(stappen[0].f, lat, lon);
   const pEind = _mdSample(stappen[Math.min(stappen.length - 1, 8)].f, lat, lon);   // ~24 uur later
 
-  // Kandidaten: centra binnen 3000 km, gewogen naar sterkte en afstand
-  const kand = stappen[0].centra.map(c => {
-    const d = _mdAfstand(lat, lon, c.lat, c.lon);
-    const sterkte = c.soort === 'H' ? c.v - 1010 : 1016 - c.v;
-    return { c, d, w: Math.max(sterkte, 2) / (1 + (d / 900) ** 2) };
-  }).filter(x => x.d < 3200).sort((a, b) => b.w - a.w);
-  const H = kand.find(x => x.c.soort === 'H'), Lg = kand.find(x => x.c.soort === 'L');
-  const zinnen = [];
-  const hoofd = kand[0];
+  // Relevantie: sterkte gedeeld door de kleinste afstand tot het punt in de komende 48 uur
+  const sporen = _mdSporen(stappen).map(s => _mdSpoorInfo(s, lat, lon)).filter(s => s.punten.length >= 2 || s.start === 0);
+  const lagen = sporen.filter(s => s.soort === 'L' && s.dmin < 2500)
+    .map(s => ({ ...s, rel: Math.max(1016 - s.vmin, 3) / (1 + (s.dmin / 700) ** 2) / (1 + s.start / 16) }))
+    .sort((a, b) => b.rel - a.rel);
+  const hogen = sporen.filter(s => s.soort === 'H' && s.start === 0 && s.d0 < 3000)
+    .map(s => ({ ...s, rel: Math.max(s.vmax - 1010, 3) / (1 + (s.d0 / 900) ** 2) }))
+    .sort((a, b) => b.rel - a.rel);
+  const H = hogen[0];
+  const L1 = lagen[0];
+  const L2 = lagen.slice(1).find(s => s.rel >= 0.35 * L1.rel && s.dmin < 2000 && _mdAfstand(s.dichtst.lat, s.dichtst.lon, L1.dichtst.lat, L1.dichtst.lon) > 600);
 
-  // Beweging als deelwoord ("gradually tracking E tonight") of als werkwoord ("tracks E tonight")
   const hoogBeweging = (b, deelwoord) => {
     const w = (dw, ww) => deelwoord ? dw : ww;
+    const wanneer = _mdWanneer(b.a.t + Math.min(b.uren, 18) * 3600e3, t0, lon);
     if (b.uren < 12) return w('declining', 'declines');
     if (b.km < 250) return b.dv >= 3 ? w('building slowly and remaining slow-moving', 'builds slowly, remaining slow-moving')
       : b.dv <= -3 ? w('slowly declining', 'slowly declines') : w('remaining slow-moving', 'remains slow-moving');
-    let mv = `${b.snel < 20 ? 'gradually ' : ''}${w('tracking', 'tracks')} ${_mdKompas(b.koers)} ${b.wanneer}`;
+    let mv = `${b.km / b.uren < 20 ? 'gradually ' : ''}${w('tracking', 'tracks')} ${_mdKompas(b.koers)} ${wanneer}`;
     if (b.dv <= -4) mv += deelwoord ? ' while declining' : ', declining';
     if (b.dv >= 4) mv += deelwoord ? ' while building' : ', building';
     return mv;
   };
-  const zinHoog = (x, eerst) => {
-    const b = _mdBeweging(_mdVolg(x.c, stappen), lon, t0);
-    const waar = _mdGebied(x.c.lat, x.c.lon);
-    if (x.d < 450) return `High pressure is centred ${_mdOver(hier)}, ${hoogBeweging(b, true)}.`;
-    if (p0 >= 1013 || eerst) return `High pressure ${_mdOver(waar)} extends a ridge over ${plek}, ${hoogBeweging(b, true)}.`;
+  const zinHoog = (b) => {
+    const waar = _mdGebied(b.a.lat, b.a.lon);
+    if (b.d0 < 450) return `High pressure is centred ${_mdOver(hier)}, ${hoogBeweging(b, true)}.`;
+    if (p0 >= 1012 || !L1 || L1.d0 > 1200) return `High pressure ${_mdOver(waar)} extends a ridge over ${plek}, ${hoogBeweging(b, true)}.`;
     return `High pressure ${_mdOver(waar)} ${hoogBeweging(b, false)}.`;
   };
-  const zinLaag = (x, verbind) => {
-    const b = _mdBeweging(_mdVolg(x.c, stappen), lon, t0);
-    const waar = _mdGebied(x.c.lat, x.c.lon);
-    const naar = _mdGebied(b.eind.lat, b.eind.lon);
-    const diep = b.dv <= -12 ? 'deepening rapidly' : b.dv <= -4 ? 'deepening' : b.dv >= 4 ? 'filling' : '';
-    const intussen = verbind ? ' in the mean time' : '';
-    let zin = `Low pressure ${_mdOver(waar)}`;
-    if (b.uren < 12) return `${zin} fills and clears ${b.wanneer}.`;
-    if (b.km < 300) return `${zin} remains slow-moving${intussen}${diep ? `, ${diep}` : ''}.`;
-    const doel = naar.naam === waar.naam ? '' : naar.binnen ? (naar.zee ? ` into ${naar.naam}` : ` towards ${naar.naam}`) : ` to ${naar.naam}`;
-    return `${zin} tracks ${_mdKompas(b.koers)}${doel}${intussen}${diep ? `, ${diep}` : ''}.`;
+  const zinLaag = (b, aanloop, slot) => {
+    const waar = _mdGebied(b.a.lat, b.a.lon), naar = _mdGebied(b.z.lat, b.z.lon);
+    const diepte = b.vmin - b.a.v, opvul = b.z.v - b.vmin;
+    const diep = diepte <= -12 ? 'deepening rapidly' : diepte <= -4 ? 'deepening' : b.dv >= 4 ? 'filling' : '';
+    const nadien = diepte <= -4 && opvul >= 4 ? ' before filling' : '';
+    // trekt de laag over (of vlak langs) het gebied? Dan de route en het moment noemen
+    const over = b.dmin < 350 ? _mdZeeOfLand(b.dichtst.lat, b.dichtst.lon) : null;
+    const wanneerOver = _mdWanneer(b.dichtst.t, t0, lon);
+    const wanneer = _mdWanneer(b.a.t + Math.min(b.uren, 18) * 3600e3, t0, lon);
+    const doel = naar.naam === waar.naam || (over && naar.naam === over.naam) ? ''
+      : naar.binnen ? (naar.zee ? ` into ${naar.naam}` : ` towards ${naar.naam}`) : ` to ${naar.naam}`;
+    let zin = b.start > 0
+      ? `A new low develops ${_mdOver(waar)} ${_mdWanneer(b.a.t, t0, lon)}`
+      : `${aanloop}${aanloop ? 'low' : 'Low'} pressure ${_mdOver(waar)}`;
+    const en = b.start > 0 ? ' and' : '';
+    if (b.uren < 9) return `${zin}${en} ${b.start > 0 ? 'quickly fills' : `fills and clears ${wanneer}`}.`;
+    if (b.km < 300) return `${zin}${en} ${b.start > 0 ? 'remains' : 'remains'} slow-moving${over && over.naam !== waar.naam ? ` near ${over.naam}` : ''}${slot}${diep ? `, ${diep}${nadien}` : ''}.`;
+    const via = over && over.naam !== waar.naam ? ` across ${over.binnen ? over.naam : `the waters ${over.naam}`}` : '';
+    // tijdstip: wanneer de laag langs het punt trekt; ligt hij er nu al, of staat er "in the mean time", dan geen extra tijd
+    const tijd = over && b.dichtst.t - b.a.t >= 6 * 3600e3 ? wanneerOver : (b.start > 0 || slot || over ? '' : wanneer);
+    return `${zin}${en} ${b.start > 0 ? 'tracks' : 'tracks'} ${_mdKompas(b.koers)}${via}${doel}${tijd ? ' ' + tijd : ''}${slot}${diep ? `, ${diep}${nadien}` : ''}.`;
   };
 
-  if (!hoofd) zinnen.push(`A slack pressure pattern covers ${plek}.`);
-  else if (hoofd.c.soort === 'H') {
-    zinnen.push(zinHoog(hoofd, true));
-    if (Lg && Lg.d < 2800) zinnen.push(zinLaag(Lg, true));
-  } else {
-    if (H && H.d < 2800) zinnen.push(zinHoog(H, false));
-    zinnen.push(zinLaag(hoofd, !!(H && H.d < 2800)));
+  const zinnen = [];
+  const hRelevant = H && (!L1 || H.rel >= 0.25 * L1.rel || H.d0 < 1600);
+  if (hRelevant) zinnen.push(zinHoog(H));
+  if (L1) zinnen.push(zinLaag(L1, '', hRelevant && L1.dmin >= 350 ? ' in the mean time' : ''));
+  if (L2) {
+    const k = _mdKompas(_mdKoers(lat, lon, L2.dichtst.lat, L2.dichtst.lon));
+    const verder = { N: 'N', NNE: 'N', NE: 'NE', ENE: 'E', E: 'E', ESE: 'E', SE: 'SE', SSE: 'S', S: 'S', SSW: 'S', SW: 'SW', WSW: 'W', W: 'W', WNW: 'W', NW: 'NW', NNW: 'N' }[k];
+    zinnen.push(zinLaag(L2, `Further ${verder}, `, ''));
   }
+  if (!zinnen.length) zinnen.push(`A slack pressure pattern covers ${plek}.`);
 
   // Wat komt er bij het punt langs: frontale troggen of een rug
   const tr = _mdTroggen(t0, t0 + 48 * 3600e3);
-  const assoc = Lg && Lg.d < 2500 ? 'Associated frontal troughs' : 'Frontal troughs';
-  const assoc1 = Lg && Lg.d < 2500 ? 'An associated frontal trough' : 'A frontal trough';
+  const assoc = L1 && L1.dmin < 1500 ? 'Associated frontal troughs' : 'Frontal troughs';
+  const assoc1 = L1 && L1.dmin < 1500 ? 'An associated frontal trough' : 'A frontal trough';
   const naRug = pEind - p0 >= 4;
   if (tr.length >= 2) zinnen.push(`${assoc} affect ${hier.binnen ? 'most of ' : ''}${plek} from ${_mdWanneer(tr[0].t, t0, lon, true)} onwards.`);
   else if (tr.length === 1) zinnen.push(`${assoc1} crosses ${plek} ${_mdWanneer(tr[0].t, t0, lon)}${naRug ? ', followed by a ridge' : ''}.`);
-  else if (pEind - p0 <= -6) zinnen.push(`Pressure falls steadily over ${plek} during the next 24 hours.`);
-  else if (naRug) zinnen.push(`Pressure rises over ${plek} as ${H && H.d < 2800 ? 'the ridge' : 'a ridge'} builds in.`);
+  else if (pEind - p0 <= -6 && !(L1 && L1.dmin < 350)) zinnen.push(`Pressure falls steadily over ${plek} during the next 24 hours.`);
+  else if (naRug && !(L1 && L1.dmin < 350)) zinnen.push(`Pressure rises over ${plek} as ${hRelevant ? 'the ridge' : 'a ridge'} builds in.`);
   return zinnen.join(' ');
 }
 
