@@ -675,6 +675,9 @@
     .md-tabel tr.nu td { background: var(--accent-soft); }
     .md-pijl { display: inline-block; color: var(--text-dim); margin-right: 3px; }
     .md-laden { padding: 40px 0; text-align: center; color: var(--text-dim); font-size: 0.82rem; }
+    .md-synop { font-size: 0.82rem; line-height: 1.55; color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
+                border-left: 3px solid var(--accent); border-radius: var(--r-md); padding: 10px 12px; margin: 0 0 18px; transition: opacity .2s; }
+    .md-synop.bezig { opacity: .5; }
 
     /* ── Vakantieweer ────────────────────────────────────────────────────── */
     #vakantie-panel {
@@ -5851,7 +5854,13 @@ async function _mdFetch(urls, init, soort) {
       if (r.status === 404) { nietGevonden++; if (nietGevonden >= urls.length) return null; continue; }
       if (r.ok) return soort === 'tekst' ? await r.text() : soort === 'buffer' ? await r.arrayBuffer() : true;
       fout = new Error(`HTTP ${r.status}`);
-    } catch (e) { fout = e; }
+    } catch (e) {
+      // ECMWF stuurt bij een 404 geen CORS-header mee: de browser meldt dan alleen een
+      // netwerkfout. Bij het zoeken naar de nieuwste run betekent dat 'nog niet klaar' →
+      // door naar de vorige run (anders bleef de kaart elke ochtend leeg tot ~08 UTC).
+      if (soort === 'bestaat' && e.name === 'TypeError') return null;
+      fout = e;
+    }
     finally { clearTimeout(tid); }
     await new Promise(res => setTimeout(res, 250 * (poging + 1)));
   }
@@ -6736,6 +6745,7 @@ function _mdDetailNu() {
     kaart('Bewolking', _mdGetal(w('cloud_cover')), '%');
   document.getElementById('md-nu-tijd').textContent = `${MD_MODELLEN[m].naam} · ${_mdTijdTekst(_md.detail.tijden[k])}`;
   document.querySelectorAll('#md-tabel tr[data-k]').forEach(tr => tr.classList.toggle('nu', +tr.dataset.k === k));
+  _mdSynopPlan();
 }
 
 function _mdDetailRender() {
@@ -6757,6 +6767,7 @@ function _mdDetailRender() {
   });
 
   body.innerHTML =
+    `<div class="md-sectie" id="md-synop-kop">Synoptische situatie · ${MD_MODELLEN[m].naam}</div><p class="md-synop" id="md-synop" lang="en">Analysing the pressure pattern…</p>` +
     `<div class="md-sectie" id="md-nu-tijd">–</div><div class="md-nu" id="md-nu"></div>` +
     `<div class="md-sectie">Luchtdruk per model (hPa)</div><div class="md-grafiek"><canvas id="md-g-druk"></canvas></div>` +
     `<div class="md-sectie">Wind per model (kt)</div><div class="md-grafiek"><canvas id="md-g-wind"></canvas></div>` +
@@ -6787,7 +6798,296 @@ function _mdDetailRender() {
   grafiek('md-g-druk', 'pressure_msl');
   grafiek('md-g-wind', 'wind_speed_10m');
   grafiek('md-g-temp', 'temperature_2m');
+  _mdSynopSleutel = '';
   _mdDetailNu();
+}
+
+// ── Synoptische beschrijving (Engels) bij een klik, met de nadruk op zeegebieden ──
+// Opgebouwd uit de H/L-centra van het gekozen model: centra rond het punt worden 48 uur
+// gevolgd (verplaatsing, verdieping/opvulling), het drukverloop op het punt geeft rug of
+// trog, en de puntverwachting (neerslag, ruimende wind, druk) geeft passerende frontale troggen.
+// Namen: [naam, lat, lon, straal km, zee?]. De kleinste naam die het punt bevat wint.
+const MD_GEBIEDEN = [
+  // Noordwest-Europese wateren
+  ['the northern North Sea', 59.5, 2, 220, 1], ['the central North Sea', 56, 3, 220, 1], ['the southern North Sea', 53.3, 2.8, 170, 1],
+  ['the German Bight', 54.3, 7.5, 110, 1], ['the Skagerrak', 57.8, 9.5, 90, 1], ['the Kattegat', 56.8, 11.6, 80, 1],
+  ['the western Baltic', 54.8, 12.5, 130, 1], ['the southern Baltic', 55.3, 16.5, 180, 1], ['the central Baltic', 57.8, 19.5, 210, 1],
+  ['the Gulf of Finland', 59.8, 26, 150, 1], ['the Gulf of Bothnia', 63, 20.5, 260, 1], ['the English Channel', 50.2, -2, 170, 1],
+  ['the Dover Strait', 51, 1.5, 50, 1], ['the Irish Sea', 53.8, -4.8, 130, 1], ['the Celtic Sea', 50.5, -8, 200, 1],
+  ['the Bay of Biscay', 45.5, -4.5, 280, 1], ['the Rockall area', 57.5, -14, 260, 1], ['the Norwegian Sea', 67, 3, 520, 1],
+  ['the Barents Sea', 74, 40, 600, 1], ['the White Sea', 65.5, 38, 200, 1], ['the Greenland Sea', 75, -5, 500, 1],
+  ['the Denmark Strait', 66.5, -26, 200, 1], ['the waters around the Faroes', 62, -7, 150, 1], ['the Shetland area', 60.5, -1, 120, 1],
+  ['the northeast Atlantic', 50, -20, 900, 1], ['the Iberian coastal waters', 41, -10.5, 250, 1], ['the central North Atlantic', 40, -40, 1400, 1],
+  ['the northwest Atlantic', 42, -60, 700, 1], ['the Labrador Sea', 58, -55, 500, 1], ['the Davis Strait', 66, -58, 300, 1],
+  ['Baffin Bay', 73, -66, 450, 1], ['Hudson Bay', 59, -86, 600, 1], ['the Gulf of St Lawrence', 48.5, -62, 250, 1],
+  ['the Gulf of Maine', 43, -68.5, 180, 1], ['the US East Coast waters', 36, -73, 350, 1], ['the Sargasso Sea', 29, -62, 800, 1],
+  ['the Gulf of Mexico', 25, -90, 650, 1], ['the Caribbean Sea', 15, -75, 1000, 1], ['the tropical North Atlantic', 15, -40, 1500, 1],
+  ['the waters off Northwest Africa', 25, -17, 500, 1], ['the Gulf of Guinea', 2, 3, 700, 1], ['the South Atlantic', -30, -15, 2200, 1],
+  ['the waters off Brazil', -20, -36, 800, 1], ['the waters off the River Plate', -37, -54, 350, 1],
+  // Middellandse Zee, Zwarte Zee, Kaspische Zee
+  ['the Strait of Gibraltar', 36, -5.5, 60, 1], ['the Alboran Sea', 36, -3.5, 150, 1], ['the Balearic Sea', 40, 2.5, 250, 1],
+  ['the Gulf of Lion', 42.8, 4.3, 120, 1], ['the Ligurian Sea', 43.5, 8.8, 120, 1], ['the Tyrrhenian Sea', 40, 12, 300, 1],
+  ['the Adriatic', 43, 15.5, 300, 1], ['the Ionian Sea', 37.5, 18.5, 350, 1], ['the central Mediterranean', 35, 15, 350, 1],
+  ['the Aegean', 38.5, 25, 280, 1], ['the eastern Mediterranean', 34, 30, 450, 1], ['the western Mediterranean', 38.5, 5, 400, 1],
+  ['the Black Sea', 43.3, 34, 450, 1], ['the Sea of Azov', 46, 36.5, 120, 1], ['the northern Caspian Sea', 45.5, 50, 250, 1],
+  ['the Caspian Sea', 41, 51, 500, 1],
+  // Indische Oceaan
+  ['the Red Sea', 21, 38.5, 600, 1], ['the Gulf of Aden', 12.5, 47, 300, 1], ['the Persian Gulf', 27, 51.5, 400, 1],
+  ['the Gulf of Oman', 24.5, 58.5, 200, 1], ['the Arabian Sea', 15, 63, 900, 1], ['the Bay of Bengal', 15, 88, 800, 1],
+  ['the Andaman Sea', 10, 96, 400, 1], ['the equatorial Indian Ocean', 0, 75, 1500, 1], ['the southern Indian Ocean', -30, 80, 2500, 1],
+  ['the Mozambique Channel', -18, 41, 500, 1], ['the waters off South Africa', -36, 22, 500, 1],
+  // Azië en de Grote Oceaan
+  ['the Strait of Malacca', 4, 100, 250, 1], ['the Java Sea', -5, 111, 450, 1], ['the South China Sea', 13, 114, 900, 1],
+  ['the Gulf of Thailand', 9.5, 102, 300, 1], ['the Philippine Sea', 20, 132, 1000, 1], ['the East China Sea', 29, 125, 450, 1],
+  ['the Yellow Sea', 35.5, 123, 350, 1], ['the Bohai Sea', 38.8, 120, 150, 1], ['the Sea of Japan', 40.5, 135, 500, 1],
+  ['the Sea of Okhotsk', 54, 149, 650, 1], ['the Bering Sea', 58, -178, 800, 1], ['the Gulf of Alaska', 56, -145, 600, 1],
+  ['the northeast Pacific', 45, -140, 1200, 1], ['the US West Coast waters', 38, -125, 400, 1], ['the waters off Baja California', 26, -114, 400, 1],
+  ['the eastern tropical Pacific', 10, -100, 1500, 1], ['the central North Pacific', 35, -170, 1800, 1], ['the northwest Pacific', 40, 155, 1200, 1],
+  ['the tropical western Pacific', 10, 150, 1500, 1], ['the Coral Sea', -17, 155, 700, 1], ['the Tasman Sea', -38, 160, 700, 1],
+  ['the Arafura Sea', -9.5, 135, 450, 1], ['the Timor Sea', -11, 127, 400, 1], ['the Great Australian Bight', -35, 130, 500, 1],
+  ['the Bass Strait', -39.5, 146, 150, 1], ['the waters off Western Australia', -27, 110, 700, 1], ['the South Pacific', -30, -130, 2500, 1],
+  ['the waters off Chile', -35, -76, 600, 1], ['the Drake Passage', -58, -65, 400, 1], ['the Weddell Sea', -70, -40, 800, 1],
+  ['the Ross Sea', -75, -175, 700, 1], ['the Southern Ocean', -55, 0, 1600, 1], ['the Southern Ocean', -55, 60, 1600, 1],
+  ['the Southern Ocean', -55, 120, 1600, 1], ['the Southern Ocean', -55, 180, 1600, 1], ['the Southern Ocean', -55, -120, 1600, 1],
+  ['the Arctic Ocean', 85, 0, 1500, 1], ['the Kara Sea', 76, 70, 500, 1], ['the Laptev Sea', 76, 125, 500, 1],
+  ['the East Siberian Sea', 73, 160, 500, 1], ['the Chukchi Sea', 69, -170, 400, 1], ['the Beaufort Sea', 72, -140, 500, 1],
+  // Land en eilanden (voor de ligging van drukcentra)
+  ['the Azores', 38.5, -28, 350, 0], ['Madeira', 32.7, -17, 150, 0], ['the Canary Islands', 28.3, -16, 200, 0],
+  ['Iceland', 65, -18, 280, 0], ['Jan Mayen', 71, -8.5, 80, 0], ['Svalbard', 78, 17, 250, 0], ['Novaya Zemlya', 74, 56, 300, 0],
+  ['Greenland', 72, -40, 900, 0], ['southern Greenland', 62.5, -45, 350, 0], ['Ireland', 53.2, -8, 200, 0], ['Scotland', 57, -4.5, 200, 0],
+  ['England', 52.5, -1.5, 220, 0], ['the British Isles', 54, -3, 500, 0], ['Norway', 62, 9, 350, 0], ['northern Norway', 69, 18, 300, 0],
+  ['Sweden', 61, 15, 350, 0], ['Finland', 63, 26, 350, 0], ['Scandinavia', 62, 14, 700, 0], ['Denmark', 56, 9.5, 150, 0],
+  ['the Low Countries', 51.8, 5, 150, 0], ['Germany', 51, 10, 300, 0], ['Poland', 52, 19, 300, 0], ['the Baltic States', 57, 24, 250, 0],
+  ['Belarus', 53.5, 28, 250, 0], ['Ukraine', 49, 31, 450, 0], ['western Russia', 56, 40, 700, 0], ['northwest Russia', 64, 40, 600, 0],
+  ['the Urals', 58, 60, 600, 0], ['France', 46.5, 2.5, 400, 0], ['Iberia', 40, -4, 450, 0], ['Morocco', 32, -6, 350, 0],
+  ['Algeria', 30, 3, 700, 0], ['Tunisia', 34, 9, 200, 0], ['Libya', 28, 17, 600, 0], ['Egypt', 27, 30, 500, 0],
+  ['the Alps', 46.5, 10, 250, 0], ['Italy', 42.5, 12.5, 350, 0], ['Sardinia', 40, 9, 130, 0], ['Sicily', 37.5, 14, 130, 0],
+  ['the Balkans', 43, 21, 350, 0], ['Greece', 39.5, 22, 250, 0], ['Crete', 35.2, 24.9, 100, 0], ['Cyprus', 35, 33, 100, 0],
+  ['Turkey', 39, 35, 550, 0], ['central Europe', 50, 14, 500, 0], ['eastern Europe', 50, 28, 700, 0], ['western Europe', 48, 3, 700, 0],
+  ['the Middle East', 32, 40, 600, 0], ['Iran', 32, 54, 700, 0], ['Saudi Arabia', 24, 45, 800, 0], ['Kazakhstan', 48, 68, 1000, 0],
+  ['western Siberia', 60, 75, 1000, 0], ['central Siberia', 62, 100, 1000, 0], ['eastern Siberia', 64, 135, 1000, 0],
+  ['Mongolia', 46.5, 103, 600, 0], ['northern China', 40, 112, 700, 0], ['northeast China', 45, 126, 500, 0], ['southern China', 25, 112, 600, 0],
+  ['the Tibetan Plateau', 33, 88, 800, 0], ['India', 21, 78, 1000, 0], ['Sri Lanka', 7.8, 80.7, 150, 0], ['Japan', 36.5, 138.5, 500, 0],
+  ['Korea', 37, 127.5, 250, 0], ['Taiwan', 23.7, 121, 150, 0], ['the Philippines', 12, 122, 500, 0], ['Indonesia', -2, 115, 1200, 0],
+  ['Kamchatka', 56, 160, 400, 0], ['the Kuril Islands', 46.5, 151, 300, 0], ['the Aleutians', 52, -175, 700, 0], ['Alaska', 64, -152, 700, 0],
+  ['western Canada', 55, -120, 800, 0], ['northern Canada', 66, -100, 1200, 0], ['the Canadian Prairies', 52, -105, 600, 0],
+  ['eastern Canada', 50, -75, 700, 0], ['Newfoundland', 48.5, -56, 250, 0], ['Labrador', 54, -62, 350, 0], ['the Great Lakes', 45, -84, 400, 0],
+  ['the US Northeast', 42, -74, 350, 0], ['the US Southeast', 33, -84, 500, 0], ['Florida', 28, -81.5, 250, 0], ['Texas', 31, -99, 500, 0],
+  ['the US Midwest', 41, -93, 600, 0], ['the Rockies', 41, -108, 600, 0], ['the Great Basin', 39, -117, 400, 0], ['California', 36.5, -119.5, 400, 0],
+  ['the Pacific Northwest', 46.5, -121, 350, 0], ['Mexico', 23, -102, 700, 0], ['Central America', 13, -86, 500, 0], ['Cuba', 21.5, -79, 300, 0],
+  ['Bermuda', 32.3, -64.8, 150, 0], ['Hawaii', 20.5, -157, 350, 0], ['northern South America', 5, -65, 1000, 0], ['Brazil', -10, -50, 1500, 0],
+  ['Argentina', -35, -64, 800, 0], ['Patagonia', -46, -69, 500, 0], ['West Africa', 12, -5, 1000, 0], ['Central Africa', 2, 20, 1200, 0],
+  ['East Africa', 0, 37, 800, 0], ['southern Africa', -25, 25, 800, 0], ['Madagascar', -19, 46.5, 400, 0], ['Australia', -25, 134, 1500, 0],
+  ['Western Australia', -26, 121, 800, 0], ['southeast Australia', -35, 147, 500, 0], ['Tasmania', -42, 146.5, 150, 0],
+  ['New Zealand', -41.5, 173, 450, 0], ['Antarctica', -80, 0, 2000, 0],
+  // Grote vangnetten (de kleinste passende naam wint, deze dus alleen als niets anders past)
+  ['the North Atlantic', 40, -35, 3500, 1], ['the North Pacific', 35, -165, 5000, 1], ['the South Pacific', -35, -120, 5500, 1],
+  ['the Indian Ocean', -20, 80, 5000, 1], ['the South Atlantic', -35, -15, 3500, 1], ['the Arctic Ocean', 82, 0, 2200, 1],
+  ['the Southern Ocean', -65, 30, 1800, 1], ['the Southern Ocean', -65, 90, 1800, 1], ['the Southern Ocean', -65, 150, 1800, 1],
+  ['the Southern Ocean', -65, -150, 1800, 1], ['the Southern Ocean', -65, -90, 1800, 1], ['the Southern Ocean', -65, -30, 1800, 1],
+  ['Europe', 50, 15, 2000, 0], ['Siberia', 62, 105, 2500, 0], ['Asia', 40, 90, 4000, 0], ['North America', 45, -100, 3200, 0],
+  ['South America', -15, -60, 3200, 0], ['Africa', 5, 20, 4000, 0], ['Australia', -25, 134, 2200, 0],
+];
+
+function _mdAfstand(la1, lo1, la2, lo2) {        // km
+  const r = Math.PI / 180, dla = (la2 - la1) * r, dlo = (lo2 - lo1) * r;
+  const a = Math.sin(dla / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dlo / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+function _mdKoers(la1, lo1, la2, lo2) {          // graden, 0 = noord
+  const r = Math.PI / 180, y = Math.sin((lo2 - lo1) * r) * Math.cos(la2 * r);
+  const x = Math.cos(la1 * r) * Math.sin(la2 * r) - Math.sin(la1 * r) * Math.cos(la2 * r) * Math.cos((lo2 - lo1) * r);
+  return (Math.atan2(y, x) / r + 360) % 360;
+}
+const MD_KOMPAS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+function _mdKompas(g) { return MD_KOMPAS[Math.round(g / 22.5) % 16]; }
+
+// Naam van een plek: { naam, zee, binnen } – binnen = de plek ligt in het gebied, anders "W of Ireland"
+function _mdGebied(lat, lon, alleenZee = false) {
+  let binnen = null, dichtst = null;
+  for (const [naam, la, lo, r, zee] of MD_GEBIEDEN) {
+    if (alleenZee && !zee) continue;
+    const d = _mdAfstand(lat, lon, la, lo);
+    if (d <= r && (!binnen || r < binnen.r)) binnen = { naam, zee: !!zee, r, la, lo };
+    const rel = d - r;
+    if (!dichtst || rel < dichtst.rel) dichtst = { naam, zee: !!zee, r, la, lo, rel };
+  }
+  if (binnen) return { naam: binnen.naam, zee: binnen.zee, binnen: true, la: binnen.la, lo: binnen.lo };
+  const k = _mdKompas(_mdKoers(dichtst.la, dichtst.lo, lat, lon));
+  return { naam: `${k} of ${dichtst.naam}`, zee: !!dichtst.zee, binnen: false, la: lat, lo: lon };
+}
+function _mdOver(g) { return g.binnen ? `over ${g.naam}` : g.naam; }   // "over Iceland" / "W of Ireland"
+
+// Tijdsaanduiding in lokale zonnetijd van het punt, relatief tot het kaartmoment t0
+function _mdWanneer(t, t0, lon, vanaf = false) {
+  const lok = ms => new Date(ms + lon / 15 * 3600e3);
+  const a = lok(t0), b = lok(t);
+  const dag = d => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  let dd = Math.round((dag(b) - dag(a)) / 864e5), u = b.getUTCHours();
+  if (u < 6 && dd >= 1) { dd -= 1; u += 24; }      // nacht hoort bij de avond ervoor
+  const deel = u < 6 ? 'early' : u < 12 ? 'morning' : u < 18 ? 'afternoon' : u < 24 ? 'evening' : 'night';
+  if (dd <= 0) {
+    if (t - t0 < 3 * 3600e3) return vanaf ? 'now' : 'at first';
+    return { early: 'early this morning', morning: 'this morning', afternoon: 'this afternoon', evening: 'this evening', night: 'tonight' }[deel];
+  }
+  if (dd === 1) {
+    if (vanaf) return deel === 'night' ? 'tomorrow night' : deel === 'evening' ? 'tomorrow evening' : 'tomorrow';
+    return { morning: 'tomorrow morning', afternoon: 'tomorrow afternoon', evening: 'tomorrow evening', night: 'tomorrow night' }[deel] || 'tomorrow';
+  }
+  const wd = b.toLocaleDateString('en-GB', { weekday: 'long', timeZone: 'UTC' });
+  return vanaf ? wd : `on ${wd}`;
+}
+
+// Volg een centrum door de stappen: telkens het dichtstbijzijnde centrum van dezelfde soort
+function _mdVolg(start, stappen) {
+  const spoor = [{ ...start, t: stappen[0].t }];
+  let cur = start;
+  for (let k = 1; k < stappen.length; k++) {
+    const dt = (stappen[k].t - stappen[k - 1].t) / 3600e3;
+    let best = null, bd = 140 * dt + 150;           // hooguit ~140 km/u verplaatsing
+    for (const c of stappen[k].centra) {
+      if (c.soort !== cur.soort) continue;
+      const d = _mdAfstand(cur.lat, cur.lon, c.lat, c.lon);
+      if (d < bd) { bd = d; best = c; }
+    }
+    if (!best) break;
+    spoor.push({ ...best, t: stappen[k].t });
+    cur = best;
+  }
+  return spoor;
+}
+
+function _mdBeweging(spoor, lon0, t0) {
+  const a = spoor[0], z = spoor[spoor.length - 1];
+  const uren = (z.t - a.t) / 3600e3;
+  const km = _mdAfstand(a.lat, a.lon, z.lat, z.lon);
+  const dv = z.v - a.v;
+  return { uren, km, snel: uren ? km / uren : 0, koers: _mdKoers(a.lat, a.lon, z.lat, z.lon), dv, eind: z,
+           wanneer: _mdWanneer(a.t + Math.min(uren, 18) * 3600e3, t0, lon0) };
+}
+
+// Frontale troggen uit de puntverwachting: drukminimum met neerslag of ruimende wind
+function _mdTroggen(t0, t1) {
+  const d = _md.detail; if (!d || Math.abs(d.lat) < 25) return [];   // tropen: geen frontale troggen
+  const p = _mdReeks(_md.model, 'pressure_msl'), r = _mdReeks(_md.model, 'precipitation'), w = _mdReeks(_md.model, 'wind_direction_10m');
+  const uit = [];
+  for (let k = 2; k < d.tijden.length - 2; k++) {
+    const t = +d.tijden[k];
+    if (t < t0 || t > t1 || p[k] == null) continue;
+    const min = p[k] <= p[k - 1] && p[k] < p[k + 1];
+    const daling = Math.max(...[p[k - 4], p[k - 3], p[k - 2]].filter(x => x != null)) - p[k];
+    const stijging = Math.max(...[p[k + 1], p[k + 2]].filter(x => x != null)) - p[k];
+    const regen = [r[k - 1], r[k], r[k + 1]].reduce((s, x) => s + (x || 0), 0);
+    let ruim = 0;
+    if (w[k - 2] != null && w[k + 2] != null) ruim = ((w[k + 2] - w[k - 2] + 540) % 360) - 180;   // + = ruimend (NH)
+    // Strenger dan alleen een drukdal: de dagelijkse drukgolf (tot ~2 hPa, vooral in de tropen) is geen front
+    if (min && daling >= 2 && stijging >= 1 && ((regen >= 1 && Math.abs(ruim) >= 20) || Math.abs(ruim) >= 45)) uit.push({ t, regen, ruim });
+  }
+  return uit;
+}
+
+async function _mdSynoptiek(lat, lon) {
+  const model = _md.model, run = await _mdRun(model);
+  const t0 = _md.geldig || run.t;
+  const s0 = Math.round((t0 - run.t) / 3600e3);
+  const uren = [0, 3, 6, 9, 12, 15, 18, 21, 24, 30, 36, 42, 48].map(h => s0 + h).filter(h => h <= 120);
+  const velden = await Promise.all(uren.map(h => _mdVeld(model, 'druk', run.t + h * 3600e3, 0).catch(() => null)));
+  const stappen = [];
+  uren.forEach((h, k) => { if (velden[k]) stappen.push({ t: run.t + h * 3600e3, centra: velden[k].centra || [], f: velden[k].f }); });
+  if (!stappen.length) return null;
+
+  // Het punt: liefst een zeegebied; op land de landnaam, anders "the waters W of …"
+  let hier = _mdGebied(lat, lon, true);
+  if (!hier.binnen) { const land = _mdGebied(lat, lon); if (land.binnen) hier = land; }
+  const plek = hier.binnen ? hier.naam : `the waters ${hier.naam}`;
+  const p0 = _mdSample(stappen[0].f, lat, lon);
+  const pEind = _mdSample(stappen[Math.min(stappen.length - 1, 8)].f, lat, lon);   // ~24 uur later
+
+  // Kandidaten: centra binnen 3000 km, gewogen naar sterkte en afstand
+  const kand = stappen[0].centra.map(c => {
+    const d = _mdAfstand(lat, lon, c.lat, c.lon);
+    const sterkte = c.soort === 'H' ? c.v - 1010 : 1016 - c.v;
+    return { c, d, w: Math.max(sterkte, 2) / (1 + (d / 900) ** 2) };
+  }).filter(x => x.d < 3200).sort((a, b) => b.w - a.w);
+  const H = kand.find(x => x.c.soort === 'H'), Lg = kand.find(x => x.c.soort === 'L');
+  const zinnen = [];
+  const hoofd = kand[0];
+
+  // Beweging als deelwoord ("gradually tracking E tonight") of als werkwoord ("tracks E tonight")
+  const hoogBeweging = (b, deelwoord) => {
+    const w = (dw, ww) => deelwoord ? dw : ww;
+    if (b.uren < 12) return w('declining', 'declines');
+    if (b.km < 250) return b.dv >= 3 ? w('building slowly and remaining slow-moving', 'builds slowly, remaining slow-moving')
+      : b.dv <= -3 ? w('slowly declining', 'slowly declines') : w('remaining slow-moving', 'remains slow-moving');
+    let mv = `${b.snel < 20 ? 'gradually ' : ''}${w('tracking', 'tracks')} ${_mdKompas(b.koers)} ${b.wanneer}`;
+    if (b.dv <= -4) mv += deelwoord ? ' while declining' : ', declining';
+    if (b.dv >= 4) mv += deelwoord ? ' while building' : ', building';
+    return mv;
+  };
+  const zinHoog = (x, eerst) => {
+    const b = _mdBeweging(_mdVolg(x.c, stappen), lon, t0);
+    const waar = _mdGebied(x.c.lat, x.c.lon);
+    if (x.d < 450) return `High pressure is centred ${_mdOver(hier)}, ${hoogBeweging(b, true)}.`;
+    if (p0 >= 1013 || eerst) return `High pressure ${_mdOver(waar)} extends a ridge over ${plek}, ${hoogBeweging(b, true)}.`;
+    return `High pressure ${_mdOver(waar)} ${hoogBeweging(b, false)}.`;
+  };
+  const zinLaag = (x, verbind) => {
+    const b = _mdBeweging(_mdVolg(x.c, stappen), lon, t0);
+    const waar = _mdGebied(x.c.lat, x.c.lon);
+    const naar = _mdGebied(b.eind.lat, b.eind.lon);
+    const diep = b.dv <= -12 ? 'deepening rapidly' : b.dv <= -4 ? 'deepening' : b.dv >= 4 ? 'filling' : '';
+    const intussen = verbind ? ' in the mean time' : '';
+    let zin = `Low pressure ${_mdOver(waar)}`;
+    if (b.uren < 12) return `${zin} fills and clears ${b.wanneer}.`;
+    if (b.km < 300) return `${zin} remains slow-moving${intussen}${diep ? `, ${diep}` : ''}.`;
+    const doel = naar.naam === waar.naam ? '' : naar.binnen ? (naar.zee ? ` into ${naar.naam}` : ` towards ${naar.naam}`) : ` to ${naar.naam}`;
+    return `${zin} tracks ${_mdKompas(b.koers)}${doel}${intussen}${diep ? `, ${diep}` : ''}.`;
+  };
+
+  if (!hoofd) zinnen.push(`A slack pressure pattern covers ${plek}.`);
+  else if (hoofd.c.soort === 'H') {
+    zinnen.push(zinHoog(hoofd, true));
+    if (Lg && Lg.d < 2800) zinnen.push(zinLaag(Lg, true));
+  } else {
+    if (H && H.d < 2800) zinnen.push(zinHoog(H, false));
+    zinnen.push(zinLaag(hoofd, !!(H && H.d < 2800)));
+  }
+
+  // Wat komt er bij het punt langs: frontale troggen of een rug
+  const tr = _mdTroggen(t0, t0 + 48 * 3600e3);
+  const assoc = Lg && Lg.d < 2500 ? 'Associated frontal troughs' : 'Frontal troughs';
+  const assoc1 = Lg && Lg.d < 2500 ? 'An associated frontal trough' : 'A frontal trough';
+  const naRug = pEind - p0 >= 4;
+  if (tr.length >= 2) zinnen.push(`${assoc} affect ${hier.binnen ? 'most of ' : ''}${plek} from ${_mdWanneer(tr[0].t, t0, lon, true)} onwards.`);
+  else if (tr.length === 1) zinnen.push(`${assoc1} crosses ${plek} ${_mdWanneer(tr[0].t, t0, lon)}${naRug ? ', followed by a ridge' : ''}.`);
+  else if (pEind - p0 <= -6) zinnen.push(`Pressure falls steadily over ${plek} during the next 24 hours.`);
+  else if (naRug) zinnen.push(`Pressure rises over ${plek} as ${H && H.d < 2800 ? 'the ridge' : 'a ridge'} builds in.`);
+  return zinnen.join(' ');
+}
+
+let _mdSynopNr = 0, _mdSynopSleutel = '', _mdSynopTimer = null;
+function _mdSynopPlan(direct = false) {
+  const el = document.getElementById('md-synop');
+  if (!el || !_md.detail) return;
+  const sleutel = `${_md.model}|${_md.geldig}|${_md.detail.lat}|${_md.detail.lon}`;
+  if (sleutel === _mdSynopSleutel) return;
+  clearTimeout(_mdSynopTimer);
+  _mdSynopTimer = setTimeout(async () => {
+    const nr = ++_mdSynopNr;
+    _mdSynopSleutel = sleutel;
+    el.classList.add('bezig');
+    const kop = document.getElementById('md-synop-kop');
+    if (kop) kop.textContent = `Synoptische situatie · ${MD_MODELLEN[_md.model].naam}`;
+    try {
+      const tekst = await _mdSynoptiek(_md.detail.lat, _md.detail.lon);
+      if (nr !== _mdSynopNr || !document.getElementById('md-synop')) return;
+      el.textContent = tekst || 'No synoptic analysis available for this time.';
+    } catch (e) {
+      console.error('[synoptiek]', e);
+      if (nr === _mdSynopNr) el.textContent = 'Synoptic description not available.';
+    }
+    el.classList.remove('bezig');
+  }, direct ? 0 : 350);
 }
 
 function _mdSluitDetail() {
