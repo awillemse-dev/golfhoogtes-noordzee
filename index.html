@@ -7135,7 +7135,7 @@ async function _mdSynoptiek(lat, lon) {
 
   // Relevantie: sterkte gedeeld door de kleinste afstand tot het punt in de komende 72 uur
   const sporen = _mdSporen(stappen).map(s => _mdSpoorInfo(s, lat, lon)).filter(s => s.punten.length >= 2 || s.start === 0);
-  const lagen = sporen.filter(s => s.soort === 'L' && s.dmin < 2500)
+  const lagen = sporen.filter(s => s.soort === 'L' && s.dmin < 2500 && s.d0 < 3500)
     .map(s => ({ ...s, rel: Math.max(1016 - s.vmin, 3) / (1 + (s.dmin / 700) ** 2) / (1 + s.start / 16) }))
     .sort((a, b) => b.rel - a.rel);
   const hogen = sporen.filter(s => s.soort === 'H' && s.start === 0 && s.d0 < 3000)
@@ -7143,7 +7143,9 @@ async function _mdSynoptiek(lat, lon) {
     .sort((a, b) => b.rel - a.rel);
   const H = hogen[0];
   const L1 = lagen[0];
-  const L2 = lagen.slice(1).find(s => s.rel >= 0.35 * L1.rel && s.dmin < 2000 && _mdAfstand(s.dichtst.lat, s.dichtst.lon, L1.dichtst.lat, L1.dichtst.lon) > 600);
+  // Tweede laag alleen als die nu al in de buurt ligt én dichtbij komt: geen lagen van de andere kant van de oceaan
+  const L2 = lagen.slice(1).find(s => s.rel >= 0.35 * L1.rel && s.dmin < 1200 && s.d0 < 2500
+    && _mdAfstand(s.dichtst.lat, s.dichtst.lon, L1.dichtst.lat, L1.dichtst.lon) > 600);
 
   const hoogBeweging = (b, deelwoord) => {
     const w = (dw, ww) => deelwoord ? dw : ww;
