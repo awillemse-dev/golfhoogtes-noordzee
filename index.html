@@ -7076,7 +7076,7 @@ async function _mdTropisch({ model, run, t0, lat, lon, hier, plek, sporen, zinLa
   if (itcz) {
     const dl = lat - itcz.lat, nm = Math.round(Math.abs(dl) * 60 / 10) * 10;
     const kant = dl > 0 ? 'S' : 'N';
-    const pos = `near ${_mdBreedteTekst(itcz.lat)}`, van = 'the selected position';
+    const pos = `near ${_mdBreedteTekst(itcz.lat)}`, van = 'the forecast area';
     if (itcz.actief === 'weak') zinnen.push(`The ITCZ is weak and poorly defined ${pos} at this longitude${Math.abs(dl) <= 2.5 ? `, giving only isolated showers over ${plek}` : ` and does not affect ${plek}`}.`);
     else if (Math.abs(dl) <= 2.5) zinnen.push(`The ITCZ lies across ${plek} ${pos} and is ${itcz.actief}, bringing ${itcz.actief === 'active' ? 'scattered to numerous showers and thunderstorms' : 'scattered showers and isolated thunderstorms'}.`);
     else if (Math.abs(dl) <= 5) zinnen.push(`The ITCZ lies ${pos}, about ${nm} nm ${kant} of ${van}, and is ${itcz.actief}; it ${regen >= 5 ? `brings occasional showers to the ${kant} part of ${plek}` : `has only a marginal effect on ${plek}`}.`);
