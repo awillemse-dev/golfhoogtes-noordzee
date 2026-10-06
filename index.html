@@ -6821,8 +6821,8 @@ const MD_GEBIEDEN = [
   ['the northwest Atlantic', 42, -60, 700, 1], ['the Labrador Sea', 58, -55, 500, 1], ['the Davis Strait', 66, -58, 300, 1],
   ['Baffin Bay', 73, -66, 450, 1], ['Hudson Bay', 59, -86, 600, 1], ['the Gulf of St Lawrence', 48.5, -62, 250, 1],
   ['the Gulf of Maine', 43, -68.5, 180, 1], ['the US East Coast waters', 36, -73, 350, 1], ['the Sargasso Sea', 29, -62, 800, 1],
-  ['the Gulf of Mexico', 25, -90, 650, 1], ['the Caribbean Sea', 15, -75, 1000, 1], ['the tropical North Atlantic', 15, -40, 1500, 1],
-  ['the waters off Northwest Africa', 25, -17, 500, 1], ['the Gulf of Guinea', 2, 3, 700, 1], ['the South Atlantic', -30, -15, 2200, 1],
+  ['the Gulf of Mexico', 25, -90, 650, 1], ['the Caribbean Sea', 15, -75, 1000, 1], ['the tropical North Atlantic', 14, -40, 1800, 1],
+  ['the waters off Northwest Africa', 25, -17, 500, 1], ['the equatorial Atlantic', 0, -20, 1400, 1], ['the Gulf of Guinea', 2, 3, 700, 1], ['the South Atlantic', -30, -15, 2200, 1],
   ['the waters off Brazil', -20, -36, 800, 1], ['the waters off the River Plate', -37, -54, 350, 1],
   // Middellandse Zee, Zwarte Zee, Kaspische Zee
   ['the Strait of Gibraltar', 36, -5.5, 60, 1], ['the Alboran Sea', 36, -3.5, 150, 1], ['the Balearic Sea', 40, 2.5, 250, 1],
@@ -7014,6 +7014,108 @@ function _mdZeeOfLand(lat, lon) {
   return l.binnen ? l : z;
 }
 
+// ── Tropen: ligging van de ITCZ bij de lengte van het punt ──
+// Per breedte (25°Z–25°N) het gemiddelde over ±5° lengte van neerslag en meridionale wind;
+// de ITCZ ligt waar de noord-zuidwind samenkomt (v neemt af naar het noorden) en het meeste
+// regent. Gemiddeld over vier tijdstippen in de komende 24 uur.
+async function _mdItcz(model, run, t0, lon) {
+  const { nx, d } = MD_G;
+  const s0 = Math.round((t0 - run.t) / 3600e3);
+  const uren = [6, 12, 18, 24].map(h => s0 + h).filter(h => h <= 120);
+  const paren = await Promise.all(uren.map(async h => {
+    const t = run.t + h * 3600e3;
+    const [v, p] = await Promise.all([_mdVeld(model, 'v', t, 0).catch(() => null), _mdVeld(model, 'regen', t, 0).catch(() => null)]);
+    return v && p ? { v: v.f, p: p.f } : null;
+  }));
+  const bruikbaar = paren.filter(Boolean);
+  if (!bruikbaar.length) return null;
+  const j0 = Math.round((-25 + 90) / d), j1 = Math.round((25 + 90) / d), n = j1 - j0 + 1;
+  const P = new Float64Array(n), V = new Float64Array(n);
+  const i0 = Math.round((lon + 180) / d);
+  for (const { v, p } of bruikbaar) for (let k = 0; k < n; k++) {
+    let sp = 0, sv = 0, c = 0;
+    for (let di = -10; di <= 10; di++) {
+      const i = ((i0 + di) % (nx - 1) + (nx - 1)) % (nx - 1), idx = (j0 + k) * nx + i;
+      if (p[idx] === p[idx] && v[idx] === v[idx]) { sp += p[idx]; sv += v[idx]; c++; }
+    }
+    if (c) { P[k] += sp / c / bruikbaar.length; V[k] += sv / c / bruikbaar.length; }
+  }
+  const glad = (a, r) => a.map((_, k) => { let s = 0, c = 0; for (let q = -r; q <= r; q++) if (a[k + q] !== undefined) { s += a[k + q]; c++; } return s / c; });
+  const Pg = glad(P, 4), Vg = glad(V, 3);
+  const pMax = Math.max(...Pg);
+  let best = -Infinity, kb = -1;
+  for (let k = 2; k < n - 2; k++) {
+    const conv = -(Vg[k + 2] - Vg[k - 2]) / (4 * d);            // kt per graad, + = samenstromend
+    const score = Pg[k] / Math.max(pMax, 0.05) + Math.max(conv, 0) / 2;
+    if (score > best) { best = score; kb = k; }
+  }
+  const lat = -25 + kb * d;
+  return { lat, regen: Pg[kb], actief: Pg[kb] >= 0.25 ? 'active' : Pg[kb] >= 0.08 ? 'moderately active' : 'weak' };
+}
+
+function _mdBreedteTekst(lat) { const r = Math.round(lat); return r === 0 ? 'the equator' : `${Math.abs(r)}°${r > 0 ? 'N' : 'S'}`; }
+
+async function _mdTropisch({ model, run, t0, lat, lon, hier, plek, sporen, zinLaag }) {
+  const zinnen = [];
+  const itcz = await _mdItcz(model, run, t0, lon);
+  // Gemiddelde wind en neerslag op het punt in de komende 24 uur (puntverwachting)
+  let u = 0, v = 0, n = 0, regen = 0, buien = 0;
+  const det = _md.detail;
+  if (det) {
+    const ws = _mdReeks(model, 'wind_speed_10m'), wd = _mdReeks(model, 'wind_direction_10m'), pr = _mdReeks(model, 'precipitation');
+    det.tijden.forEach((t, k) => {
+      if (t < t0 || t > t0 + 24 * 3600e3 || ws[k] == null) return;
+      const r = (wd[k] || 0) * Math.PI / 180;
+      u += ws[k] * Math.sin(r); v += ws[k] * Math.cos(r); n++;
+      regen += pr[k] || 0; if ((pr[k] || 0) >= 1) buien++;
+    });
+  }
+  const snel = n ? Math.hypot(u, v) / n : null, richting = n ? (Math.atan2(u, v) * 180 / Math.PI + 360) % 360 : null;
+
+  // 1. De ITCZ: ligging en invloed
+  if (itcz) {
+    const dl = lat - itcz.lat, nm = Math.round(Math.abs(dl) * 60 / 10) * 10;
+    const kant = dl > 0 ? 'S' : 'N';
+    const pos = `near ${_mdBreedteTekst(itcz.lat)}`, van = 'the selected position';
+    if (itcz.actief === 'weak') zinnen.push(`The ITCZ is weak and poorly defined ${pos} at this longitude${Math.abs(dl) <= 2.5 ? `, giving only isolated showers over ${plek}` : ` and does not affect ${plek}`}.`);
+    else if (Math.abs(dl) <= 2.5) zinnen.push(`The ITCZ lies across ${plek} ${pos} and is ${itcz.actief}, bringing ${itcz.actief === 'active' ? 'scattered to numerous showers and thunderstorms' : 'scattered showers and isolated thunderstorms'}.`);
+    else if (Math.abs(dl) <= 5) zinnen.push(`The ITCZ lies ${pos}, about ${nm} nm ${kant} of ${van}, and is ${itcz.actief}; it ${regen >= 5 ? `brings occasional showers to the ${kant} part of ${plek}` : `has only a marginal effect on ${plek}`}.`);
+    else zinnen.push(`The ITCZ lies ${pos}, about ${nm} nm ${kant} of ${van}, and does not affect ${plek}.`);
+  }
+
+  // 2. Passaat of moesson, met het subtropische hoog dat hem aandrijft
+  if (snel != null) {
+    const k8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(richting / 45) % 8];
+    const lo = Math.max(0, Math.round((snel - 3) / 5) * 5), hi = lo + 5 + (snel > 20 ? 5 : 0);
+    const kracht = `${lo}-${hi} kt`;
+    const moessonGebied = lon > 40 && lon < 150 && lat > -15;          // Indische Oceaan, Zuid-Chinese Zee, westelijke Grote Oceaan
+    const hoog = sporen.filter(s => s.soort === 'H' && s.start === 0 && Math.abs(s.a.lat) >= 15 && Math.abs(s.a.lat) <= 45 && Math.sign(s.a.lat) === Math.sign(lat || 1))
+      .sort((a, b) => a.d0 - b.d0)[0];
+    const bron = hoog && hoog.d0 < 4500 ? `High pressure ${_mdOver(_mdGebied(hoog.a.lat, hoog.a.lon))} maintains ` : '';
+    const een = /^E/.test(k8) ? 'an' : 'a';
+    let stroming, passaat = false;
+    if (snel < 7) stroming = null;
+    else if (moessonGebied && ['SW', 'W', 'S', 'NE', 'N', 'E'].includes(k8) && lat > 0) stroming = `${een} ${k8} monsoon flow of ${kracht}`;
+    else if (['NE', 'E', 'SE'].includes(k8) && (lat >= 0 ? k8 !== 'SE' : k8 !== 'NE')) { stroming = `${een} ${k8} trade wind flow of ${kracht}`; passaat = true; }
+    else stroming = `${een} ${k8} flow of ${kracht}`;
+    if (!stroming) zinnen.push(`Winds over ${plek} are light and variable.`);
+    else zinnen.push(bron && passaat ? `${bron}${stroming} over ${plek}.` : `${stroming[0].toUpperCase()}${stroming.slice(1)} covers ${plek}.`);
+  }
+
+  // 3. Tropische lagen in de buurt
+  const laag = sporen.filter(s => s.soort === 'L' && s.dmin < 1200 && s.punten.length >= 5 && s.vmin < 1006).sort((a, b) => a.vmin - b.vmin)[0];
+  if (laag) {
+    const naam = laag.vmin < 995 ? 'A tropical cyclone' : 'A tropical low';
+    zinnen.push(zinLaag(laag, '', '').replace(/^(Low pressure|A new low develops)/, m => m === 'Low pressure' ? naam : `${naam} develops`));
+  }
+  // 4. Buien op het punt zelf
+  if (n && !(itcz && Math.abs(lat - itcz.lat) <= 2.5)) {
+    if (buien >= 2) zinnen.push(`Showers are expected over ${plek} during the next 24 hours.`);
+    else if (regen < 0.5) zinnen.push(`Mainly dry over ${plek}.`);
+  }
+  return zinnen.join(' ');
+}
+
 async function _mdSynoptiek(lat, lon) {
   const model = _md.model, run = await _mdRun(model);
   const t0 = _md.geldig || run.t;
@@ -7081,6 +7183,9 @@ async function _mdSynoptiek(lat, lon) {
     const tijd = over && b.dichtst.t - b.a.t >= 6 * 3600e3 ? wanneerOver : (b.start > 0 || slot || over ? '' : wanneer);
     return `${zin}${en} ${b.start > 0 ? 'tracks' : 'tracks'} ${_mdKompas(b.koers)}${via}${doel}${tijd ? ' ' + tijd : ''}${slot}${diep ? `, ${diep}${nadien}` : ''}.`;
   };
+
+  // Tropen: ITCZ, passaat/moesson en tropische lagen in plaats van fronten
+  if (Math.abs(lat) < 25) return _mdTropisch({ model, run, t0, lat, lon, hier, plek, sporen, zinLaag });
 
   const zinnen = [];
   const hRelevant = H && (!L1 || H.rel >= 0.25 * L1.rel || H.d0 < 1600);
