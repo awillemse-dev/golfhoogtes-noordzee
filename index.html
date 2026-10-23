@@ -678,6 +678,10 @@
     .md-synop { font-size: 0.82rem; line-height: 1.55; color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
                 border-left: 3px solid var(--accent); border-radius: var(--r-md); padding: 10px 12px; margin: 0 0 18px; transition: opacity .2s; }
     .md-synop.bezig { opacity: .5; }
+    .md-synop-rij { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 8px; }
+    .md-synop-rij .md-sectie { margin: 0; }
+    #md-synop-tijd { font: inherit; font-size: 0.72rem; color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
+                     border-radius: var(--r-sm); padding: 3px 6px; cursor: pointer; }
 
     /* ── Vakantieweer ────────────────────────────────────────────────────── */
     #vakantie-panel {
@@ -6680,6 +6684,7 @@ function _mdOpen() {
 // ── Detailpaneel na klik: ECMWF, GFS en ICON vergeleken voor één punt ──
 async function _mdOpenDetail(ll) {
   const lat = Math.round(ll.lat * 100) / 100, lon = Math.round(L.Util.wrapNum(ll.lng, [-180, 180]) * 100) / 100;
+  _md.synopT = null;                                // nieuwe plek: synopsis begint bij de kaarttijd
   if (_md.pin) _md.pin.setLatLng([lat, lon]);
   else _md.pin = L.marker([lat, lon], { interactive: false,
     icon: L.divIcon({ className: '', iconSize: [14, 14], iconAnchor: [7, 7], html: '<div class="md-pin"></div>' }) }).addTo(_md.kaart);
@@ -6767,7 +6772,9 @@ function _mdDetailRender() {
   });
 
   body.innerHTML =
-    `<div class="md-sectie" id="md-synop-kop">Synoptische situatie · ${MD_MODELLEN[m].naam}</div><p class="md-synop" id="md-synop" lang="en">Analysing the pressure pattern…</p>` +
+    `<div class="md-synop-rij"><div class="md-sectie" id="md-synop-kop">Synoptische situatie · ${MD_MODELLEN[m].naam}</div>` +
+    `<select id="md-synop-tijd" title="Tijdstip van de synopsis (los van de tijdbalk)"></select></div>` +
+    `<p class="md-synop" id="md-synop" lang="en">Analysing the pressure pattern…</p>` +
     `<div class="md-sectie" id="md-nu-tijd">–</div><div class="md-nu" id="md-nu"></div>` +
     `<div class="md-sectie">Luchtdruk per model (hPa)</div><div class="md-grafiek"><canvas id="md-g-druk"></canvas></div>` +
     `<div class="md-sectie">Wind per model (kt)</div><div class="md-grafiek"><canvas id="md-g-wind"></canvas></div>` +
@@ -7116,9 +7123,9 @@ async function _mdTropisch({ model, run, t0, lat, lon, hier, plek, sporen, zinLa
   return zinnen.join(' ');
 }
 
-async function _mdSynoptiek(lat, lon) {
+async function _mdSynoptiek(lat, lon, tSynop) {
   const model = _md.model, run = await _mdRun(model);
-  const t0 = _md.geldig || run.t;
+  const t0 = tSynop || _md.geldig || run.t;
   const s0 = Math.round((t0 - run.t) / 3600e3);
   // 72 uur vooruit: de eerste anderhalve dag per 3 uur, daarna per 6 uur
   const uren = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 42, 48, 54, 60, 66, 72].map(h => s0 + h).filter(h => h <= 120);
@@ -7135,7 +7142,8 @@ async function _mdSynoptiek(lat, lon) {
 
   // Relevantie: sterkte gedeeld door de kleinste afstand tot het punt in de komende 72 uur
   const sporen = _mdSporen(stappen).map(s => _mdSpoorInfo(s, lat, lon)).filter(s => s.punten.length >= 2 || s.start === 0);
-  const lagen = sporen.filter(s => s.soort === 'L' && s.dmin < 2500 && s.d0 < 3500)
+  // Lagen die nu ver weg liggen alleen als ze binnen 72 uur echt dichtbij komen (< 1000 km)
+  const lagen = sporen.filter(s => s.soort === 'L' && s.dmin < 2500 && (s.d0 < 3000 || s.dmin < 1000))
     .map(s => ({ ...s, rel: Math.max(1016 - s.vmin, 3) / (1 + (s.dmin / 700) ** 2) / (1 + s.start / 16) }))
     .sort((a, b) => b.rel - a.rel);
   const hogen = sporen.filter(s => s.soort === 'H' && s.start === 0 && s.d0 < 3000)
@@ -7161,7 +7169,7 @@ async function _mdSynoptiek(lat, lon) {
   const zinHoog = (b) => {
     const waar = _mdGebied(b.a.lat, b.a.lon);
     if (b.d0 < 450) return `High pressure is centred ${_mdOver(hier)}, ${hoogBeweging(b, true)}.`;
-    if (p0 >= 1012 || !L1 || L1.d0 > 1200) return `High pressure ${_mdOver(waar)} extends a ridge over ${plek}, ${hoogBeweging(b, true)}.`;
+    if (p0 >= 1012) return `High pressure ${_mdOver(waar)} extends a ridge over ${plek}, ${hoogBeweging(b, true)}.`;
     return `High pressure ${_mdOver(waar)} ${hoogBeweging(b, false)}.`;
   };
   const zinLaag = (b, aanloop, slot) => {
@@ -7197,13 +7205,16 @@ async function _mdSynoptiek(lat, lon) {
   if (Math.abs(lat) < 25) return _mdTropisch({ model, run, t0, lat, lon, hier, plek, sporen, zinLaag });
 
   const zinnen = [];
-  const hRelevant = H && (!L1 || H.rel >= 0.25 * L1.rel || H.d0 < 1600 || p0 >= 1015);
+  // Hoog noemen als er een rug over het gebied ligt, het hoog dichtbij is of het weer domineert
+  const hRelevant = H && (!L1 || p0 >= 1010 || H.d0 < 1200 || H.rel >= 0.5 * L1.rel);
   if (hRelevant) zinnen.push(zinHoog(H));
-  if (L1) zinnen.push(zinLaag(L1, '', hRelevant && L1.dmin >= 350 ? ' in the mean time' : ''));
-  if (L2) {
-    const k = _mdKompas(_mdKoers(lat, lon, L2.dichtst.lat, L2.dichtst.lon));
+  // Lagen op volgorde van aankomst bij het gebied; de tweede krijgt "Further W, …"
+  const [La, Lb] = [L1, L2].filter(Boolean).sort((a, b) => a.dichtst.t - b.dichtst.t);
+  if (La) zinnen.push(zinLaag(La, '', hRelevant && La.dmin >= 350 ? ' in the mean time' : ''));
+  if (Lb) {
+    const k = _mdKompas(_mdKoers(lat, lon, Lb.a.lat, Lb.a.lon));
     const verder = { N: 'N', NNE: 'N', NE: 'NE', ENE: 'E', E: 'E', ESE: 'E', SE: 'SE', SSE: 'S', S: 'S', SSW: 'S', SW: 'SW', WSW: 'W', W: 'W', WNW: 'W', NW: 'NW', NNW: 'N' }[k];
-    zinnen.push(zinLaag(L2, `Further ${verder}, `, ''));
+    zinnen.push(zinLaag(Lb, `Further ${verder}, `, ''));
   }
   if (!zinnen.length) zinnen.push(`A slack pressure pattern covers ${plek}.`);
 
@@ -7219,21 +7230,53 @@ async function _mdSynoptiek(lat, lon) {
   return zinnen.join(' ');
 }
 
+// De synopsis heeft een eigen tijdstip (keuzemenu per 12 uur, 00 en 12 UTC); de tijdbalk
+// van de kaart verandert de tekst niet. Bij een nieuwe klik begint hij op het tijdstip dat het
+// dichtst bij de kaarttijd ligt. Tot +48 uur, zodat er altijd 72 uur modeldata achter zit.
 let _mdSynopNr = 0, _mdSynopSleutel = '', _mdSynopTimer = null;
+async function _mdSynopOpties() {
+  const sel = document.getElementById('md-synop-tijd');
+  if (!sel) return null;
+  const run = await _mdRun(_md.model);
+  const sleutel = `${_md.model}|${run.t}`;
+  if (sel.dataset.run !== sleutel) {
+    const tijden = [];
+    for (let h = 0; h <= 48; h += 3) {
+      const t = run.t + h * 3600e3;
+      if (new Date(t).getUTCHours() % 12 === 0) tijden.push(t);
+    }
+    if (!_md.synopT || !tijden.includes(_md.synopT)) {
+      const doel = _md.synopT || _md.geldig || Date.now();
+      _md.synopT = tijden.reduce((b, t) => Math.abs(t - doel) < Math.abs(b - doel) ? t : b, tijden[0]);
+    }
+    sel.innerHTML = tijden.map(t => {
+      const d = new Date(t);
+      const dag = d.toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+      return `<option value="${t}">${dag} ${String(d.getUTCHours()).padStart(2, '0')} UTC</option>`;
+    }).join('');
+    sel.dataset.run = sleutel;
+    sel.onchange = () => { _md.synopT = +sel.value; _mdSynopPlan(true); };
+  }
+  sel.value = String(_md.synopT);
+  return _md.synopT;
+}
+
 function _mdSynopPlan(direct = false) {
   const el = document.getElementById('md-synop');
   if (!el || !_md.detail) return;
-  const sleutel = `${_md.model}|${_md.geldig}|${_md.detail.lat}|${_md.detail.lon}`;
-  if (sleutel === _mdSynopSleutel) return;
   clearTimeout(_mdSynopTimer);
   _mdSynopTimer = setTimeout(async () => {
+    let tSynop;
+    try { tSynop = await _mdSynopOpties(); } catch (e) { tSynop = null; }
+    const sleutel = `${_md.model}|${tSynop}|${_md.detail && _md.detail.lat}|${_md.detail && _md.detail.lon}`;
+    if (!_md.detail || sleutel === _mdSynopSleutel) return;   // alleen de tijdbalk verschoven: tekst blijft
     const nr = ++_mdSynopNr;
     _mdSynopSleutel = sleutel;
     el.classList.add('bezig');
     const kop = document.getElementById('md-synop-kop');
     if (kop) kop.textContent = `Synoptische situatie · ${MD_MODELLEN[_md.model].naam}`;
     try {
-      const tekst = await _mdSynoptiek(_md.detail.lat, _md.detail.lon);
+      const tekst = await _mdSynoptiek(_md.detail.lat, _md.detail.lon, tSynop);
       if (nr !== _mdSynopNr || !document.getElementById('md-synop')) return;
       el.textContent = tekst || 'No synoptic analysis available for this time.';
     } catch (e) {
