@@ -6820,7 +6820,8 @@ const MD_GEBIEDEN = [
   ['the German Bight', 54.3, 7.5, 110, 1], ['the Skagerrak', 57.8, 9.5, 90, 1], ['the Kattegat', 56.8, 11.6, 80, 1],
   ['the western Baltic', 54.8, 12.5, 130, 1], ['the southern Baltic', 55.3, 16.5, 180, 1], ['the central Baltic', 57.8, 19.5, 210, 1],
   ['the Gulf of Finland', 59.8, 26, 150, 1], ['the Gulf of Bothnia', 63, 20.5, 260, 1], ['the English Channel', 50.2, -2, 170, 1],
-  ['the Dover Strait', 51, 1.5, 50, 1], ['the Irish Sea', 53.8, -4.8, 130, 1], ['the Celtic Sea', 50.5, -8, 200, 1],
+  ['the Dover Strait', 51, 1.5, 50, 1], ['the western English Channel', 49.8, -5, 120, 1], ['the eastern English Channel', 50.4, 0.5, 90, 1],
+  ['the Wadden Sea', 53.4, 5.8, 60, 1], ['the Dutch coastal waters', 52.8, 4.4, 60, 1], ['the Irish Sea', 53.8, -4.8, 130, 1], ['the Celtic Sea', 50.5, -8, 200, 1],
   ['the Bay of Biscay', 45.5, -4.5, 280, 1], ['the Rockall area', 57.5, -14, 260, 1], ['the Norwegian Sea', 67, 3, 520, 1],
   ['the Barents Sea', 74, 40, 600, 1], ['the White Sea', 65.5, 38, 200, 1], ['the Greenland Sea', 75, -5, 500, 1],
   ['the Denmark Strait', 66.5, -26, 200, 1], ['the waters around the Faroes', 62, -7, 150, 1], ['the Shetland area', 60.5, -1, 120, 1],
@@ -6864,7 +6865,8 @@ const MD_GEBIEDEN = [
   ['Greenland', 72, -40, 900, 0], ['southern Greenland', 62.5, -45, 350, 0], ['Ireland', 53.2, -8, 200, 0], ['Scotland', 57, -4.5, 200, 0],
   ['England', 52.5, -1.5, 220, 0], ['the British Isles', 54, -3, 500, 0], ['Norway', 62, 9, 350, 0], ['northern Norway', 69, 18, 300, 0],
   ['Sweden', 61, 15, 350, 0], ['Finland', 63, 26, 350, 0], ['Scandinavia', 62, 14, 700, 0], ['Denmark', 56, 9.5, 150, 0],
-  ['the Low Countries', 51.8, 5, 150, 0], ['Germany', 51, 10, 300, 0], ['Poland', 52, 19, 300, 0], ['the Baltic States', 57, 24, 250, 0],
+  ['the Low Countries', 51.8, 5, 150, 0], ['the Netherlands', 52.4, 5.6, 140, 0], ['Belgium', 50.7, 4.6, 100, 0],
+  ['northern Germany', 53.5, 10, 220, 0], ['Brittany', 48.2, -3, 130, 0], ['Normandy', 49.2, 0, 110, 0], ['Cornwall', 50.4, -4.9, 70, 0], ['Germany', 51, 10, 300, 0], ['Poland', 52, 19, 300, 0], ['the Baltic States', 57, 24, 250, 0],
   ['Belarus', 53.5, 28, 250, 0], ['Ukraine', 49, 31, 450, 0], ['western Russia', 56, 40, 700, 0], ['northwest Russia', 64, 40, 600, 0],
   ['the Urals', 58, 60, 600, 0], ['France', 46.5, 2.5, 400, 0], ['Iberia', 40, -4, 450, 0], ['Morocco', 32, -6, 350, 0],
   ['Algeria', 30, 3, 700, 0], ['Tunisia', 34, 9, 200, 0], ['Libya', 28, 17, 600, 0], ['Egypt', 27, 30, 500, 0],
@@ -6928,7 +6930,7 @@ function _mdOver(g) { return g.binnen ? `over ${g.naam}` : g.naam; }   // "over 
 // Tijdsaanduiding in lokale zonnetijd van het punt, relatief tot het kaartmoment t0
 function _mdWanneer(t, t0, lon, vanaf = false) {
   const lok = ms => new Date(ms + lon / 15 * 3600e3);
-  const a = lok(t0), b = lok(t);
+  const a = lok(t0 + 3 * 3600e3), b = lok(t);
   const dag = d => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
   let dd = Math.round((dag(b) - dag(a)) / 864e5), u = b.getUTCHours();
   if (u < 6 && dd >= 1) { dd -= 1; u += 24; }      // nacht hoort bij de avond ervoor
@@ -7051,7 +7053,12 @@ async function _mdItcz(model, run, t0, lon) {
   const Pg = glad(P, 4), Vg = glad(V, 3);
   const pMax = Math.max(...Pg);
   let best = -Infinity, kb = -1;
+  // Zoekband: buiten het moessongebied (Indische Oceaan, westelijke Grote Oceaan) ligt de ITCZ
+  // tussen 15°Z en 15°N; anders trekken subtropische buien de uitkomst weg
+  const moesson = lon > 40 && lon < 150, zMin = moesson ? -20 : -15, zMax = moesson ? 25 : 15;
   for (let k = 2; k < n - 2; k++) {
+    const bl = -25 + k * d;
+    if (bl < zMin || bl > zMax) continue;
     const conv = -(Vg[k + 2] - Vg[k - 2]) / (4 * d);            // kt per graad, + = samenstromend
     const score = Pg[k] / Math.max(pMax, 0.05) + Math.max(conv, 0) / 2;
     if (score > best) { best = score; kb = k; }
@@ -7093,20 +7100,17 @@ async function _mdTropisch({ model, run, t0, lat, lon, hier, plek, sporen, zinLa
   // 2. Passaat of moesson, met het subtropische hoog dat hem aandrijft
   if (snel != null) {
     const k8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(richting / 45) % 8];
-    const lo = Math.max(0, Math.round((snel - 3) / 5) * 5), hi = lo + 5 + (snel > 20 ? 5 : 0);
-    const kracht = `${lo}-${hi} kt`;
     const moessonGebied = lon > 40 && lon < 150 && lat > -15;          // Indische Oceaan, Zuid-Chinese Zee, westelijke Grote Oceaan
     const hoog = sporen.filter(s => s.soort === 'H' && s.start === 0 && Math.abs(s.a.lat) >= 15 && Math.abs(s.a.lat) <= 45 && Math.sign(s.a.lat) === Math.sign(lat || 1))
       .sort((a, b) => a.d0 - b.d0)[0];
     const bron = hoog && hoog.d0 < 4500 ? `High pressure ${_mdOver(_mdGebied(hoog.a.lat, hoog.a.lon))} maintains ` : '';
     const een = /^E/.test(k8) ? 'an' : 'a';
-    let stroming, passaat = false;
+    let stroming, passaat = false;                               // stromingspatroon zonder windkracht
     if (snel < 7) stroming = null;
-    else if (moessonGebied && ['SW', 'W', 'S', 'NE', 'N', 'E'].includes(k8) && lat > 0) stroming = `${een} ${k8} monsoon flow of ${kracht}`;
-    else if (['NE', 'E', 'SE'].includes(k8) && (lat >= 0 ? k8 !== 'SE' : k8 !== 'NE')) { stroming = `${een} ${k8} trade wind flow of ${kracht}`; passaat = true; }
-    else stroming = `${een} ${k8} flow of ${kracht}`;
-    if (!stroming) zinnen.push(`Winds over ${plek} are light and variable.`);
-    else zinnen.push(bron && passaat ? `${bron}${stroming} over ${plek}.` : `${stroming[0].toUpperCase()}${stroming.slice(1)} covers ${plek}.`);
+    else if (moessonGebied && ['SW', 'W', 'S', 'NE', 'N', 'E'].includes(k8) && lat > 0) stroming = `${een} ${k8} monsoon flow`;
+    else if (['NE', 'E', 'SE'].includes(k8) && (lat >= 0 ? k8 !== 'SE' : k8 !== 'NE')) { stroming = `${een} ${k8} trade wind flow`; passaat = true; }
+    else stroming = `${een} ${k8}ly flow`;
+    if (stroming) zinnen.push(bron && passaat ? `${bron}${stroming} over ${plek}.` : `${stroming[0].toUpperCase()}${stroming.slice(1)} covers ${plek}.`);
   }
 
   // 3. Tropische lagen in de buurt
@@ -7121,6 +7125,48 @@ async function _mdTropisch({ model, run, t0, lat, lon, hier, plek, sporen, zinLa
     else if (regen < 1) zinnen.push(`Mainly dry over ${plek}.`);
   }
   return zinnen.join(' ');
+}
+
+// ── Stormnamen: de tijdlijn op de Wikipedia-pagina van het Europese stormseizoen ──
+// Regels als  from:20/10/2026 till:23/10/2026 color:4 text:"Austen". Kleur = naamgevingsgroep:
+// 4 west (UK/IE/NL), 5 zuidwest (FR/ES/PT/BE), 7 noord (DK/NO/SE), 6 en 10 Middellandse Zee,
+// 9 ex-tropisch, T = Vrije Universiteit Berlijn (alleen Duitse namen, slaan we over).
+let _mdStormBelofte = null;
+function _mdStormen() {
+  if (!_mdStormBelofte) _mdStormBelofte = (async () => {
+    const nu = new Date(), j = nu.getUTCMonth() >= 6 ? nu.getUTCFullYear() : nu.getUTCFullYear() - 1;
+    const pagina = `${j}–${String(j + 1).slice(2)} European windstorm season`;
+    const url = `https://en.wikipedia.org/w/api.php?action=parse&page=${encodeURIComponent(pagina)}&prop=wikitext&format=json&origin=*`;
+    const r = await fetch(url);
+    const w = (await r.json()).parse.wikitext['*'];
+    const uit = [];
+    for (const m of w.matchAll(/from:(\d\d)\/(\d\d)\/(\d{4})\s+till:(\d\d)\/(\d\d)\/(\d{4})\s+color:(\w+)\s+text:"([^"]+)"/g)) {
+      if (m[7] === 'T') continue;
+      uit.push({ naam: m[8], groep: m[7], van: Date.UTC(+m[3], +m[2] - 1, +m[1]), tot: Date.UTC(+m[6], +m[5] - 1, +m[4]) + 864e5 });
+    }
+    return uit;
+  })().catch(e => { console.warn('[stormnamen]', e); _mdStormBelofte = null; return []; });
+  return _mdStormBelofte;
+}
+
+// Koppel actieve stormnamen aan de diepste lagen in het gebied van die naamgevingsgroep.
+// Meerdere actieve namen: de oudste naam hoort bij de oostelijkste laag (die is al verder
+// getrokken), de nieuwste bij de westelijkste.
+async function _mdStormNamenToekennen(sporen, t0) {
+  const stormen = (await _mdStormen()).filter(st => st.van - 864e5 <= t0 && t0 <= st.tot);
+  const gebieden = {
+    atl: { groepen: ['4', '5', '7', '9'], in: p => p.lat >= 35 && p.lat <= 75 && p.lon >= -60 && p.lon <= 45, max: 995 },
+    med: { groepen: ['6', '10'], in: p => p.lat >= 30 && p.lat <= 47 && p.lon >= -6 && p.lon <= 37, max: 1005 },
+  };
+  for (const g of Object.values(gebieden)) {
+    const namen = stormen.filter(st => g.groepen.includes(st.groep)).sort((a, b) => a.van - b.van);
+    if (!namen.length) continue;
+    const kand = sporen.filter(sp => sp.soort === 'L' && sp.start === 0 && g.in(sp.a))
+      .map(sp => ({ sp, min24: Math.min(...sp.punten.filter(p => p.t <= t0 + 24 * 3600e3).map(p => p.v)) }))
+      .filter(x => x.min24 <= g.max).sort((a, b) => a.min24 - b.min24).slice(0, namen.length)
+      .sort((a, b) => b.sp.a.lon - a.sp.a.lon);
+    kand.forEach((x, k) => { x.sp.naam = (namen[k].groep === '9' ? 'Ex-hurricane ' : 'Storm ') + namen[k].naam; });
+  }
 }
 
 async function _mdSynoptiek(lat, lon, tSynop) {
@@ -7142,9 +7188,10 @@ async function _mdSynoptiek(lat, lon, tSynop) {
 
   // Relevantie: sterkte gedeeld door de kleinste afstand tot het punt in de komende 72 uur
   const sporen = _mdSporen(stappen).map(s => _mdSpoorInfo(s, lat, lon)).filter(s => s.punten.length >= 2 || s.start === 0);
+  await _mdStormNamenToekennen(sporen, t0).catch(() => {});
   // Lagen die nu ver weg liggen alleen als ze binnen 72 uur echt dichtbij komen (< 1000 km)
   const lagen = sporen.filter(s => s.soort === 'L' && s.dmin < 2500 && (s.d0 < 3000 || s.dmin < 1000))
-    .map(s => ({ ...s, rel: Math.max(1016 - s.vmin, 3) / (1 + (s.dmin / 700) ** 2) / (1 + s.start / 16) }))
+    .map(s => ({ ...s, rel: Math.max(1016 - s.vmin, 3) / (1 + (s.dmin / 700) ** 2) / (1 + s.start / 16) * (s.naam && s.dmin < 600 ? 2 : 1) }))
     .sort((a, b) => b.rel - a.rel);
   const hogen = sporen.filter(s => s.soort === 'H' && s.start === 0 && s.d0 < 3000)
     .map(s => ({ ...s, rel: Math.max(s.vmax - 1010, 3) / (1 + (s.d0 / 900) ** 2) }))
@@ -7152,7 +7199,7 @@ async function _mdSynoptiek(lat, lon, tSynop) {
   const H = hogen[0];
   const L1 = lagen[0];
   // Tweede laag alleen als die nu al in de buurt ligt én dichtbij komt: geen lagen van de andere kant van de oceaan
-  const L2 = lagen.slice(1).find(s => s.rel >= 0.35 * L1.rel && s.dmin < 1200 && s.d0 < 2500
+  const L2 = lagen.slice(1).find(s => s.rel >= 0.35 * L1.rel && s.dmin < 1200 && (s.d0 < 2500 || s.naam)
     && _mdAfstand(s.dichtst.lat, s.dichtst.lon, L1.dichtst.lat, L1.dichtst.lon) > 600);
 
   const hoogBeweging = (b, deelwoord) => {
@@ -7173,32 +7220,42 @@ async function _mdSynoptiek(lat, lon, tSynop) {
     return `High pressure ${_mdOver(waar)} ${hoogBeweging(b, false)}.`;
   };
   const zinLaag = (b, aanloop, slot) => {
-    const waar = _mdGebied(b.a.lat, b.a.lon), naar = _mdGebied(b.z.lat, b.z.lon);
+    const waar = _mdGebied(b.a.lat, b.a.lon), naar = _mdZeeOfLand(b.z.lat, b.z.lon);
     const diepte = b.vmin - b.a.v, opvul = b.z.v - b.vmin;
-    const diep = diepte <= -12 ? 'deepening rapidly' : diepte <= -4 ? 'deepening' : b.dv >= 4 ? 'filling' : '';
+    const diep = diepte <= -12 ? 'deepening rapidly' : diepte <= -4 ? 'deepening' : b.dv >= 8 ? 'filling' : b.dv >= 4 ? 'filling slowly' : '';
     const nadien = diepte <= -4 && opvul >= 4 ? ' before filling' : '';
-    // trekt de laag over (of vlak langs) het gebied? Dan de route en het moment noemen
-    const over = b.dmin < 350 ? _mdZeeOfLand(b.dichtst.lat, b.dichtst.lon) : null;
-    const wanneerOver = _mdWanneer(b.dichtst.t, t0, lon);
-    const wanneer = _mdWanneer(b.a.t + Math.min(b.uren, 18) * 3600e3, t0, lon);
-    // bij een lange reis het eindpunt met dag: "towards Scandinavia by Thursday"
-    const tegen = b.uren >= 36 ? ` by ${_mdWanneer(b.z.t, t0, lon, true)}` : '';
-    const doel = naar.naam === waar.naam || (over && naar.naam === over.naam) || (over && b.z.t - b.dichtst.t < 12 * 3600e3) ? ''
-      : (naar.binnen ? (naar.zee ? ` into ${naar.naam}` : ` towards ${naar.naam}`) : ` to ${naar.naam}`) + tegen;
-    let zin = b.start > 0
-      ? `A new low develops ${_mdOver(waar)} ${_mdWanneer(b.a.t, t0, lon)}`
-      : `${aanloop}${aanloop ? 'low' : 'Low'} pressure ${_mdOver(waar)}`;
+    const staart = `${slot}${diep ? `, ${diep}${nadien}` : ''}.`;
+    // onderwerp: "Storm Austen over …" / "Low pressure over …" (geen kerndruk of wind in de synopsis)
+    let zin;
+    if (b.start > 0) zin = `${aanloop}${b.naam ? b.naam + ', a new low,' : `${aanloop ? 'a' : 'A'} new low`} develops ${_mdOver(waar)} ${_mdWanneer(b.a.t, t0, lon)}`;
+    else if (b.naam) zin = `${aanloop}${b.naam} ${_mdOver(waar)}`;
+    else zin = `${aanloop}${aanloop ? 'low' : 'Low'} pressure ${_mdOver(waar)}`;
     const en = b.start > 0 ? ' and' : '';
+    const wanneer = _mdWanneer(b.a.t + Math.min(b.uren, 18) * 3600e3, t0, lon);
     if (b.uren < 9) return `${zin}${en} ${b.start > 0 ? 'quickly fills' : `fills and clears ${wanneer}`}.`;
-    if (b.km < 300) return `${zin}${en} ${b.start > 0 ? 'remains' : 'remains'} slow-moving${over && over.naam !== waar.naam ? ` near ${over.naam}` : ''}${slot}${diep ? `, ${diep}${nadien}` : ''}.`;
-    const via = over && over.naam !== waar.naam ? ` across ${over.binnen ? over.naam : `the waters ${over.naam}`}` : '';
-    // tijdstip: wanneer de laag langs het punt trekt; ligt hij er nu al, of staat er "in the mean time", dan geen extra tijd
-    const passeert = over && b.dichtst.t - b.a.t >= 6 * 3600e3;
-    const tijd = passeert ? wanneerOver : (b.start > 0 || slot || over || tegen ? '' : wanneer);
-    // volgorde: route en moment van passeren, dan het eindpunt ("… across the Low Countries tomorrow evening, reaching Scandinavia by Thursday")
-    if (via && tijd === wanneerOver && tegen && doel && b.z.t - b.dichtst.t >= 12 * 3600e3)
-      return `${zin}${en} tracks ${_mdKompas(b.koers)}${via} ${tijd}, reaching ${naar.naam}${tegen}${slot}${diep ? `, ${diep}${nadien}` : ''}.`;
-    return `${zin}${en} tracks ${_mdKompas(b.koers)}${via}${doel}${tijd ? ' ' + tijd : ''}${slot}${diep ? `, ${diep}${nadien}` : ''}.`;
+    if (b.km < 300) return `${zin}${en} remains slow-moving${staart}`;
+
+    // Trekt de laag over (of vlak langs) het gebied? Dan de route langs de gebieden tot het punt
+    // van dichtste nadering ("across the English Channel and the Netherlands"), het moment van
+    // passeren en waar hij daarna heen gaat.
+    if (b.dmin < 350) {
+      const k0 = b.punten.indexOf(b.dichtst);
+      const route = [];
+      for (const p of b.punten.slice(1, k0 + 1)) {
+        const g = _mdZeeOfLand(p.lat, p.lon);
+        if (g.binnen && g.r < 1500 && g.naam !== waar.naam && !route.includes(g.naam)) route.push(g.naam);
+      }
+      const via = route.length > 1 ? ` across ${route[0]} and ${route[route.length - 1]}` : route.length ? ` across ${route[0]}` : '';
+      const tijd = b.dichtst.t - b.a.t >= 6 * 3600e3 ? ' ' + _mdWanneer(b.dichtst.t, t0, lon) : '';
+      const daarna = b.z.t - b.dichtst.t >= 9 * 3600e3 && naar.binnen && !route.includes(naar.naam) && naar.naam !== waar.naam
+        ? `, reaching ${naar.naam} ${b.z.t - t0 >= 36 * 3600e3 ? 'by ' + _mdWanneer(b.z.t, t0, lon, true) : _mdWanneer(b.z.t, t0, lon)}` : '';
+      return `${zin}${en} tracks ${_mdKompas(b.koers)}${via}${tijd}${daarna}${staart}`;
+    }
+    // Anders: richting en bestemming
+    const tegen = b.uren >= 36 ? ` by ${_mdWanneer(b.z.t, t0, lon, true)}` : '';
+    const doel = naar.naam === waar.naam ? '' : (naar.binnen ? (naar.zee ? ` into ${naar.naam}` : ` towards ${naar.naam}`) : ` to ${naar.naam}`) + tegen;
+    const tijd = b.start > 0 || slot || tegen ? '' : ' ' + wanneer;
+    return `${zin}${en} tracks ${_mdKompas(b.koers)}${doel}${tijd}${staart}`;
   };
 
   // Tropen: ITCZ, passaat/moesson en tropische lagen in plaats van fronten
@@ -7207,9 +7264,10 @@ async function _mdSynoptiek(lat, lon, tSynop) {
   const zinnen = [];
   // Hoog noemen als er een rug over het gebied ligt, het hoog dichtbij is of het weer domineert
   const hRelevant = H && (!L1 || p0 >= 1010 || H.d0 < 1200 || H.rel >= 0.5 * L1.rel);
-  if (hRelevant) zinnen.push(zinHoog(H));
   // Lagen op volgorde van aankomst bij het gebied; de tweede krijgt "Further W, …"
   const [La, Lb] = [L1, L2].filter(Boolean).sort((a, b) => a.dichtst.t - b.dichtst.t);
+  const stormOver = [La, Lb].some(L => L && L.dmin < 350 && L.vmin <= 990);
+  if (hRelevant && !(stormOver && p0 < 1012)) zinnen.push(zinHoog(H));
   if (La) zinnen.push(zinLaag(La, '', hRelevant && La.dmin >= 350 ? ' in the mean time' : ''));
   if (Lb) {
     const k = _mdKompas(_mdKoers(lat, lon, Lb.a.lat, Lb.a.lon));
