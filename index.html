@@ -241,6 +241,12 @@
     /* ── Kaartgebied ──────────────────────────────────────────────────────── */
     #main { flex: 1; display: flex; overflow: hidden; }
     #map  { flex: 1; }
+    /* Verouderde metingen: grijs op de kaart, zoals 'gedateerde waarde' op Waterinfo */
+    .obs-oud { filter: grayscale(1) opacity(0.55); }
+    .obs-oud-tekst { color: var(--yellow); font-weight: 600; }
+    #obs-melding { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 900; max-width: min(560px, calc(100% - 110px));
+                   background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--yellow); border-radius: var(--r-md);
+                   padding: 7px 11px; font-size: 0.76rem; line-height: 1.4; color: var(--text); box-shadow: 0 2px 8px rgba(15,23,42,0.12); pointer-events: none; }
 
     /* ── NL-paneel ───────────────────────────────────────────────────────── */
     #nl-panel {
@@ -2002,12 +2008,14 @@ function clearMetarMarkers() { _metarGroup.clearLayers(); map.removeLayer(_metar
 
 function renderTempMarkers(geojson) {
   _lastTempGeoJSON = geojson;
+  _controleerBron('temp', geojson);
   _tempGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
     const t = p.temp_c;
     const marker = L.marker([lat, lon], { icon: makeTempIcon(t) });
+    _markeerOud(marker, p.tijdstip, 'temp');
     marker.on('click', () => openTempChart(p.code, p.naam || p.code, t, p.tijdstip));
     _tempGroup.addLayer(marker);
   });
@@ -2127,12 +2135,14 @@ function makeWindIcon(w, dir) {
 
 function renderWindMarkers(geojson) {
   _lastWindGeoJSON = geojson;
+  _controleerBron('wind', geojson);
   _windGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
     const w = p.wind_ms;
     const marker = L.marker([lat, lon], { icon: makeWindIcon(w, p.wind_dir) });
+    _markeerOud(marker, p.tijdstip, 'wind');
     marker.on('click', () => openWindChart(p.code, p.naam || p.code, w, p.tijdstip));
     _windGroup.addLayer(marker);
   });
@@ -2208,6 +2218,7 @@ function renderZichtMarkers(geojson) {
     const [lon, lat] = f.geometry.coordinates;
     const v = f.properties.vv;
     const marker = L.marker([lat, lon], { icon: makeZichtIcon(v) });
+    _markeerOud(marker, f.properties.tijdstip, 'zicht');
     marker.bindTooltip(f.properties.stationname || f.properties.naam || '', { direction: 'top', offset: [0, -4] });
     marker.on('click', () => openZichtChart(f.properties.code, f.properties.stationname || f.properties.naam || f.properties.code, v, f.properties.tijdstip));
     _zichtGroup.addLayer(marker);
@@ -2591,7 +2602,7 @@ async function openZichtChart(code, naam, huidigVv, tijdstip) {
   const color = zichtColor(huidigVv);
   document.getElementById('chart-hm0').textContent  = huidigVv !== null ? huidigVv.toFixed(1) : '–';
   document.getElementById('chart-hm0').style.color  = color;
-  document.getElementById('chart-time').textContent = formatTijdstip(tijdstip);
+  _zetMeettijd(tijdstip, 'zicht');
 
   loadingEl.textContent   = 'Geschiedenis laden…';
   loadingEl.style.display = 'flex';
@@ -2681,7 +2692,7 @@ async function openWindChart(code, naam, huidigWind, tijdstip) {
   const huidigBft = msToBft(huidigWind);
   document.getElementById('chart-hm0').textContent  = huidigKt !== null ? `${Math.round(huidigKt)} kt (Bft ${huidigBft})` : '–';
   document.getElementById('chart-hm0').style.color  = color;
-  document.getElementById('chart-time').textContent = formatTijdstip(tijdstip);
+  _zetMeettijd(tijdstip, 'wind');
 
   loadingEl.textContent   = 'Geschiedenis laden…';
   loadingEl.style.display = 'flex';
@@ -2910,6 +2921,7 @@ function selectLayer(layer) {
   if (layer === activeLayer) return;
   stopCountdown();
   activeLayer = layer;
+  _toonObsMelding();
 
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById(`nav-${layer}`).classList.add('active');
@@ -3011,6 +3023,70 @@ function _hideAllGroups() {
   map.removeLayer(_stormGroup);
 }
 
+// ── Verouderde metingen ───────────────────────────────────────────────────────
+// Drempel per laag in uren, net boven wat de bronnen normaal halen. Daarboven wordt een
+// station grijs en staat de leeftijd erbij; de waarde blijft de laatst bekende meting.
+const OBS_OUD_UUR = { golf: 3.5, temp: 6, wind: 3.5, zicht: 3.5 };
+
+function _obsUren(iso) {
+  const t = iso ? new Date(iso).getTime() : NaN;
+  return t === t ? (Date.now() - t) / 3600e3 : null;
+}
+function _obsIsOud(iso, laag) {
+  const u = _obsUren(iso);
+  return u !== null && u > OBS_OUD_UUR[laag];
+}
+function _obsLeeftijd(iso) {
+  const u = _obsUren(iso);
+  return u >= 48 ? `${Math.round(u / 24)} dagen` : `${Math.round(u)} uur`;
+}
+function _markeerOud(marker, iso, laag) {
+  if (!_obsIsOud(iso, laag)) return;
+  marker.on('add', () => {
+    if (!marker._icon) return;
+    marker._icon.classList.add('obs-oud');
+    marker._icon.title = `Laatste meting ${_obsLeeftijd(iso)} geleden`;
+  });
+}
+function _zetMeettijd(iso, laag) {
+  const el = document.getElementById('chart-time');
+  el.textContent = formatTijdstip(iso);
+  if (_obsIsOud(iso, laag)) {
+    const s = document.createElement('span');
+    s.className = 'obs-oud-tekst';
+    s.textContent = ` · ${_obsLeeftijd(iso)} oud`;
+    el.appendChild(s);
+  }
+}
+
+// Melding op de kaart als (vrijwel) alle RWS-stations van deze laag stilstaan
+const _obsMelding = {};
+function _controleerBron(laag, geojson) {
+  const rws = (geojson.features || []).filter(f => f.properties.bron === 'RWS' && f.properties.tijdstip);
+  const oud = rws.filter(f => _obsIsOud(f.properties.tijdstip, laag));
+  if (rws.length < 10 || oud.length < 0.8 * rws.length) { _obsMelding[laag] = ''; }
+  else {
+    // de meest voorkomende (afgeronde) laatste meting is het moment waarop de stroom stopte
+    const per = {};
+    oud.forEach(f => { const t = new Date(f.properties.tijdstip); t.setMinutes(0, 0, 0); per[+t] = (per[+t] || 0) + 1; });
+    const sinds = +Object.keys(per).sort((a, b) => per[b] - per[a])[0];
+    const tekst = new Date(sinds).toLocaleString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
+    _obsMelding[laag] = `Rijkswaterstaat levert sinds ${tekst} geen nieuwe metingen. Grijze stations tonen de laatst bekende waarde.`;
+  }
+  _toonObsMelding();
+}
+function _toonObsMelding() {
+  let el = document.getElementById('obs-melding');
+  const tekst = _obsMelding[activeLayer] || '';
+  if (!tekst) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'obs-melding';
+    map.getContainer().appendChild(el);
+  }
+  el.textContent = tekst;
+}
+
 function formatTijdstip(iso) {
   if (!iso) return '–';
   return new Date(iso).toLocaleString('nl-NL', {
@@ -3022,12 +3098,14 @@ function formatTijdstip(iso) {
 
 function renderMarkers(geojson) {
   _lastWaveGeoJSON = geojson;
+  _controleerBron('golf', geojson);
   _waveGroup.clearLayers();
   (geojson.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
     const h = p.hm0_m;
     const marker = L.marker([lat, lon], { icon: makeIcon(h) });
+    _markeerOud(marker, p.tijdstip, 'golf');
     marker.on('click', () => openChart(p.code, p.naam, h, p.tijdstip, lat, lon));
     _waveGroup.addLayer(marker);
   });
@@ -3285,7 +3363,7 @@ async function openChart(code, naam, huidigHm0, tijdstip, lat, lon) {
   const color = waveColor(huidigHm0);
   document.getElementById('chart-hm0').textContent  = huidigHm0 !== null ? huidigHm0.toFixed(2) : '–';
   document.getElementById('chart-hm0').style.color  = color;
-  document.getElementById('chart-time').textContent = formatTijdstip(tijdstip);
+  _zetMeettijd(tijdstip, 'golf');
 
   loadingEl.textContent   = 'Waarneming + verwachting laden…';
   loadingEl.style.display = 'flex';
@@ -3396,7 +3474,7 @@ async function openTempChart(code, naam, huidigTemp, tijdstip) {
   const color = tempColor(huidigTemp);
   document.getElementById('chart-hm0').textContent  = huidigTemp !== null ? huidigTemp.toFixed(1) : '–';
   document.getElementById('chart-hm0').style.color  = color;
-  document.getElementById('chart-time').textContent = formatTijdstip(tijdstip);
+  _zetMeettijd(tijdstip, 'temp');
 
   loadingEl.textContent   = 'Geschiedenis laden…';
   loadingEl.style.display = 'flex';
@@ -8048,11 +8126,13 @@ function _bgPrefetch(url, isFreshFn, buildFn, retryMs) {
 // Temp: bouw _tempGroup stilletjes zonder _hideAllGroups() aan te roepen
 function _bgBuildTemp(geo) {
   _lastTempGeoJSON = geo;
+  _controleerBron('temp', geo);
   _tempGroup.clearLayers();
   (geo.features || []).forEach(f => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
     const marker = L.marker([lat, lon], { icon: makeTempIcon(p.temp_c) });
+    _markeerOud(marker, p.tijdstip, 'temp');
     marker.on('click', () => openTempChart(p.code, p.naam || p.code, p.temp_c, p.tijdstip));
     _tempGroup.addLayer(marker);
   });

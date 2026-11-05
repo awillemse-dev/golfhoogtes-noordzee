@@ -135,7 +135,11 @@ PORT      = int(os.environ.get("PORT", 3001))
 RWS_BASE  = "https://ddapi20-waterwebservices.rijkswaterstaat.nl"
 CEFAS_URL = "https://wavenet-api.cefas.co.uk/api/Map/Current"
 CACHE_S      = 10 * 60       # 10 minuten cache
-TEMP_CACHE_S = 24 * 60 * 60  # 24 uur cache voor zeewatertemperatuur
+# Een station dat tijdelijk stilvalt blijft op de kaart: de site toont het grijs met de
+# leeftijd van de meting. Pas na 30 dagen geldt het als opgeheven; RWS geeft ook stations terug
+# die al jaren (tot 1976) niet meer meten.
+OBS_MAX_LEEFTIJD_S = 30 * 24 * 3600
+TEMP_CACHE_S = 60 * 60       # 1 uur: anders toont de kaart metingen die tot een dag ouder zijn dan de bron
 
 BUIENRADAR_URL  = "https://data.buienradar.nl/2.0/feed/json"
 METAR_CACHE_S   = 30 * 60   # 30 minuten cache
@@ -448,13 +452,13 @@ def build_geojson(stations, waarnemingen):
         hm0_m      = round(meetwaarde / 100, 2) if meetwaarde is not None else None
         tijdstip   = meting.get("Tijdstip")
 
-        # Sla stations over waarvan de laatste meting ouder is dan 48 uur
+        # Opgeheven stations overslaan (zie OBS_MAX_LEEFTIJD_S)
         if tijdstip:
             try:
                 meting_dt = datetime.fromisoformat(tijdstip)
                 if meting_dt.tzinfo is None:
                     meting_dt = meting_dt.replace(tzinfo=timezone.utc)
-                if (datetime.now(timezone.utc) - meting_dt).total_seconds() > 48 * 3600:
+                if (datetime.now(timezone.utc) - meting_dt).total_seconds() > OBS_MAX_LEEFTIJD_S:
                     continue
             except Exception:
                 pass
@@ -470,6 +474,7 @@ def build_geojson(stations, waarnemingen):
                 "naam":      naam,
                 "hm0_m":    hm0_m,
                 "tijdstip":  tijdstip,
+                "bron":      "RWS",
                 "status":    status_lst[0] if status_lst else None,
                 "kwaliteit": kwal_lst[0]   if kwal_lst   else None,
             },
@@ -541,8 +546,8 @@ def fetch_bsh_data():
 
         try:
             tijdstip_dt = datetime.strptime(zeit_str, "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
-            if (now - tijdstip_dt).total_seconds() > 48 * 3600:
-                continue  # Ouder dan 48 uur
+            if (now - tijdstip_dt).total_seconds() > OBS_MAX_LEEFTIJD_S:
+                continue
             tijdstip = tijdstip_dt.isoformat()
             _record_bsh_history(ort, tijdstip, hm0)
         except ValueError:
@@ -725,7 +730,7 @@ def fetch_mvb_data():
                 dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
-                if (now - dt).total_seconds() > 48 * 3600:
+                if (now - dt).total_seconds() > OBS_MAX_LEEFTIJD_S:
                     continue
                 tijdstip = dt.isoformat()
             except Exception:
@@ -874,7 +879,7 @@ def fetch_cefas_data():
                 ts_dt = datetime.fromisoformat(tijdstip_s)
                 if ts_dt.tzinfo is None:
                     ts_dt = ts_dt.replace(tzinfo=timezone.utc)
-                if (now - ts_dt).total_seconds() > 48 * 3600:
+                if (now - ts_dt).total_seconds() > OBS_MAX_LEEFTIJD_S:
                     continue
             except Exception:
                 continue
@@ -1163,7 +1168,7 @@ def fetch_ndbc_data():
                 int(cols[6]), int(cols[7]), tzinfo=timezone.utc
             ).isoformat()
             dt = datetime.fromisoformat(tijdstip)
-            if (now - dt).total_seconds() > 6 * 3600:
+            if (now - dt).total_seconds() > OBS_MAX_LEEFTIJD_S:
                 continue
         except Exception:
             tijdstip = None
@@ -1257,7 +1262,7 @@ def fetch_labouee_data():
             tijdstip_s = reading.get("measured_at", "")
             try:
                 ts_dt = datetime.fromisoformat(tijdstip_s.replace("Z", "+00:00"))
-                if (now - ts_dt).total_seconds() > 48 * 3600:
+                if (now - ts_dt).total_seconds() > OBS_MAX_LEEFTIJD_S:
                     continue
                 tijdstip = ts_dt.isoformat()
             except Exception:
@@ -1615,7 +1620,7 @@ def fetch_fmi_data():
         except Exception:
             continue
 
-        if (now - ts_dt).total_seconds() > 24 * 3600:
+        if (now - ts_dt).total_seconds() > OBS_MAX_LEEFTIJD_S:
             continue
 
         key = f"{lat:.4f},{lon:.4f}"
@@ -1650,7 +1655,7 @@ _cache_time     = 0
 _stations       = None
 _temp_cache     = None   # legacy — wordt niet meer gebruikt voor /api/temp
 _temp_time      = 0
-_temp_bg        = None   # achtergrond-cache voor /api/temp (24u TTL)
+_temp_bg        = None   # achtergrond-cache voor /api/temp (TEMP_CACHE_S TTL)
 _temp_bg_time   = 0
 _rws_temp_hist  = {}   # code → {tijdstip_iso: temp_c}  (ring buffer, net als BSH)
 _knmi_temp_hist = {}   # code → {tijdstip_iso: temp_c}  (ring buffer voor KNMI luchttemp)
@@ -1908,7 +1913,7 @@ def _socib_fetch_station_wave(station_dir):
         if not (-90 <= lat <= 90 and -180 <= lon <= 180): return None
         if not (0 < hs < 30): return None
         obs_dt = datetime.utcfromtimestamp(ts_posix)
-        if (datetime.utcnow() - obs_dt).total_seconds() > 12 * 3600: return None
+        if (datetime.utcnow() - obs_dt).total_seconds() > OBS_MAX_LEEFTIJD_S: return None
 
         return {
             "type": "Feature",
@@ -1977,7 +1982,7 @@ def _socib_fetch_station_wind(station_dir):
         wind_dir = int(round(float(wdir))) % 360 if wdir is not None else None
 
         obs_dt = datetime.utcfromtimestamp(ts_posix)
-        if (datetime.utcnow() - obs_dt).total_seconds() > 6 * 3600: return None
+        if (datetime.utcnow() - obs_dt).total_seconds() > OBS_MAX_LEEFTIJD_S: return None
 
         return {
             "type": "Feature",
@@ -2403,7 +2408,7 @@ def _fetch_ndbc_temp():
                 continue
             tijdstip = datetime(int(cols[3]), int(cols[4]), int(cols[5]),
                                 int(cols[6]), int(cols[7]), tzinfo=timezone.utc)
-            if (now - tijdstip).total_seconds() > 6 * 3600:
+            if (now - tijdstip).total_seconds() > OBS_MAX_LEEFTIJD_S:
                 continue
             stn = cols[0]
         except (ValueError, IndexError):
@@ -2720,7 +2725,7 @@ def _fetch_rws_temp():
                     dt = datetime.fromisoformat(tijdstip)
                     if dt.tzinfo is None:
                         dt = dt.replace(tzinfo=timezone.utc)
-                    if (now - dt).total_seconds() > 48 * 3600:
+                    if (now - dt).total_seconds() > OBS_MAX_LEEFTIJD_S:
                         continue
                 except Exception:
                     pass
@@ -2764,7 +2769,7 @@ def _fetch_cefas_temp_list():
             ts_dt = datetime.fromisoformat(tijdstip_s)
             if ts_dt.tzinfo is None:
                 ts_dt = ts_dt.replace(tzinfo=timezone.utc)
-            if (now - ts_dt).total_seconds() > 48 * 3600:
+            if (now - ts_dt).total_seconds() > OBS_MAX_LEEFTIJD_S:
                 continue
         except Exception:
             continue
@@ -2816,7 +2821,7 @@ def fetch_ocean_sst():
 
 
 def _refresh_temp_bg():
-    """Vul _temp_bg parallel vanuit alle bronnen (24u TTL)."""
+    """Vul _temp_bg parallel vanuit alle bronnen (TEMP_CACHE_S TTL)."""
     global _temp_bg, _temp_bg_time
     if _temp_bg is not None and (time.time() - _temp_bg_time) < TEMP_CACHE_S:
         return  # Nog vers
@@ -2984,7 +2989,7 @@ def _fetch_wind_batch(batch, station_map, now):
                 dt = datetime.fromisoformat(tijdstip)
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
-                if (now - dt).total_seconds() > 6 * 3600:
+                if (now - dt).total_seconds() > OBS_MAX_LEEFTIJD_S:
                     continue
             except Exception:
                 pass
